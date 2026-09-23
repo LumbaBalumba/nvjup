@@ -4,7 +4,7 @@ Stage 6 promotes the Stage 5 Plotly proof of concept into a content-trusted Plot
 
 ## Trust workflow
 
-Interactive output is blocked by default. Opening a notebook does not start Chromium or execute active MIME content.
+Pre-existing interactive output is blocked by default. Output received from an nvjup-managed local kernel is trusted ephemerally for that executed cell revision (`execution.trust_local_kernel = true` by default); editing the cell invalidates it. Opening a notebook still does not start Chromium or execute active MIME content.
 
 ```vim
 :NvJupTrustStatus
@@ -14,7 +14,7 @@ Interactive output is blocked by default. Opening a notebook does not start Chro
 
 The grant is stored locally under `stdpath("state")/nvjup/trust.json`, with mode `0600` where supported. The notebook is not modified. A record contains the canonical path, policy version, capability, timestamp, and SHA-256 identity—not cell source or output bodies.
 
-The identity covers cell types and sources, active HTML/JavaScript, Plotly/Bokeh payloads, widget views/state, attachments, and document widget metadata. Changing code or active content invalidates an existing grant. Kernel execution remains a separate explicit action.
+The persisted identity covers cell types and sources, active HTML/JavaScript, Plotly/Bokeh payloads, widget views/state, attachments, and document widget metadata. Changing code or active content invalidates an existing grant. Kernel execution remains a separate explicit action; its default ephemeral trust is cell- and revision-scoped, is never written to the trust store, and can be disabled with `execution.trust_local_kernel = false`. An explicit revoke still wins over local-kernel trust.
 
 `interactive.require_trust = false` exists for controlled compatibility environments, but `:checkhealth nvjup` reports the bypass as unsafe.
 
@@ -30,7 +30,7 @@ Bokeh serialization versions must be compatible with the locally installed Bokeh
 
 ## Awrit external focus
 
-`<leader>nf` / `:NvJupPlotFocus` is the default interaction path. The renderer writes the already validated standalone Plotly/Bokeh document to a mode-`0600` temporary file and Neovim launches `awrit file://…` in a separate Kitty OS window through Kitty remote control.
+`<leader>nF` / `:NvJupPlotFocus` opens the external interaction path. The renderer writes the already validated standalone Plotly/Bokeh document to a mode-`0600` temporary file and Neovim launches `awrit file://…` in a separate Kitty OS window through Kitty remote control.
 
 This follows Awrit's rendering path rather than nvjup's screenshot path: Electron emits offscreen `paint` bitmaps, Awrit places raw RGBA buffers in POSIX shared memory, and Kitty atomically composites animation frames into a persistent placement. Mouse and keyboard events go directly to Electron `webContents`. There is no CDP screenshot, PNG/base64 frame RPC, Neovim redraw, or image-ID replacement in the interaction loop.
 
@@ -40,14 +40,15 @@ Awrit currently describes itself as unmaintained; installations should pin/audit
 
 ## TUI frame pipeline
 
-`<leader>nF` / `:NvJupPlotFocusTui` retains the previous in-Neovim implementation:
+`<leader>nf` / `:NvJupPlotFocusTui` opens the default in-Neovim implementation:
 
 1. The renderer creates one isolated page per visible interactive figure.
 2. The initial frame uses `page.screenshot()` over the exact viewport. This avoids Playwright locator stability waits.
 3. CDP `Page.startScreencast` pushes PNG frames when Chromium reports framebuffer damage.
 4. Every frame is acknowledged with `Page.screencastFrameAck`.
 5. Lua accepts monotonically sequenced frames and sends them through the Kitty Unicode-placeholder image path.
-6. Pull screenshots remain available when screencast startup fails.
+6. The previous Kitty placement remains visible while its replacement is transmitted and is retired only after the new placeholders can be painted, reducing frame-change flicker.
+7. Pull screenshots remain available when screencast startup fails.
 
 Mouse input is accepted into a bounded renderer queue immediately. Consecutive move events are replaced by the newest position and wheel deltas are merged; button press/release and keys preserve ordering. Chromium input uses direct CDP dispatch. This prevents a software-rendered 3D scene from blocking Neovim's event queue.
 
@@ -55,7 +56,7 @@ Inline frames initially use `width_px × height_px` (default `900×540`). When T
 
 ## TUI focus input and resize
 
-`<leader>nF` or `:NvJupPlotFocusTui` opens the fallback Plotly/Bokeh TUI focus mode. Supported input:
+`<leader>nf` or `:NvJupPlotFocusTui` opens the Plotly/Bokeh TUI focus mode. Supported input:
 
 - move, click, drag, release;
 - wheel zoom;

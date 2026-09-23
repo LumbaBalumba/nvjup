@@ -195,7 +195,14 @@ local function replay_after_crash()
 			return
 		end
 		for _, entry in pairs(cache) do
-			if entry.state and entry.figure and trust.allows_interactive(entry.state) then
+			local cell
+			for _, candidate in ipairs(entry.state and entry.state.cells or {}) do
+				if candidate.id == entry.cell_id then
+					cell = candidate
+					break
+				end
+			end
+			if entry.state and entry.figure and trust.allows_interactive(entry.state, cell) then
 				request_open(entry.state, entry)
 			end
 		end
@@ -380,7 +387,7 @@ end
 function M.prepare_cell(state, cell)
 	local copy = vim.deepcopy(cell)
 	local seen = {}
-	local trust_status = trust.status(state)
+	local trust_status = trust.status(state, cell)
 	for output_index, item in ipairs(cell.outputs or {}) do
 		local backend, figure = interactive_payload(item)
 		if backend and options().enabled ~= false then
@@ -590,7 +597,7 @@ local function resize_focus_renderer(entry)
 end
 
 local function resolve_entry(state, cell)
-	if not trust.allows_interactive(state) then
+	if not trust.allows_interactive(state, cell) then
 		vim.notify("interactive output is blocked; use :NvJupTrustInteractive", vim.log.levels.WARN)
 		return nil
 	end
@@ -862,7 +869,8 @@ end
 
 function M.trust_status(state)
 	state = state or require("nvjup.notebook").get()
-	local status, details = trust.status(state)
+	local cell = state and state.current_cell and state:current_cell() or nil
+	local status, details = trust.status(state, cell)
 	return { status = status, details = details }
 end
 

@@ -14,8 +14,8 @@ local function test(name, callback)
 end
 
 config.options.interactive.require_trust = false
-assert(config.options.keymaps.plot_focus == "<leader>nf")
-assert(config.options.keymaps.plot_focus_tui == "<leader>nF")
+assert(config.options.keymaps.plot_focus == "<leader>nF")
+assert(config.options.keymaps.plot_focus_tui == "<leader>nf")
 
 local requests = {}
 local client_options

@@ -46,7 +46,7 @@ The complete roadmap is in [`docs/nvjup-plan.md`](docs/nvjup-plan.md). Normative
 - `rsvg-convert` for bounded SVG rasterization (optional; preferred when available);
 - chafa for a terminal-symbol image fallback outside Kitty (optional);
 - Playwright, the Python Plotly and Bokeh packages (for local browser assets), and Chromium for inline interactive previews;
-- [Awrit](https://github.com/chase/awrit), Kitty remote control, and `KITTY_LISTEN_ON` for the default zero-screenshot external focus window (optional; `<leader>nF` keeps the TUI fallback).
+- [Awrit](https://github.com/chase/awrit), Kitty remote control, and `KITTY_LISTEN_ON` for the zero-screenshot external focus window (optional; `<leader>nf` uses the TUI fallback).
 
 The editor and LSP proxy remain pure Lua. Kernel transport runs in a separate Python sidecar and does not depend on `pynvim` or `python3_host_prog`. Python notebooks use `pyright-langserver` and `ruff server` automatically when those executables are available. Missing parsers and servers degrade gracefully.
 
@@ -87,8 +87,8 @@ The launcher redirects config, data, state, and cache into `.test-runtime/`.
 | `<leader>nz` | collapse/expand cell source |
 | `<leader>no` | expand/collapse truncated inline output |
 | `<leader>np` | open full output in a floating pager |
-| `<leader>nf` | open the current Plotly/Bokeh output in a separate Awrit/Kitty OS window |
-| `<leader>nF` | open the legacy screenshot-based TUI focus window |
+| `<leader>nf` | open the current Plotly/Bokeh output in the responsive TUI focus window |
+| `<leader>nF` | open the current Plotly/Bokeh output in a separate Awrit/Kitty OS window |
 | `<leader>nc` / `<leader>nC` | clear current / all outputs |
 | `<leader>nl` / `<leader>nL` | notebook outline / refresh display |
 | `<C-CR>` | run current cell (Normal and Insert modes) |
@@ -190,6 +190,7 @@ require("nvjup").setup({
     shutdown_on_close = true,
   },
   execution = {
+    trust_local_kernel = true, -- locally produced output is trusted for its cell revision
     allow_stdin = true,
     clear_before_run = true,
     repeat_policy = "queue", -- queue, cancel, or replace
@@ -234,11 +235,11 @@ See [`docs/stage4.md`](docs/stage4.md) for lifecycle, fallback, and security det
 
 ## Interactive Plotly and Bokeh
 
-Plotly MIME output and safely extracted Bokeh standalone document JSON are rendered by a dedicated Playwright/Chromium process with locally installed assets and blocked outbound requests. Interactive content is blocked until `:NvJupTrustInteractive` records the current notebook content identity locally; code or active-output changes invalidate that grant. Use `:NvJupTrustStatus` to inspect it and `:NvJupTrustRevoke` to revoke it.
+Plotly MIME output and safely extracted Bokeh standalone document JSON are rendered by a dedicated Playwright/Chromium process with locally installed assets and blocked outbound requests. Output produced by nvjup's local kernel is trusted by default only for the executed cell revision; editing that cell invalidates the ephemeral grant. Pre-existing notebook output remains blocked until `:NvJupTrustInteractive` records the current notebook content identity locally. Use `execution.trust_local_kernel = false` for strict manual trust, `:NvJupTrustStatus` to inspect trust, and `:NvJupTrustRevoke` to revoke it.
 
-`<leader>nf` / `:NvJupPlotFocus` exports the already validated standalone document to a mode-`0600` temporary HTML file and opens it with Awrit in a separate Kitty OS window. Awrit uses Electron offscreen paint events, raw shared-memory buffers, and Kitty animation-frame composition, so browser input is native and interaction does not wait for screenshot capture, PNG/base64 transport, Neovim redraws, or image replacement.
+`<leader>nF` / `:NvJupPlotFocus` exports the already validated standalone document to a mode-`0600` temporary HTML file and opens it with Awrit in a separate Kitty OS window. Awrit uses Electron offscreen paint events, raw shared-memory buffers, and Kitty animation-frame composition, so browser input is native and interaction does not wait for screenshot capture, PNG/base64 transport, Neovim redraws, or image replacement.
 
-`<leader>nF` / `:NvJupPlotFocusTui` preserves the previous in-Neovim focus mode. That fallback sizes the browser viewport and responsive Plotly/Bokeh layout to the actual popup grid, pushes damage-driven PNG frames through CDP screencast, coalesces high-rate moves, and forwards pointer/keyboard input. Exported HTML keeps the same local assets, renderer-owned Bokeh targets, strict CSP, content trust, and network denial policy. Closing/replacing output, revoking trust, or closing the notebook closes the managed Awrit window and removes the temporary file.
+`<leader>nf` / `:NvJupPlotFocusTui` opens the in-Neovim focus mode. It sizes the browser viewport and responsive Plotly/Bokeh layout to the actual popup grid, keeps the current frame visible until its replacement has started painting, pushes damage-driven PNG frames through CDP screencast, coalesces high-rate moves, and forwards pointer/keyboard input. Exported HTML keeps the same local assets, renderer-owned Bokeh targets, strict CSP, content trust, and network denial policy. Closing/replacing output, revoking trust, or closing the notebook closes the managed Awrit window and removes the temporary file.
 
 ```lua
 require("nvjup").setup({

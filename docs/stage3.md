@@ -115,6 +115,7 @@ require("nvjup").setup({
     shutdown_on_close = true,
   },
   execution = {
+    trust_local_kernel = true,
     allow_stdin = true,
     clear_before_run = true,
     repeat_policy = "queue",
@@ -126,6 +127,8 @@ require("nvjup").setup({
 `sidecar.python` must point to a Python installation containing `jupyter_client`. When it is false, nvjup probes the checkout `.venv`, `$VIRTUAL_ENV`, `python3_host_prog`, `python3`, and the system Python and selects the first compatible interpreter. `sidecar.command` replaces the entire launch command.
 
 For Python kernels, `kernel.python_path` is the highest-priority explicit interpreter. Otherwise nvjup chooses a usable project `.venv`/`venv`, then `kernel.system_python`, then a usable system Python. The notebook kernelspec and `kernel.default_name` remain the selection mechanism for non-Python kernels.
+
+`execution.trust_local_kernel = true` gives interactive output produced by an explicitly invoked local execution an in-memory trust grant limited to that cell revision. It does not trust output loaded from disk or persist a notebook-wide grant; set it to `false` for strict manual interactive trust.
 
 ## Validation
 

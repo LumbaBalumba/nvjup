@@ -277,6 +277,17 @@ local function delete_image(image_id)
 	tty_write(string.format("\27_Ga=d,d=I,i=%d,q=2\27\\", image_id))
 end
 
+local function retire_image(image_id)
+	if not image_id then
+		return
+	end
+	-- Keep the currently displayed frame alive until the replacement has been
+	-- transmitted and Neovim has had a chance to paint its new placeholders.
+	vim.defer_fn(function()
+		delete_image(image_id)
+	end, 50)
+end
+
 local function next_id()
 	next_image_id = (next_image_id + 0x010101) % 0xffffff
 	if next_image_id == 0 then
@@ -683,10 +694,18 @@ function M.render(state, cell, available_width, limits)
 		local backend = selected_backend()
 		local entry = placements[key]
 		if not entry or entry.hash ~= hash or entry.backend ~= backend then
-			if entry and entry.image_id then
-				delete_image(entry.image_id)
+			local previous = entry
+			if previous and previous.status ~= "ready" and previous.previous then
+				previous = previous.previous
 			end
-			entry = { key = key, buf = state.buf, hash = hash, backend = backend, status = "new" }
+			entry = {
+				key = key,
+				buf = state.buf,
+				hash = hash,
+				backend = backend,
+				status = "new",
+				previous = previous,
+			}
 			placements[key] = entry
 			prepare(state, entry, descriptor, available_width, limits)
 		end
@@ -699,6 +718,10 @@ function M.render(state, cell, available_width, limits)
 			end
 			vim.list_extend(virtual_lines, placeholder_lines(entry))
 			geometry_by_output[descriptor.output_index] = { cols = entry.cols, rows = entry.rows, col = 3, row = 1 }
+			if entry.previous then
+				retire_image(entry.previous.image_id)
+				entry.previous = nil
+			end
 		elseif entry.status == "ready" and entry.ascii_lines then
 			geometry_by_output[descriptor.output_index] = {
 				cols = math.max(1, available_width - 4),
@@ -709,10 +732,31 @@ function M.render(state, cell, available_width, limits)
 			for _, line in ipairs(entry.ascii_lines) do
 				table.insert(virtual_lines, { { "  " .. line, "NvJupOutput" } })
 			end
+			if entry.previous then
+				retire_image(entry.previous.image_id)
+				entry.previous = nil
+			end
+		elseif
+			(entry.status == "pending" or entry.status == "converted")
+			and entry.previous
+			and entry.previous.status == "ready"
+			and entry.previous.backend == "kitty"
+		then
+			vim.list_extend(virtual_lines, placeholder_lines(entry.previous))
+			geometry_by_output[descriptor.output_index] = {
+				cols = entry.previous.cols,
+				rows = entry.previous.rows,
+				col = 3,
+				row = 1,
+			}
 		elseif entry.status == "pending" or entry.status == "converted" then
 			table.insert(virtual_lines, { { "  [rendering " .. descriptor.mime .. "…]", "NvJupMuted" } })
 		else
 			table.insert(virtual_lines, fallback_line(descriptor, entry))
+			if entry.previous then
+				retire_image(entry.previous.image_id)
+				entry.previous = nil
+			end
 		end
 		by_output[descriptor.output_index] = {}
 		for index = first_line, #virtual_lines do
@@ -727,6 +771,9 @@ function M.finish_render(state, seen)
 		if entry.buf == state.buf and not seen[key] then
 			if entry.image_id then
 				delete_image(entry.image_id)
+			end
+			if entry.previous and entry.previous.image_id then
+				delete_image(entry.previous.image_id)
 			end
 			placements[key] = nil
 		end

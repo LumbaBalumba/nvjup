@@ -4,6 +4,7 @@ local notebook = require("nvjup.notebook")
 local output = require("nvjup.output")
 local render = require("nvjup.render")
 local rpc = require("nvjup.rpc")
+local trust = require("nvjup.trust")
 
 local root = assert(vim.g.nvjup_project_root)
 local failures = {}
@@ -194,6 +195,7 @@ test("executes immutable cell snapshots sequentially and persists outputs", func
 		metadata = {},
 		execution_count = 7,
 	}, first)
+	assert(trust.status(state, cells[1]) == "trusted_interactive")
 	terminal(client, first, "completed", 7)
 	assert(vim.wait(1000, function()
 		return client:count("execution.enqueue") == 2
@@ -362,6 +364,7 @@ test("marks results stale when source changes during execution", function()
 	assert(cell.stale)
 	assert(cell.execution_status == "stale")
 	assert(cell.outputs[1].text == "old revision\n")
+	assert(trust.status(state, cell) ~= "trusted_interactive")
 	close_fixture(state)
 end)
 

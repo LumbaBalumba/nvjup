@@ -66,13 +66,13 @@ Stage 4 is complete when:
 Stage 6 is complete when:
 
 1. Plotly and supported standalone Bokeh MIME render from local assets only;
-2. interactive rendering is blocked until a local content-identity record grants `trusted_interactive`;
+2. pre-existing interactive output is blocked until a local content-identity record grants `trusted_interactive`, while explicitly executed local-kernel output receives only cell-revision-scoped ephemeral trust by default;
 3. code or active-output changes invalidate trust without modifying notebook metadata;
 4. Chromium denies network, file, service-worker, download, frame, object, and worker capabilities;
 5. damage-driven push frames have acknowledged backpressure and a pull-capture fallback;
 6. move/wheel events coalesce while button, release, and keyboard ordering is preserved;
-7. default focus exports only validated CSP-restricted content to an Awrit/Kitty OS window, keeping browser interaction outside the screenshot pipeline;
-8. the legacy TUI focus supports pointer, wheel, bounded keyboard input, and resize;
+7. external focus exports only validated CSP-restricted content to an Awrit/Kitty OS window, keeping browser interaction outside the screenshot pipeline;
+8. the default TUI focus supports pointer, wheel, bounded keyboard input, resize, and atomic-looking frame replacement that retains the old placement until the new frame starts painting;
 9. multiple figures have independent pages and lifecycle cleanup;
 10. renderer crashes replay only still-trusted cached figures with bounded retries;
 11. status exposes frame/input metrics and tests cover trust, sandbox, Bokeh, external export, recovery, cleanup, and performance-sensitive paths.

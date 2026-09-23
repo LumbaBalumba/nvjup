@@ -251,6 +251,43 @@ test("renders PNG through Kitty Unicode placeholders and cleans it up", function
 	image._set_test_writer(nil)
 end)
 
+test("keeps the previous Kitty frame until its replacement is painted", function()
+	local writes = {}
+	image._set_test_writer(function(value)
+		table.insert(writes, value)
+		return true
+	end)
+	local previous_backend = config.options.render.images.backend
+	config.options.render.images.backend = "kitty"
+	local state = { buf = vim.api.nvim_get_current_buf() }
+	local cell = {
+		id = "stage4-frame-replacement",
+		outputs = {
+			{
+				output_type = "display_data",
+				data = {
+					["image/png"] = "iVBORw0KGgoAAAANSUhEUgAAAAQAAAADCAYAAAC09K7GAAAAEklEQVR42mPwKdrwHxkzEBQAANiRHR2gDahVAAAAAElFTkSuQmCC",
+				},
+				metadata = {},
+			},
+		},
+	}
+	image.render(state, cell, 80)
+	cell.outputs[1].data["image/png"] =
+		"iVBORw0KGgoAAAANSUhEUgAAAAIAAAACCAYAAABytg0kAAAAEUlEQVR42mO4Y6T/H4QZYAwAT7YI8XsRX9YAAAAASUVORK5CYII="
+	local before = #writes
+	image.render(state, cell, 80)
+	assert(#writes == before + 1)
+	assert(writes[#writes]:find("a=t,f=100", 1, true), "replacement was not transmitted before deletion")
+	assert(not table.concat(writes):find("a=d,d=I", 1, true), "old frame was deleted too early")
+	assert(vim.wait(500, function()
+		return writes[#writes]:find("a=d,d=I", 1, true) ~= nil
+	end, 5))
+	image.finish_render(state, {})
+	config.options.render.images.backend = previous_backend
+	image._set_test_writer(nil)
+end)
+
 test("rasterizes safe SVG output and transmits the resulting PNG", function()
 	assert(vim.fn.executable("magick") == 1 or vim.fn.executable("convert") == 1)
 	local writes = {}

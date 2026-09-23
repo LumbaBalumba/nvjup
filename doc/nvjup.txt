@@ -66,6 +66,7 @@ Options include:
       shutdown_on_close = true,
     },
     execution = {
+      trust_local_kernel = true,
       repeat_policy = "queue", -- queue, cancel, or replace
       stop_on_error = true,
     },
@@ -226,18 +227,20 @@ HTML/HBox/progress model subset and projects its live state as terminal text.
 8. INTERACTIVE OUTPUT                                 *nvjup-plotly*
 
 Stage 6 renders Plotly and safely serialized Bokeh standalone documents in a
-dedicated headless Chromium process. Active output is blocked until
-:NvJupTrustInteractive grants the current content identity; code or active MIME
-changes invalidate it. :NvJupTrustStatus inspects and :NvJupTrustRevoke removes
-the grant. Notebook HTML and arbitrary JavaScript are never executed.
+dedicated headless Chromium process. Output produced by the local kernel is
+trusted for its executed cell revision by default; pre-existing active output
+requires :NvJupTrustInteractive. Editing the cell invalidates ephemeral trust.
+:NvJupTrustStatus inspects and :NvJupTrustRevoke removes persisted trust.
+Notebook HTML and arbitrary JavaScript are never executed.
 
 Local assets, strict CSP, denied network requests, adaptive CDP screencast PNG
 frames, pull fallback, crash replay, and cleanup form the production renderer.
-<Leader>nf or :NvJupPlotFocus exports validated content to a mode-0600 temporary
+<Leader>nF or :NvJupPlotFocus exports validated content to a mode-0600 temporary
 file and opens Awrit in a separate Kitty OS window. Awrit paints raw browser
 frames through shared memory and Kitty animation composition without screenshots.
-<Leader>nF or :NvJupPlotFocusTui keeps the 112x40 TUI focus window. Its browser
+<Leader>nf or :NvJupPlotFocusTui opens the 112x40 TUI focus window. Its browser
 viewport and responsive Plotly/Bokeh layout scale to the actual popup grid.
+The previous TUI frame remains visible until its replacement starts painting.
 Mouse, wheel, and keyboard input are native in Awrit and forwarded in TUI mode.
 :NvJupPlotStatus shows component metrics and renderer state. See docs/stage6.md.
 

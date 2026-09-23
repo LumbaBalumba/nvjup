@@ -2,7 +2,7 @@
 
 ## Default policy
 
-Every newly opened notebook is untrusted unless a local trust record matches its content identity. Opening a notebook never executes code, starts a kernel, loads remote resources, or evaluates HTML/JavaScript automatically.
+Every newly opened notebook is untrusted unless a local trust record matches its content identity. Opening a notebook never executes code, starts a kernel, loads remote resources, or evaluates HTML/JavaScript automatically. Interactive output subsequently produced by an explicitly invoked nvjup local-kernel execution is trusted ephemerally for that cell revision by default.
 
 Trust levels:
 
@@ -12,7 +12,7 @@ Trust levels:
 - `trusted_interactive`: sandboxed Plotly/Bokeh/HTML rendering is allowed;
 - `revoked`: a previous decision was explicitly removed.
 
-Kernel execution and interactive-output trust are separate user actions. Trusting a notebook does not automatically execute its cells.
+Trusting a notebook does not automatically execute its cells. Explicit local-kernel execution grants only revision-scoped, in-memory trust to output produced for that cell; it does not create a persisted notebook-wide trust record. `execution.trust_local_kernel = false` disables this default, and an explicit revoke takes precedence.
 
 ## Content identity
 

@@ -20,6 +20,7 @@ vim.fn.mkdir(temporary, "p")
 config.options.interactive.require_trust = true
 config.options.interactive.trust_file = vim.fs.joinpath(temporary, "trust.json")
 config.options.interactive.restart_delay_ms = 1
+config.options.execution.trust_local_kernel = true
 trust.reset_cache()
 
 local function state(path)
@@ -104,6 +105,36 @@ test("active MIME changes invalidate an otherwise unchanged notebook", function(
 	current.cells[1].outputs[1].data["application/vnd.plotly.v1+json"].layout.title = "changed"
 	trust.invalidate(current)
 	assert(trust.status(current) == "untrusted")
+end)
+
+test("interactive output produced by the local kernel is trusted by default", function()
+	local local_path = vim.fs.joinpath(temporary, "local-kernel.ipynb")
+	vim.fn.writefile({ "{}" }, local_path)
+	local current = state(local_path)
+	local cell = current.cells[1]
+	trust.mark_local_execution(cell)
+	local status, details = trust.status(current, cell)
+	assert(status == "trusted_interactive")
+	assert(details.local_kernel == true)
+	local unsaved = state("")
+	unsaved.buf = -1
+	trust.mark_local_execution(unsaved.cells[1])
+	assert(trust.status(unsaved, unsaved.cells[1]) == "trusted_interactive")
+	local revoked_path = vim.fs.joinpath(temporary, "revoked-local-kernel.ipynb")
+	vim.fn.writefile({ "{}" }, revoked_path)
+	local revoked = state(revoked_path)
+	assert(trust.revoke(revoked))
+	trust.mark_local_execution(revoked.cells[1])
+	assert(trust.status(revoked, revoked.cells[1]) == "revoked")
+	local before = #requests
+	interactive.prepare_cell(current, cell)
+	assert(#requests == before + 1)
+	assert(requests[#requests].type == "renderer.open")
+	interactive.finish_render(current, {})
+	cell.source = "print('edited after execution')"
+	cell.revision = 1
+	trust.invalidate(current)
+	assert(trust.status(current, cell) == "unknown")
 end)
 
 test("untrusted output is blocked without starting Chromium", function()

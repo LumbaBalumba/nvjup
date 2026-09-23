@@ -33,8 +33,9 @@ local function refresh(state)
 	end
 end
 
-local function mark_outputs_changed(state, cell)
+local function mark_outputs_changed(state, cell, execution_revision)
 	trust.invalidate(state)
+	trust.mark_local_execution(cell, execution_revision)
 	cell.raw.outputs = cell.outputs
 	cell.raw.execution_count = cell.execution_count == nil and vim.NIL or cell.execution_count
 	vim.bo[state.buf].modified = true
@@ -216,7 +217,7 @@ local function finish_execution(session, item, state_name, payload)
 		if state_name == "completed" or state_name == "failed" then
 			cell.last_executed_source = item.source
 		end
-		mark_outputs_changed(session.state, cell)
+		mark_outputs_changed(session.state, cell, item.revision)
 	end
 	if state_name == "failed" and item.stop_on_error then
 		cancel_batch_tail(session, item.batch_id, "stopped after execution error")
@@ -305,13 +306,13 @@ local function handle_event(session, message)
 		update_widget(session, cell, payload)
 	elseif message.type == "execution.stream" then
 		append_stream(session, cell, payload)
-		mark_outputs_changed(session.state, cell)
+		mark_outputs_changed(session.state, cell, item.revision)
 	elseif message.type == "execution.display" then
 		append_display(session, cell, payload)
 		if payload.execution_count ~= nil and payload.execution_count ~= vim.NIL then
 			cell.execution_count = payload.execution_count
 		end
-		mark_outputs_changed(session.state, cell)
+		mark_outputs_changed(session.state, cell, item.revision)
 	elseif message.type == "execution.display_update" then
 		local cleared = apply_pending_clear(session, cell)
 		local changed = update_display(session, payload)
@@ -334,12 +335,12 @@ local function handle_event(session, message)
 			remove_display_refs(session, cell.id)
 			cell.outputs = {}
 			cell.clear_output_wait = false
-			mark_outputs_changed(session.state, cell)
+			mark_outputs_changed(session.state, cell, item.revision)
 		end
 	elseif message.type == "execution.error" then
 		append_error(session, cell, payload)
 		cell.execution_status = "failed"
-		mark_outputs_changed(session.state, cell)
+		mark_outputs_changed(session.state, cell, item.revision)
 	elseif message.type == "execution.stdin_request" then
 		cell.execution_status = "waiting_input"
 		refresh(session.state)

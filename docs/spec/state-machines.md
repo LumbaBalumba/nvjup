@@ -73,4 +73,4 @@ States:
 - `trusted_interactive`;
 - `revoked`.
 
-Trust is keyed to notebook content identity. A change that affects executable or active content invalidates the previous interactive trust decision and returns to `unknown` or `untrusted` according to policy.
+Persisted trust is keyed to notebook content identity. A change that affects executable or active content invalidates the previous interactive trust decision and returns to `unknown` or `untrusted` according to policy. Output received from an explicitly invoked local kernel may enter `trusted_interactive` through an in-memory, cell-revision-scoped grant; editing that cell invalidates the grant, and `revoked` takes precedence.

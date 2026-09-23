@@ -190,20 +190,34 @@ function M.invalidate(state)
 	state._nvjup_trust_identity = nil
 end
 
-function M.status(state)
+local function locally_executed(cell)
+	return config.options.execution
+		and config.options.execution.trust_local_kernel ~= false
+		and cell
+		and cell._nvjup_local_execution_revision ~= nil
+		and cell._nvjup_local_execution_revision == (cell.revision or 0)
+end
+
+function M.status(state, cell)
 	if config.options.interactive and config.options.interactive.require_trust == false then
 		return "trusted_interactive", { bypassed = true }
 	end
 	local hash, path = M.identity(state)
 	if not hash then
+		if locally_executed(cell) then
+			return "trusted_interactive", { local_kernel = true, ephemeral = true }
+		end
 		return "unknown", { reason = path }
 	end
 	local record = load_records()[path]
+	if record and record.level == "revoked" then
+		return "revoked", { hash = hash, path = path, record = record }
+	end
+	if locally_executed(cell) then
+		return "trusted_interactive", { hash = hash, path = path, local_kernel = true }
+	end
 	if not record then
 		return "unknown", { hash = hash, path = path }
-	end
-	if record.level == "revoked" then
-		return "revoked", { hash = hash, path = path, record = record }
 	end
 	if record.policy_version ~= POLICY_VERSION or record.hash ~= hash then
 		return "untrusted", { hash = hash, path = path, record = record, reason = "content_changed" }
@@ -211,8 +225,14 @@ function M.status(state)
 	return record.level or "untrusted", { hash = hash, path = path, record = record }
 end
 
-function M.allows_interactive(state)
-	return M.status(state) == "trusted_interactive"
+function M.allows_interactive(state, cell)
+	return M.status(state, cell) == "trusted_interactive"
+end
+
+function M.mark_local_execution(cell, revision)
+	if config.options.execution and config.options.execution.trust_local_kernel ~= false and cell then
+		cell._nvjup_local_execution_revision = revision == nil and (cell.revision or 0) or revision
+	end
 end
 
 function M.grant(state)

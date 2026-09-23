@@ -40,7 +40,7 @@ Execute a cell that returns a Plotly figure. The first PNG frame appears asynchr
 :NvJupPlotStatus
 ```
 
-Stage 6 now assigns the external Awrit window to `<leader>nf`. This original TUI focus remains available through `<leader>nF` or `:NvJupPlotFocusTui`; it is 112 columns by 40 rows by default (bounded by the current editor).
+Stage 6 provides the external Awrit window on `<leader>nF`. This original TUI focus is the lowercase `<leader>nf` default or `:NvJupPlotFocusTui`; it is 112 columns by 40 rows by default (bounded by the current editor).
 
 Inside focus mode:
 
