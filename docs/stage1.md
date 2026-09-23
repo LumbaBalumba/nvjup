@@ -10,7 +10,8 @@
 - Extmark rendering inspired by jupynvim:
   - cell header and footer;
   - active-cell highlight;
-  - left/right borders;
+  - left/right borders repeated on every wrapped visual row;
+  - word-aware wrapping with continuation indentation;
   - execution count;
   - Markdown heading highlights;
   - output divider and virtual lines.

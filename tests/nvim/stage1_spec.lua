@@ -104,6 +104,39 @@ test("renders one concealed marker and two border anchors per cell", function()
 	close_fixture(state)
 end)
 
+test("wraps long source lines and repeats both borders on visual rows", function()
+	local state = open_fixture("00_minimal.ipynb")
+	local row = state.cells[1].range.start_row
+	local long_line = string.rep("long notebook text ", 30)
+	vim.api.nvim_buf_set_lines(state.buf, row, row + 1, false, { long_line })
+	assert(state:sync_from_buffer())
+	render.render(state)
+
+	assert(vim.wo.wrap)
+	assert(vim.wo.linebreak)
+	assert(vim.wo.breakindent)
+	assert(vim.wo.breakindentopt:find("min:2", 1, true))
+	assert(vim.wo.showbreak == " ")
+
+	local repeated_left = false
+	local repeated_right = false
+	for _, mark in ipairs(details(state, state.render_ns)) do
+		local item = mark[4]
+		if item.virt_text_repeat_linebreak and item.virt_text_win_col == 0 then
+			repeated_left = true
+		end
+		if item.virt_text_repeat_linebreak and item.virt_text_pos == "right_align" then
+			repeated_right = true
+		end
+	end
+	assert(repeated_left)
+	assert(repeated_right)
+
+	vim.api.nvim_win_set_cursor(0, { row + 1, #long_line })
+	assert(vim.fn.winsaveview().leftcol == 0)
+	close_fixture(state)
+end)
+
 test("renders active header with cell index type id and execution count", function()
 	local state = open_fixture("01_markdown_code.ipynb")
 	state:goto_cell(3)

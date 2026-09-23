@@ -136,7 +136,11 @@ function M.configure_window(win)
 	end
 	vim.wo[win].conceallevel = 2
 	vim.wo[win].concealcursor = "nc"
-	vim.wo[win].wrap = false
+	vim.wo[win].wrap = true
+	vim.wo[win].linebreak = true
+	vim.wo[win].breakindent = true
+	vim.wo[win].breakindentopt = "min:2"
+	vim.wo[win].showbreak = " "
 end
 
 function M.render(state)
@@ -180,16 +184,30 @@ function M.render(state)
 
 		for row = cell.range.start_row, cell.range.end_row do
 			local line = buffer_lines[row + 1] or ""
+			-- Shift the first visual row to make room for the left border.
 			vim.api.nvim_buf_set_extmark(state.buf, state.render_ns, row, 0, {
 				virt_text = { { "│ ", "NvJupBorder" } },
 				virt_text_pos = "inline",
+				hl_mode = "combine",
 				line_hl_group = active and "NvJupActiveCell" or nil,
 				priority = 80,
+			})
+			-- Wrapped continuation rows do not repeat inline virtual text. Pin a
+			-- second border to window column zero and repeat it on every visual row.
+			-- breakindentopt=min:2 reserves the same two columns on continuations.
+			vim.api.nvim_buf_set_extmark(state.buf, state.render_ns, row, 0, {
+				virt_text = { { "│ ", "NvJupBorder" } },
+				virt_text_win_col = 0,
+				virt_text_repeat_linebreak = true,
+				hl_mode = "combine",
+				priority = 75,
 			})
 			if config.options.render.right_border then
 				vim.api.nvim_buf_set_extmark(state.buf, state.render_ns, row, 0, {
 					virt_text = { { "│", "NvJupBorder" } },
 					virt_text_pos = "right_align",
+					virt_text_repeat_linebreak = true,
+					hl_mode = "combine",
 					priority = 80,
 				})
 			end
