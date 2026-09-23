@@ -10,7 +10,7 @@ Plotly figures stay inside Neovim/Kitty; no visible browser window is opened.
 3. `python/nvjup_plotly_renderer/server.py` starts headless Chromium through Playwright.
 4. The renderer loads the locally installed `plotly.min.js`, creates the figure, and returns a PNG frame.
 5. The existing Kitty Unicode-placeholder image backend displays the frame and keeps it attached to notebook virtual lines.
-6. Focus mode translates terminal mouse positions to figure pixels and forwards hover, click, drag, and wheel events.
+6. Focus mode maps only the rendered image-cell rectangle to figure pixels and forwards hover, button down/up, drag, and wheel events without dropping clicks behind in-flight hover frames.
 7. The renderer throttles screenshots to at most 30 frames per second and reports open/frame latency.
 
 The renderer process is separate from both the Jupyter transport sidecar and the notebook kernel.
@@ -40,7 +40,7 @@ Execute a cell that returns a Plotly figure. The first PNG frame appears asynchr
 :NvJupPlotStatus
 ```
 
-Default mapping: `<leader>nf`.
+Default mapping: `<leader>nf`. The default focus window is 112 columns by 40 rows (bounded by the current editor), and its image backend can use the full focus dimensions instead of the smaller inline-image limit.
 
 Inside focus mode:
 

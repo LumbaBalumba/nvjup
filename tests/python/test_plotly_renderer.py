@@ -59,6 +59,14 @@ def test_plotly_screenshot_and_pointer_round_trip() -> None:
                 {"figure_id": "pytest-plot", "event": "move", "x": 240, "y": 160}
             )
             assert hovered["png"].startswith("iVBOR")
+            pressed = await renderer.event(
+                {"figure_id": "pytest-plot", "event": "down", "x": 240, "y": 160}
+            )
+            released = await renderer.event(
+                {"figure_id": "pytest-plot", "event": "up", "x": 240, "y": 160}
+            )
+            assert pressed["png"].startswith("iVBOR")
+            assert released["png"].startswith("iVBOR")
             zoomed = await renderer.event(
                 {
                     "figure_id": "pytest-plot",

@@ -228,8 +228,9 @@ HTML/HBox/progress model subset and projects its live state as terminal text.
 Stage 5 renders Plotly MIME objects in a dedicated headless Chromium process.
 Plotly.js is loaded locally, HTTP(S) requests are blocked, and screenshots are
 shown through the normal Kitty image path. <Leader>nf or :NvJupPlotFocus opens
-focus mode. Mouse move, click, drag, and wheel events provide hover, actions,
-pan, and zoom without a visible browser window. Press q or <Esc> to close.
+focus mode in a 112x40 default window. Mouse move, button press/release, drag,
+and wheel events provide hover, actions, pan, and zoom without dropping clicks
+behind pending hover frames. Press q or <Esc> to close.
 :NvJupPlotStatus shows renderer state. See docs/stage5.md.
 
 ==============================================================================

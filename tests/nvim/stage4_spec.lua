@@ -198,12 +198,18 @@ test("blocks active and externally-referenced SVG content", function()
 	assert(not image._safe_svg('<svg><rect onclick="alert(1)"/></svg>'))
 end)
 
-test("encodes chunked Kitty transmission with an explicit virtual placement", function()
-	local encoded = image._encode_transmit(0x123456, string.rep("A", 5000), 12, 40)
+test("encodes bounded Kitty chunks with an explicit virtual placement", function()
+	local encoded = image._encode_transmit(0x123456, string.rep("A", 100000), 12, 40)
 	assert(encoded:find("a=t,f=100,i=1193046", 1, true))
 	assert(encoded:find("m=1", 1, true))
 	assert(encoded:find("m=0", 1, true))
 	assert(encoded:find("a=p,U=1,i=1193046,p=1,c=40,r=12", 1, true))
+	local chunks = 0
+	for command in encoded:gmatch("\27_G.-\27\\") do
+		chunks = chunks + 1
+		assert(#command < 4096, "Kitty APC command exceeded terminal parser limit: " .. #command)
+	end
+	assert(chunks > 2)
 end)
 
 test("renders PNG through Kitty Unicode placeholders and cleans it up", function()

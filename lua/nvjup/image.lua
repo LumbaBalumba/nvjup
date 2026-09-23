@@ -3,14 +3,17 @@ local config = require("nvjup.config")
 local M = {}
 
 local PLACEHOLDER = 0x10EEEE
-local KITTY_CHUNK = 4096
+-- Keep the entire APC escape sequence below terminal parser limits. Using a
+-- 4096-byte payload plus control metadata caused Kitty to terminate oversized
+-- chunks and paint their base64 tail as ordinary text.
+local KITTY_CHUNK = 3072
 local next_image_id = 0x181818
 local placements = {}
 local test_writer
 
--- Kitty's Unicode-placeholder protocol indexes rows/columns with a fixed
--- sequence of combining marks. Stage 4 bounds images to 64x24 cells, so the
--- first 64 protocol-defined values are sufficient here.
+-- Kitty's Unicode-placeholder protocol indexes rows/columns with this fixed
+-- sequence of combining marks. Keep enough entries for the enlarged Plotly
+-- focus window while preserving the protocol-defined order.
 local DIACRITICS = {
 	0x0305,
 	0x030D,
@@ -78,6 +81,69 @@ local DIACRITICS = {
 	0x0658,
 	0x0659,
 	0x065A,
+	0x065B,
+	0x065D,
+	0x065E,
+	0x06D6,
+	0x06D7,
+	0x06D8,
+	0x06D9,
+	0x06DA,
+	0x06DB,
+	0x06DC,
+	0x06DF,
+	0x06E0,
+	0x06E1,
+	0x06E2,
+	0x06E4,
+	0x06E7,
+	0x06E8,
+	0x06EB,
+	0x06EC,
+	0x0730,
+	0x0732,
+	0x0733,
+	0x0735,
+	0x0736,
+	0x073A,
+	0x073D,
+	0x073F,
+	0x0740,
+	0x0741,
+	0x0743,
+	0x0745,
+	0x0747,
+	0x0749,
+	0x074A,
+	0x07EB,
+	0x07EC,
+	0x07ED,
+	0x07EE,
+	0x07EF,
+	0x07F0,
+	0x07F1,
+	0x07F3,
+	0x0816,
+	0x0817,
+	0x0818,
+	0x0819,
+	0x081B,
+	0x081C,
+	0x081D,
+	0x081E,
+	0x081F,
+	0x0820,
+	0x0821,
+	0x0822,
+	0x0823,
+	0x0825,
+	0x0826,
+	0x0827,
+	0x0829,
+	0x082A,
+	0x082B,
+	0x082C,
+	0x082D,
 }
 
 local function utf8(codepoint)
@@ -266,10 +332,13 @@ local function metadata_dimensions(descriptor)
 	return tonumber(values.width), tonumber(values.height)
 end
 
-local function grid_dimensions(descriptor, available_width, png_bytes)
+local function grid_dimensions(descriptor, available_width, png_bytes, limits)
 	local options = image_options()
-	local max_cols = math.max(8, math.min(options.max_width or 64, available_width - 4))
-	local max_rows = math.max(4, options.max_height or 24)
+	limits = limits or {}
+	local configured_width = limits.max_width or options.max_width or 64
+	local configured_height = limits.max_height or options.max_height or 24
+	local max_cols = math.max(8, math.min(configured_width, available_width - 4, #DIACRITICS))
+	local max_rows = math.max(4, math.min(configured_height, #DIACRITICS))
 	local width, height = metadata_dimensions(descriptor)
 	if not width or not height then
 		width, height = png_dimensions(png_bytes)
@@ -480,7 +549,7 @@ local function convert_to_png(state, entry, descriptor, bytes)
 	end)
 end
 
-local function prepare_chafa(state, entry, descriptor, bytes)
+local function prepare_chafa(state, entry, descriptor, bytes, limits)
 	if vim.fn.executable("chafa") ~= 1 then
 		entry.status = "failed"
 		entry.error = "Kitty graphics unavailable and chafa is not installed"
@@ -494,7 +563,12 @@ local function prepare_chafa(state, entry, descriptor, bytes)
 		return
 	end
 	local options = image_options()
-	local size = string.format("%dx%d", options.max_width or 64, options.max_height or 24)
+	limits = limits or {}
+	local size = string.format(
+		"%dx%d",
+		limits.max_width or options.max_width or 64,
+		limits.max_height or options.max_height or 24
+	)
 	run_bounded({ "chafa", "--format", "symbols", "--animate=off", "--size", size, input }, function(result)
 		pcall(os.remove, input)
 		if placements[entry.key] ~= entry then
@@ -512,7 +586,7 @@ local function prepare_chafa(state, entry, descriptor, bytes)
 	end)
 end
 
-local function prepare(state, entry, descriptor, available_width)
+local function prepare(state, entry, descriptor, available_width, limits)
 	local bytes, err = bounded_bytes(descriptor)
 	if not bytes then
 		entry.status = "failed"
@@ -525,7 +599,7 @@ local function prepare(state, entry, descriptor, available_width)
 		return
 	end
 	if entry.backend == "chafa" then
-		prepare_chafa(state, entry, descriptor, bytes)
+		prepare_chafa(state, entry, descriptor, bytes, limits)
 		return
 	end
 	if descriptor.mime == "image/png" then
@@ -536,18 +610,18 @@ local function prepare(state, entry, descriptor, available_width)
 		convert_to_png(state, entry, descriptor, bytes)
 	end
 	if entry.status == "converted" then
-		entry.cols, entry.rows = grid_dimensions(descriptor, available_width, entry.png_bytes)
+		entry.cols, entry.rows = grid_dimensions(descriptor, available_width, entry.png_bytes, limits)
 		entry.image_id = next_id()
 		tty_write(encode_transmit(entry.image_id, entry.png_base64, entry.rows, entry.cols))
 		entry.status = "ready"
 	end
 end
 
-local function finalize_conversion(entry, descriptor, available_width)
+local function finalize_conversion(entry, descriptor, available_width, limits)
 	if entry.backend ~= "kitty" or entry.status ~= "converted" then
 		return
 	end
-	entry.cols, entry.rows = grid_dimensions(descriptor, available_width, entry.png_bytes)
+	entry.cols, entry.rows = grid_dimensions(descriptor, available_width, entry.png_bytes, limits)
 	entry.image_id = next_id()
 	tty_write(encode_transmit(entry.image_id, entry.png_base64, entry.rows, entry.cols))
 	entry.status = "ready"
@@ -593,12 +667,13 @@ function M.descriptors(cell)
 	return descriptors
 end
 
-function M.render(state, cell, available_width)
+function M.render(state, cell, available_width, limits)
 	local virtual_lines = {}
 	local seen = {}
 	local by_output = {}
+	local geometry_by_output = {}
 	if not config.options.render.outputs or cell.output_collapsed then
-		return virtual_lines, seen, by_output
+		return virtual_lines, seen, by_output, geometry_by_output
 	end
 	for _, descriptor in ipairs(M.descriptors(cell)) do
 		local first_line = #virtual_lines + 1
@@ -613,17 +688,24 @@ function M.render(state, cell, available_width)
 			end
 			entry = { key = key, buf = state.buf, hash = hash, backend = backend, status = "new" }
 			placements[key] = entry
-			prepare(state, entry, descriptor, available_width)
+			prepare(state, entry, descriptor, available_width, limits)
 		end
-		finalize_conversion(entry, descriptor, available_width)
+		finalize_conversion(entry, descriptor, available_width, limits)
 		if entry.status == "ready" and entry.backend == "kitty" then
-			local columns, rows = grid_dimensions(descriptor, available_width, entry.png_bytes)
+			local columns, rows = grid_dimensions(descriptor, available_width, entry.png_bytes, limits)
 			if columns ~= entry.cols or rows ~= entry.rows then
 				entry.cols, entry.rows = columns, rows
 				tty_write(string.format("\27_Ga=p,U=1,i=%d,p=1,c=%d,r=%d,q=2\27\\", entry.image_id, columns, rows))
 			end
 			vim.list_extend(virtual_lines, placeholder_lines(entry))
+			geometry_by_output[descriptor.output_index] = { cols = entry.cols, rows = entry.rows, col = 3, row = 1 }
 		elseif entry.status == "ready" and entry.ascii_lines then
+			geometry_by_output[descriptor.output_index] = {
+				cols = math.max(1, available_width - 4),
+				rows = #entry.ascii_lines,
+				col = 3,
+				row = 1,
+			}
 			for _, line in ipairs(entry.ascii_lines) do
 				table.insert(virtual_lines, { { "  " .. line, "NvJupOutput" } })
 			end
@@ -637,7 +719,7 @@ function M.render(state, cell, available_width)
 			table.insert(by_output[descriptor.output_index], virtual_lines[index])
 		end
 	end
-	return virtual_lines, seen, by_output
+	return virtual_lines, seen, by_output, geometry_by_output
 end
 
 function M.finish_render(state, seen)

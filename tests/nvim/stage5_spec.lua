@@ -83,6 +83,51 @@ test("closes browser figures that disappear from notebook output", function()
 	assert(requests[#requests].type == "plotly.close")
 end)
 
+test("maps mouse cells only inside the rendered figure", function()
+	assert(config.options.interactive.focus_width >= 100)
+	assert(config.options.interactive.focus_height >= 36)
+	local geometry = { col = 3, row = 1, cols = 100, rows = 30 }
+	local entry = { width = 900, height = 540 }
+	local x, y = interactive._pixel_position({ wincol = 3, winrow = 1 }, geometry, entry)
+	assert(x == 0 and y == 0)
+	x, y = interactive._pixel_position({ wincol = 102, winrow = 30 }, geometry, entry)
+	assert(math.floor(x + 0.5) == 899 and math.floor(y + 0.5) == 539)
+	assert(interactive._pixel_position({ wincol = 2, winrow = 1 }, geometry, entry) == nil)
+	assert(interactive._pixel_position({ wincol = 103, winrow = 1 }, geometry, entry) == nil)
+end)
+
+test("queues clicks and releases behind an in-flight hover frame", function()
+	local sent = {}
+	local callbacks = {}
+	interactive._set_client_factory(function()
+		return {
+			request = function(_, request_type, payload, _, callback)
+				assert(request_type == "plotly.event")
+				table.insert(sent, payload.event)
+				table.insert(callbacks, callback)
+			end,
+			kill = function() end,
+		}
+	end)
+	local active = {
+		entry = { state = { buf = 99125 }, figure_id = "queued", width = 900, height = 540 },
+		event_queue = {},
+	}
+	local function enqueue(event)
+		interactive._queue_event(active, { figure_id = "queued", event = event, x = 1, y = 1 })
+	end
+	enqueue("move")
+	enqueue("down")
+	enqueue("move")
+	enqueue("up")
+	assert(vim.deep_equal(sent, { "move" }))
+	while #callbacks > 0 do
+		local callback = table.remove(callbacks, 1)
+		callback(nil, { png = png, width = 900, height = 540, frame_latency_ms = 1 })
+	end
+	assert(vim.deep_equal(sent, { "move", "down", "move", "up" }), vim.inspect(sent))
+end)
+
 interactive._set_client_factory(nil)
 
 if #failures > 0 then

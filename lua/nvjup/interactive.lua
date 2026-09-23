@@ -79,7 +79,12 @@ local function update_focus(entry)
 		},
 	}
 	local state = { buf = focus.buf }
-	local lines, seen = image.render(state, cell, math.max(24, vim.api.nvim_win_get_width(focus.win) - 2))
+	local available_width = math.max(24, vim.api.nvim_win_get_width(focus.win) - 2)
+	local lines, seen, _, geometry = image.render(state, cell, available_width, {
+		max_width = math.max(8, available_width - 2),
+		max_height = math.max(4, vim.api.nvim_win_get_height(focus.win) - 3),
+	})
+	focus.image_geometry = geometry[1]
 	vim.api.nvim_buf_clear_namespace(focus.buf, focus.namespace, 0, -1)
 	vim.api.nvim_buf_set_extmark(focus.buf, focus.namespace, 0, 0, {
 		virt_lines = lines,
@@ -181,39 +186,87 @@ function M.finish_render(state, seen)
 	end
 end
 
+local function pixel_position(mouse, geometry, entry)
+	if not geometry or not entry or not entry.width or not entry.height then
+		return nil
+	end
+	local column = mouse.wincol - geometry.col
+	local row = mouse.winrow - geometry.row
+	if column < 0 or row < 0 or column >= geometry.cols or row >= geometry.rows then
+		return nil
+	end
+	local x = geometry.cols > 1 and (column / (geometry.cols - 1)) * (entry.width - 1) or 0
+	local y = geometry.rows > 1 and (row / (geometry.rows - 1)) * (entry.height - 1) or 0
+	return x, y
+end
+
 local function pointer_position()
 	local mouse = vim.fn.getmousepos()
 	if not focus or mouse.winid ~= focus.win then
 		return nil
 	end
-	local width = math.max(1, vim.api.nvim_win_get_width(focus.win))
-	local height = math.max(1, vim.api.nvim_win_get_height(focus.win))
-	return math.max(0, (mouse.wincol - 1) / width * focus.entry.width),
-		math.max(0, (mouse.winrow - 1) / height * focus.entry.height)
+	return pixel_position(mouse, focus.image_geometry, focus.entry)
 end
 
-local function send_event(event, extra)
-	if not focus or not focus.entry.png or focus.event_pending then
+local dispatch_event
+
+local function queue_event(active, payload)
+	if active.event_pending then
+		local queue = active.event_queue
+		if payload.event == "move" and queue[#queue] and queue[#queue].event == "move" then
+			queue[#queue] = payload
+		else
+			if #queue >= 32 then
+				for index, queued in ipairs(queue) do
+					if queued.event == "move" then
+						table.remove(queue, index)
+						break
+					end
+				end
+			end
+			table.insert(queue, payload)
+		end
 		return
 	end
-	local active = focus
-	local x, y = pointer_position()
-	if not x then
-		return
-	end
-	local payload = vim.tbl_extend("force", {
-		figure_id = focus.entry.figure_id,
-		event = event,
-		x = x,
-		y = y,
-	}, extra or {})
+	dispatch_event(active, payload)
+end
+
+function dispatch_event(active, payload)
 	active.event_pending = true
 	get_client():request("plotly.event", payload, {}, function(err, frame)
 		active.event_pending = false
 		if not err then
 			store_frame(active.entry.state, active.entry, frame)
 		end
+		local next_event = table.remove(active.event_queue, 1)
+		if next_event then
+			dispatch_event(active, next_event)
+		end
 	end)
+end
+
+local function send_event(event, extra)
+	if not focus or not focus.entry.png then
+		return
+	end
+	local active = focus
+	local x, y = pointer_position()
+	if x then
+		active.last_pointer = { x, y }
+	elseif event == "up" and active.last_pointer then
+		x, y = active.last_pointer[1], active.last_pointer[2]
+	else
+		return
+	end
+	queue_event(
+		active,
+		vim.tbl_extend("force", {
+			figure_id = active.entry.figure_id,
+			event = event,
+			x = x,
+			y = y,
+		}, extra or {})
+	)
 end
 
 local function close_focus()
@@ -222,6 +275,7 @@ local function close_focus()
 	end
 	local active = focus
 	focus = nil
+	active.event_queue = {}
 	vim.o.mousemoveevent = active.previous_mousemoveevent
 	if vim.api.nvim_buf_is_valid(active.buf) then
 		image.detach({ buf = active.buf })
@@ -261,8 +315,8 @@ function M.open_focus(state, cell)
 	end
 	close_focus()
 	local buffer = vim.api.nvim_create_buf(false, true)
-	local width = math.min(vim.o.columns - 4, (options().focus_width or 76))
-	local height = math.min(vim.o.lines - 4, (options().focus_height or 30))
+	local width = math.min(vim.o.columns - 4, (options().focus_width or 112))
+	local height = math.min(vim.o.lines - 4, (options().focus_height or 40))
 	local window = vim.api.nvim_open_win(buffer, true, {
 		relative = "editor",
 		row = math.max(0, math.floor((vim.o.lines - height) / 2) - 1),
@@ -279,6 +333,7 @@ function M.open_focus(state, cell)
 		entry = entry,
 		namespace = vim.api.nvim_create_namespace("nvjup-plotly-focus-" .. buffer),
 		previous_mousemoveevent = vim.o.mousemoveevent,
+		event_queue = {},
 	}
 	vim.bo[buffer].buftype = "nofile"
 	vim.bo[buffer].bufhidden = "wipe"
@@ -287,19 +342,13 @@ function M.open_focus(state, cell)
 	vim.keymap.set("n", "q", close_focus, { buffer = buffer, silent = true })
 	vim.keymap.set("n", "<Esc>", close_focus, { buffer = buffer, silent = true })
 	vim.keymap.set("n", "<LeftMouse>", function()
-		local x, y = pointer_position()
-		if x then
-			focus.drag_start = { x, y }
-			send_event("click")
-		end
+		send_event("down")
 	end, { buffer = buffer, silent = true })
 	vim.keymap.set("n", "<LeftDrag>", function()
-		local x, y = pointer_position()
-		if x and focus.drag_start then
-			local start = focus.drag_start
-			focus.drag_start = { x, y }
-			send_event("drag", { x = start[1], y = start[2], to_x = x, to_y = y })
-		end
+		send_event("move")
+	end, { buffer = buffer, silent = true })
+	vim.keymap.set("n", "<LeftRelease>", function()
+		send_event("up")
 	end, { buffer = buffer, silent = true })
 	vim.keymap.set("n", "<MouseMove>", function()
 		send_event("move")
@@ -363,5 +412,7 @@ end
 
 M._cache = cache
 M._close_focus = close_focus
+M._pixel_position = pixel_position
+M._queue_event = queue_event
 
 return M

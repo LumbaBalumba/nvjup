@@ -237,6 +237,8 @@ require("nvjup").setup({
     command = false, -- optional renderer command override
     width_px = 900,
     height_px = 540,
+    focus_width = 112,
+    focus_height = 40,
   },
 })
 ```

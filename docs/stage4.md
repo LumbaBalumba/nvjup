@@ -19,7 +19,7 @@ A MIME bundle chooses one preferred static image in this order: PNG, JPEG, SVG, 
 
 ## Kitty rendering
 
-`lua/nvjup/image.lua` sends PNG base64 in 4096-byte Kitty graphics chunks:
+`lua/nvjup/image.lua` sends PNG base64 in 3072-byte Kitty graphics chunks. The payload is deliberately smaller than Kitty's parser limit so the APC metadata and terminator also fit; oversized 4096-byte payloads can leak their base64 tail as visible terminal text:
 
 ```text
 a=t,f=100,i=<id>,q=2,m=<more>
