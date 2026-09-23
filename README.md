@@ -2,7 +2,7 @@
 
 `nvjup` is a Neovim-native editor for Jupyter notebooks.
 
-The repository now contains the **Stage 4 notebook editor, language tooling, kernel execution, and rich static output foundation**:
+The repository now contains the **Stage 5 notebook editor, kernel/LSP foundation, rich outputs, and interactive Plotly proof of concept**:
 
 - `.ipynb` opens as code, Markdown, and raw cells rather than JSON;
 - jupynvim-inspired cell borders, headers, execution counts, and output sections;
@@ -14,7 +14,8 @@ The repository now contains the **Stage 4 notebook editor, language tooling, ker
 - text, stream, error, Markdown, sanitized HTML, terminal tables, and rich-image outputs;
 - viewport-safe PNG rendering through Kitty Unicode placeholders, with JPEG/SVG/PDF rasterization and chafa/text fallbacks;
 - a full-output float/split/tab pager that bypasses inline truncation;
-- explicit Plotly and Bokeh capability placeholders pending the interactive renderer;
+- isolated, network-blocked headless-Chromium Plotly rendering with Kitty screenshots, hover, click, drag, wheel zoom, and focus mode;
+- live terminal rendering for `tqdm.auto` progress widgets through a bounded ipywidgets protocol adapter;
 - undo-aware structural representation;
 - one versioned LSP shadow document per code language;
 - cross-cell diagnostics, completion, hover, signature help, navigation, references, symbols, semantic tokens, rename, and safe code actions;
@@ -28,7 +29,7 @@ The repository now contains the **Stage 4 notebook editor, language tooling, ker
 - interrupt, restart, restart-and-run-all, execution counts, stale-result tracking, and output persistence;
 - independent Neovim test configuration and Docker validation.
 
-Interactive Plotly/Bokeh belongs to Stages 5 and 6. Active HTML/JavaScript remains blocked; Stage 4 only renders a safe static subset and rasterized images.
+Plotly is implemented as the Stage 5 architectural proof of concept; Bokeh and production renderer recovery belong to Stage 6. Notebook HTML/JavaScript is never executed directly. Plotly runs only in the isolated renderer with outbound HTTP(S) blocked.
 
 The complete roadmap is in [`docs/nvjup-plan.md`](docs/nvjup-plan.md). Normative contracts are indexed in [`docs/spec/README.md`](docs/spec/README.md).
 
@@ -43,7 +44,8 @@ The complete roadmap is in [`docs/nvjup-plan.md`](docs/nvjup-plan.md). Normative
 - Kitty or Ghostty for native terminal images (optional; chafa/text fallback otherwise);
 - ImageMagick for JPEG/PDF rasterization and an SVG fallback (optional but recommended);
 - `rsvg-convert` for bounded SVG rasterization (optional; preferred when available);
-- chafa for a terminal-symbol image fallback outside Kitty (optional).
+- chafa for a terminal-symbol image fallback outside Kitty (optional);
+- Playwright, the Python Plotly package (for local `plotly.min.js`), and Chromium for interactive Plotly output.
 
 The editor and LSP proxy remain pure Lua. Kernel transport runs in a separate Python sidecar and does not depend on `pynvim` or `python3_host_prog`. Python notebooks use `pyright-langserver` and `ruff server` automatically when those executables are available. Missing parsers and servers degrade gracefully.
 
@@ -84,6 +86,7 @@ The launcher redirects config, data, state, and cache into `.test-runtime/`.
 | `<leader>nz` | collapse/expand cell source |
 | `<leader>no` | expand/collapse truncated inline output |
 | `<leader>np` | open full output in a floating pager |
+| `<leader>nf` | open the current Plotly output in interactive focus mode |
 | `<leader>nc` / `<leader>nC` | clear current / all outputs |
 | `<leader>nl` / `<leader>nL` | notebook outline / refresh display |
 | `<C-CR>` | run current cell (Normal and Insert modes) |
@@ -130,6 +133,8 @@ Commands:
 :NvJupCellToggleSource
 :NvJupCellToggleOutput
 :NvJupOutputOpen [float|split|vsplit|tab]
+:NvJupPlotFocus
+:NvJupPlotStatus
 :NvJupCellClearOutput
 :NvJupClearAllOutputs
 :NvJupOutline
@@ -213,13 +218,30 @@ require("nvjup").setup({
 
 `auto` selects Kitty Unicode placeholders when a compatible terminal UI is attached, then chafa, then a bounded textual fallback. PNG is sent directly. JPEG and the first PDF page use ImageMagick; sanitized SVG prefers `rsvg-convert` and falls back to ImageMagick. Image IDs are cached by output content and deleted when output changes, is collapsed/cleared, or the notebook buffer closes. Unicode placeholders are part of extmark virtual lines, so images naturally follow scrolling, resizing, folds, and hidden windows without Kitty remote control.
 
-Stream rendering implements bare-carriage-return overwrite semantics used by tqdm and similar progress bars. Each kernel update redraws the latest progress frame instead of accumulating stale percentages or exposing `\r` characters.
+Stream rendering implements bare-carriage-return overwrite semantics used by console tqdm and similar progress bars. `tqdm.auto` selects ipywidgets in a Jupyter kernel, so nvjup also projects the bounded HBox/HTML/progress model subset into a live terminal progress bar. Arbitrary widget JavaScript remains disabled.
 
 HTML is never executed. Stage 4 strips active elements and renders ordinary text or `<table>` content in the terminal. SVG with scripts, event handlers, external references, entities, or embedded objects is rejected before rasterization. Image byte, pixel, conversion-time, memory, and disk limits are configurable.
 
 Use `<leader>no` to toggle the inline `max_output_lines` limit for the current cell. Use `<leader>np` or `:NvJupOutputOpen` to inspect complete output without truncation in a pager; the command also accepts `split`, `vsplit`, or `tab`.
 
 See [`docs/stage4.md`](docs/stage4.md) for lifecycle, fallback, and security details.
+
+## Interactive Plotly
+
+Plotly MIME output is rendered by a dedicated Playwright/Chromium process with locally installed Plotly.js and blocked outbound HTTP(S). The resulting frame uses the same Kitty image path as static output. Use `<leader>nf` or `:NvJupPlotFocus`; mouse move, click, drag, and wheel events are forwarded for hover, actions, pan, and zoom. Press `q` or `<Esc>` to leave focus mode.
+
+```lua
+require("nvjup").setup({
+  interactive = {
+    enabled = true,
+    command = false, -- optional renderer command override
+    width_px = 900,
+    height_px = 540,
+  },
+})
+```
+
+See [`docs/stage5.md`](docs/stage5.md) for setup, architecture, security boundaries, and current PoC limitations.
 
 ## Language tooling configuration
 
@@ -266,6 +288,7 @@ This runs:
 - a real Neovim LSP client against a deterministic protocol test server;
 - Stage 3 queue, lifecycle, output-routing, stdin, and stale-result tests;
 - Stage 4 HTML/table, MIME selection, SVG security, Kitty protocol, conversion, cleanup, fallback, and pager tests;
+- Stage 5 Plotly MIME/cache lifecycle and real headless Chromium pointer/frame tests;
 - real `ipykernel` execution, interruption, restart, and sequential batch tests.
 
 To validate the installed Pyright and Ruff servers on the host:

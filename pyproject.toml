@@ -5,14 +5,18 @@ description = "Neovim-native Jupyter notebook editor test and sidecar environmen
 requires-python = ">=3.11"
 dependencies = [
   "jupyter-client>=8.6,<9",
+  "playwright>=1.55,<2",
+  "plotly>=6.3,<7",
 ]
 
 [dependency-groups]
 test = [
   "ipykernel>=6.29,<8",
+  "ipywidgets>=8,<9",
   "jsonschema>=4.23,<5",
   "nbformat>=5.10,<6",
   "pytest>=8,<10",
+  "tqdm>=4.67,<5",
 ]
 
 [tool.pytest.ini_options]

@@ -85,8 +85,25 @@ function M.check()
 	end
 	vim.health.info("selected image backend: " .. capabilities.backend)
 
-	vim.health.info("Stage 4 provides static rich MIME rendering, terminal images, and a full-output pager")
-	vim.health.info("Interactive Plotly/Bokeh rendering remains scheduled for Stages 5 and 6")
+	vim.health.start("nvjup interactive Plotly")
+	local renderer_python = rpc.default_command()[1]
+	local renderer_imports = vim.system({ renderer_python, "-c", "import playwright, plotly" }, { text = true })
+		:wait(5000)
+	if renderer_imports.code == 0 then
+		vim.health.ok("Playwright and Plotly.js assets are available to " .. renderer_python)
+	else
+		vim.health.warn("Playwright or Plotly is unavailable; interactive Plotly falls back to MIME text")
+	end
+	local chromium = vim.env.NVJUP_CHROMIUM
+	if chromium and vim.uv.fs_stat(chromium) then
+		vim.health.ok("Chromium configured by NVJUP_CHROMIUM: " .. chromium)
+	elseif vim.fn.executable("chromium") == 1 or vim.fn.executable("chromium-browser") == 1 then
+		vim.health.ok("system Chromium is available")
+	else
+		vim.health.warn("Chromium was not found; install it or set NVJUP_CHROMIUM")
+	end
+	vim.health.info("Stage 5 provides sandboxed Plotly screenshots and mouse focus mode")
+	vim.health.info("Bokeh and production renderer recovery remain scheduled for Stage 6")
 end
 
 return M

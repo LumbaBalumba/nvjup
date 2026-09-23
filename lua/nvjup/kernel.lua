@@ -116,6 +116,19 @@ local function append_display(session, cell, payload)
 	end
 end
 
+local function update_widget(session, cell, payload)
+	local model_id = payload.model_id
+	if type(model_id) ~= "string" or model_id == "" then
+		return
+	end
+	local model = session.widget_models[model_id] or { state = {} }
+	model.state = vim.tbl_deep_extend("force", model.state or {}, payload.state or {})
+	model.closed = payload.action == "close"
+	session.widget_models[model_id] = model
+	cell.widget_models = session.widget_models
+	refresh(session.state)
+end
+
 local function update_display(session, payload)
 	local display_id = payload.transient and payload.transient.display_id
 	local references = display_id and session.display_ids[display_id] or {}
@@ -286,6 +299,8 @@ local function handle_event(session, message)
 			cell.execution_status = state_name
 			refresh(session.state)
 		end
+	elseif message.type == "execution.widget" then
+		update_widget(session, cell, payload)
 	elseif message.type == "execution.stream" then
 		append_stream(session, cell, payload)
 		mark_outputs_changed(session.state, cell)
@@ -342,6 +357,7 @@ local function create_session(state)
 		start_waiters = {},
 		starting = false,
 		display_ids = {},
+		widget_models = {},
 	}
 	session.client = client_factory({
 		cwd = state.path ~= "" and vim.fs.dirname(state.path) or nil,
@@ -757,6 +773,10 @@ function M.restart(callback)
 			session.generation = payload.generation or session.generation + 1
 			session.active = nil
 			session.queue = {}
+			session.widget_models = {}
+			for _, cell in ipairs(state.cells) do
+				cell.widget_models = nil
+			end
 			if callback then
 				callback()
 			end

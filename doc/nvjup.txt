@@ -219,8 +219,21 @@ byte, pixel, conversion-time, memory, disk, and output-size bounds apply.
 Optional modes are split, vsplit, and tab. See docs/stage4.md for protocol and
 security details. :checkhealth nvjup reports the selected backend.
 
+`tqdm.auto` uses ipywidgets in Jupyter kernels. nvjup recognizes the bounded
+HTML/HBox/progress model subset and projects its live state as terminal text.
+
 ==============================================================================
-8. COMMANDS                                                 *nvjup-commands*
+8. INTERACTIVE PLOTLY                                  *nvjup-plotly*
+
+Stage 5 renders Plotly MIME objects in a dedicated headless Chromium process.
+Plotly.js is loaded locally, HTTP(S) requests are blocked, and screenshots are
+shown through the normal Kitty image path. <Leader>nf or :NvJupPlotFocus opens
+focus mode. Mouse move, click, drag, and wheel events provide hover, actions,
+pan, and zoom without a visible browser window. Press q or <Esc> to close.
+:NvJupPlotStatus shows renderer state. See docs/stage5.md.
+
+==============================================================================
+9. COMMANDS                                                 *nvjup-commands*
 
 :NvJupWrite             Save the notebook.
 :NvJupRefresh           Synchronize model and redraw extmarks.
@@ -238,6 +251,8 @@ security details. :checkhealth nvjup reports the selected backend.
 :NvJupCellToggleSource  Collapse or expand current cell source.
 :NvJupCellToggleOutput  Expand or restore the inline output line limit.
 :NvJupOutputOpen        Open full output; optional float/split/vsplit/tab mode.
+:NvJupPlotFocus          Open current Plotly output in interactive focus mode.
+:NvJupPlotStatus         Show interactive renderer state.
 :NvJupCellClearOutput   Clear output and execution count.
 :NvJupClearAllOutputs   Clear every output and execution count.
 :NvJupOutline           Open cell outline through vim.ui.select().
@@ -267,11 +282,12 @@ security details. :checkhealth nvjup reports the selected backend.
 :NvJupLspStatus         Show shadow documents and attached clients.
 
 ==============================================================================
-9. CURRENT LIMITATIONS                                  *nvjup-limitations*
+10. CURRENT LIMITATIONS                                 *nvjup-limitations*
 
-Interactive Plotly/Bokeh and arbitrary HTML/JavaScript are not enabled; they
-require the sandboxed renderer and trust model from Stages 5 and 6. PDF display
-uses only the first page. Animated images are currently static. Actual Kitty
+Bokeh, arbitrary widgets, and arbitrary HTML/JavaScript are not enabled.
+Plotly is a Stage 5 proof of concept; crash replay, keyboard forwarding, and a
+full trust policy remain Stage 6 work. PDF display uses only the first page.
+Animated images are currently static. Actual Kitty
 pixels require a compatible attached terminal UI. Remote Jupyter Server
 attachment and kernel-backed completion are also later work. Completion uses
 nvim-cmp when available and Neovim's built-in completion UI as a fallback.

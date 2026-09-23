@@ -130,6 +130,12 @@ function M.open_output(mode)
 	return require("nvjup.output").open(cell, mode)
 end
 
+function M.plot_focus()
+	local nb = state()
+	local cell = nb:current_cell()
+	return require("nvjup.interactive").open_focus(nb, cell)
+end
+
 function M.toggle_source()
 	local nb = state()
 	assert(nb:sync_from_buffer())

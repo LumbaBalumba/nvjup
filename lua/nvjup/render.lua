@@ -1,6 +1,7 @@
 local config = require("nvjup.config")
 local features = require("nvjup.features")
 local image = require("nvjup.image")
+local interactive = require("nvjup.interactive")
 local language = require("nvjup.language")
 local notebook = require("nvjup.notebook")
 local output = require("nvjup.output")
@@ -13,6 +14,7 @@ local kind_highlight = {
 	error = "NvJupError",
 	image = "NvJupImage",
 	interactive = "NvJupInteractive",
+	widget = "NvJupInteractive",
 	markdown = "NvJupMarkdown",
 	html = "NvJupOutput",
 	latex = "NvJupOutput",
@@ -148,7 +150,11 @@ local function output_virtual_lines(state, cell, width)
 		end
 		segments = output.segments(cell, output_options)
 	end
-	local image_lines, seen_images, images_by_output = image.render(state, cell, width)
+	local image_cell, seen_interactive = cell, {}
+	if config.options.render.outputs and not cell.output_collapsed then
+		image_cell, seen_interactive = interactive.prepare_cell(state, cell)
+	end
+	local image_lines, seen_images, images_by_output = image.render(state, image_cell, width)
 	local text_line_count = 0
 	for _, segment in pairs(segments) do
 		text_line_count = text_line_count + #segment.lines
@@ -173,7 +179,7 @@ local function output_virtual_lines(state, cell, width)
 			vim.list_extend(result, images_by_output[output_index] or {})
 		end
 	end
-	return result, seen_images
+	return result, seen_images, seen_interactive
 end
 
 local function render_markdown_line(state, cell, row, line)
@@ -231,6 +237,7 @@ function M.render(state)
 	local active_index = cursor_row and state:cell_index_at(cursor_row) or nil
 	local buffer_lines = vim.api.nvim_buf_get_lines(state.buf, 0, -1, false)
 	local seen_images = {}
+	local seen_interactive = {}
 
 	for index, cell in ipairs(state.cells) do
 		local active = index == active_index
@@ -282,9 +289,12 @@ function M.render(state)
 			render_markdown_line(state, cell, row, line)
 		end
 
-		local output_lines, cell_images = output_virtual_lines(state, cell, width)
+		local output_lines, cell_images, cell_interactive = output_virtual_lines(state, cell, width)
 		for key in pairs(cell_images) do
 			seen_images[key] = true
+		end
+		for key in pairs(cell_interactive) do
+			seen_interactive[key] = true
 		end
 		vim.api.nvim_buf_set_extmark(state.buf, state.render_ns, cell.range.end_row, 0, {
 			virt_lines = output_lines,
@@ -292,6 +302,7 @@ function M.render(state)
 		})
 	end
 	image.finish_render(state, seen_images)
+	interactive.finish_render(state, seen_interactive)
 
 	for _, win in ipairs(vim.fn.win_findbuf(state.buf)) do
 		M.configure_window(win)

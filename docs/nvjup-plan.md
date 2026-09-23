@@ -921,6 +921,9 @@ LSP должен быть реализован до kernel execution, чтобы
 
 ### Этап 5 — Plotly proof of concept
 
+Статус: реализован. Архитектура, security boundary, команды и ограничения описаны в
+[`docs/stage5.md`](stage5.md).
+
 - headless renderer process;
 - Plotly MIME loading;
 - screenshot to Kitty;

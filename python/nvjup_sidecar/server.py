@@ -46,6 +46,7 @@ class KernelSession:
     queue: asyncio.Queue[Execution] = field(default_factory=asyncio.Queue)
     executions: dict[str, Execution] = field(default_factory=dict)
     stdin_waiters: dict[str, asyncio.Future[str]] = field(default_factory=dict)
+    widget_comm_ids: set[str] = field(default_factory=set)
     active: Execution | None = None
     worker_task: asyncio.Task[None] | None = None
     monitor_task: asyncio.Task[None] | None = None
@@ -114,6 +115,7 @@ class KernelSession:
         await self.client.wait_for_ready(timeout=30)
         self.generation += 1
         self.queue = asyncio.Queue()
+        self.widget_comm_ids.clear()
         self.closing = False
         self.worker_task = asyncio.create_task(self._worker())
         if self.monitor_task is None or self.monitor_task.done():
@@ -297,6 +299,32 @@ class KernelSession:
         finally:
             self.stdin_waiters.pop(execution.execution_id, None)
 
+    @staticmethod
+    def _widget_state(value: Any) -> dict[str, Any]:
+        if not isinstance(value, dict):
+            return {}
+        allowed = {
+            "_model_name",
+            "bar_style",
+            "children",
+            "description",
+            "max",
+            "min",
+            "value",
+        }
+        result: dict[str, Any] = {}
+        for key in allowed:
+            if key not in value:
+                continue
+            item = value[key]
+            if isinstance(item, str):
+                result[key] = item[:4096]
+            elif isinstance(item, (int, float, bool)) or item is None:
+                result[key] = item
+            elif key == "children" and isinstance(item, list):
+                result[key] = [str(child)[:256] for child in item[:64]]
+        return result
+
     def _route_output(self, execution: Execution, message: dict[str, Any]) -> None:
         message_type = message.get("msg_type") or message.get("header", {}).get(
             "msg_type"
@@ -311,6 +339,47 @@ class KernelSession:
                 execution,
                 {"state": "running", "execution_count": content.get("execution_count")},
             )
+            return
+        if message_type == "comm_open":
+            model_id = str(content.get("comm_id", ""))
+            target_name = str(content.get("target_name", ""))
+            if model_id and target_name == "jupyter.widget":
+                self.widget_comm_ids.add(model_id)
+                data = content.get("data", {})
+                self.execution_event(
+                    "execution.widget",
+                    execution,
+                    {
+                        "action": "open",
+                        "model_id": model_id,
+                        "state": self._widget_state(data.get("state", {})),
+                    },
+                )
+            return
+        if message_type == "comm_msg":
+            model_id = str(content.get("comm_id", ""))
+            if model_id in self.widget_comm_ids:
+                data = content.get("data", {})
+                self.execution_event(
+                    "execution.widget",
+                    execution,
+                    {
+                        "action": "update",
+                        "model_id": model_id,
+                        "method": str(data.get("method", ""))[:64],
+                        "state": self._widget_state(data.get("state", {})),
+                    },
+                )
+            return
+        if message_type == "comm_close":
+            model_id = str(content.get("comm_id", ""))
+            if model_id in self.widget_comm_ids:
+                self.widget_comm_ids.discard(model_id)
+                self.execution_event(
+                    "execution.widget",
+                    execution,
+                    {"action": "close", "model_id": model_id, "state": {}},
+                )
             return
         if message_type == "stream":
             execution.stream_index += 1

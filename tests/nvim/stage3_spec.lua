@@ -1,6 +1,7 @@
 local config = require("nvjup.config")
 local kernel = require("nvjup.kernel")
 local notebook = require("nvjup.notebook")
+local output = require("nvjup.output")
 local render = require("nvjup.render")
 local rpc = require("nvjup.rpc")
 
@@ -268,6 +269,47 @@ test("routes display updates, deferred clears, errors, and stdin replies", funct
 	terminal(client, request, "failed", 3)
 	assert(cell.outputs[#cell.outputs].output_type == "error")
 	assert(cell.execution_status == "failed")
+	close_fixture(state)
+end)
+
+test("routes tqdm ipywidget updates into live terminal progress", function()
+	setup_fake()
+	local state = open_fixture("09_lsp_mapping.ipynb")
+	local cell = code_cells(state)[1]
+	kernel.run_cells(state, { cell })
+	local client = assert(clients[1])
+	local request = assert(client:last("execution.enqueue"))
+	local execution_id = request.payload.execution_id
+	local function widget(action, model_id, model_state)
+		client:emit("execution.widget", {
+			execution_id = execution_id,
+			action = action,
+			model_id = model_id,
+			state = model_state,
+		}, request)
+	end
+	widget("open", "left", { _model_name = "HTMLModel", value = " 0%" })
+	widget("open", "progress", { _model_name = "FloatProgressModel", min = 0, max = 4, value = 0 })
+	widget("open", "right", { _model_name = "HTMLModel", value = " 0/4" })
+	widget("open", "root", {
+		_model_name = "HBoxModel",
+		children = { "IPY_MODEL_left", "IPY_MODEL_progress", "IPY_MODEL_right" },
+	})
+	client:emit("execution.display", {
+		execution_id = execution_id,
+		output_type = "display_data",
+		data = {
+			["text/plain"] = "TqdmHBox(children=(...))",
+			["application/vnd.jupyter.widget-view+json"] = { model_id = "root" },
+		},
+		metadata = {},
+	}, request)
+	widget("update", "left", { value = " 50%" })
+	widget("update", "progress", { value = 2 })
+	widget("update", "right", { value = " 2/4" })
+	local lines = output.render(cell, { limit = false })
+	assert(table.concat(lines, "\n"):find("50%%"))
+	assert(table.concat(lines, "\n"):find("2/4", 1, true))
 	close_fixture(state)
 end)
 

@@ -27,6 +27,14 @@ M.defaults = {
 		request_timeout_ms = 60000,
 		stderr_limit = 16384,
 	},
+	interactive = {
+		enabled = true,
+		command = false,
+		width_px = 900,
+		height_px = 540,
+		focus_width = 76,
+		focus_height = 30,
+	},
 	kernel = {
 		default_name = "python3",
 		python_path = false,
@@ -83,6 +91,7 @@ M.defaults = {
 		toggle_source = "<leader>nz",
 		toggle_output = "<leader>no",
 		open_output = "<leader>np",
+		plot_focus = "<leader>nf",
 		clear_output = "<leader>nc",
 		clear_all_outputs = "<leader>nC",
 		outline = "<leader>nl",

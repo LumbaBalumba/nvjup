@@ -115,6 +115,27 @@ test("renders live carriage-return progress as the latest frame", function()
 	assert(rendered == "100%", vim.inspect(rendered))
 end)
 
+test("renders tqdm.auto ipywidget progress while the cell is running", function()
+	set_source(cell, "from tqdm.auto import tqdm\nimport time\nfor _ in tqdm(range(5)):\n    time.sleep(0.2)")
+	kernel.run_cells(state, { cell })
+	local observed
+	wait_for(function()
+		local rendered = table.concat(output.render(cell, { limit = false }), "\n")
+		if cell.execution_status == "running" and rendered:find("%%") and rendered:find("/5", 1, true) then
+			observed = rendered
+			return true
+		end
+		return false
+	end, "tqdm.auto widget did not update while the cell was running", 40000)
+	assert(observed:find("|", 1, true))
+	wait_for(function()
+		return cell.execution_status == "completed"
+	end, "tqdm.auto execution did not complete", 40000)
+	local rendered = table.concat(output.render(cell, { limit = false }), "\n")
+	assert(rendered:find("100%%"), vim.inspect(rendered))
+	assert(rendered:find("5/5", 1, true), vim.inspect(rendered))
+end)
+
 test("shares one namespace across cells containing an indented %time magic", function()
 	set_source(cell, "shared_env = 41")
 	local magic_cell = state:insert_cell(2, "code")

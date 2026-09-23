@@ -117,6 +117,45 @@ test("renders only the latest tqdm carriage-return frame", function()
 	assert(contains(lines, "new progress"))
 end)
 
+test("renders live tqdm ipywidget state as a terminal progress bar", function()
+	local progress_id = "progress-model"
+	local left_id = "left-model"
+	local right_id = "right-model"
+	local cell = {
+		widget_models = {
+			root = {
+				state = {
+					_model_name = "HBoxModel",
+					children = {
+						"IPY_MODEL_" .. left_id,
+						"IPY_MODEL_" .. progress_id,
+						"IPY_MODEL_" .. right_id,
+					},
+				},
+			},
+			[left_id] = { state = { _model_name = "HTMLModel", value = " 50%" } },
+			[progress_id] = {
+				state = { _model_name = "FloatProgressModel", min = 0, max = 4, value = 2 },
+			},
+			[right_id] = { state = { _model_name = "HTMLModel", value = " 2/4 [00:01&lt;00:01]" } },
+		},
+		outputs = {
+			{
+				output_type = "display_data",
+				data = {
+					["text/plain"] = "TqdmHBox(children=(...))",
+					["application/vnd.jupyter.widget-view+json"] = { model_id = "root" },
+				},
+				metadata = {},
+			},
+		},
+	}
+	local lines = output.render(cell, { limit = false })
+	assert(contains(lines, "50%"))
+	assert(contains(lines, "2/4"))
+	assert(contains(lines, "██████████░░░░░░░░░░"))
+end)
+
 test("sanitizes active HTML instead of executing it", function()
 	local lines = output.render({
 		outputs = {

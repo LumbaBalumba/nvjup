@@ -147,6 +147,79 @@ local function render_table(html)
 	return lines
 end
 
+local function widget_text(value)
+	if type(value) ~= "string" then
+		return ""
+	end
+	local figure_space = vim.fn.nr2char(0x2007)
+	return strip_tags(value):gsub(figure_space, " "):gsub("%s+", " "):gsub("^%s+", ""):gsub("%s+$", "")
+end
+
+local function widget_models(cell, root_id)
+	local models = (cell or {}).widget_models or {}
+	local ordered = {}
+	local visited = {}
+	local function visit(model_id, depth)
+		if depth > 8 or visited[model_id] then
+			return
+		end
+		visited[model_id] = true
+		local model = models[model_id]
+		if not model then
+			return
+		end
+		table.insert(ordered, model)
+		for _, reference in ipairs((model.state or {}).children or {}) do
+			local child_id = type(reference) == "string" and reference:match("^IPY_MODEL_(.+)$") or nil
+			if child_id then
+				visit(child_id, depth + 1)
+			end
+		end
+	end
+	visit(root_id, 0)
+	return ordered
+end
+
+local function render_widget(data, cell)
+	local view = data["application/vnd.jupyter.widget-view+json"]
+	local root_id = type(view) == "table" and view.model_id or nil
+	if type(root_id) ~= "string" then
+		return { "[invalid Jupyter widget view]" }, "unsupported"
+	end
+	local progress
+	local labels = {}
+	for _, model in ipairs(widget_models(cell, root_id)) do
+		local state = model.state or {}
+		if state._model_name == "FloatProgressModel" or state._model_name == "IntProgressModel" then
+			progress = state
+		elseif state._model_name == "HTMLModel" then
+			local text = widget_text(state.value)
+			if text ~= "" then
+				table.insert(labels, text)
+			end
+		end
+	end
+	if not progress then
+		local fallback = split_text(data["text/plain"] or "Jupyter widget output · live state unavailable")
+		return #fallback > 0 and fallback or { "[Jupyter widget output · live state unavailable]" }, "interactive"
+	end
+	local minimum = tonumber(progress.min) or 0
+	local maximum = tonumber(progress.max) or 1
+	local value = tonumber(progress.value) or minimum
+	local fraction = maximum > minimum and ((value - minimum) / (maximum - minimum)) or 0
+	fraction = math.max(0, math.min(1, fraction))
+	local width = 20
+	local filled = math.floor(fraction * width + 0.5)
+	local bar = string.rep("█", filled) .. string.rep("░", width - filled)
+	local left = labels[1] or widget_text(progress.description)
+	if left == "" then
+		left = string.format("%3d%%", math.floor(fraction * 100 + 0.5))
+	end
+	local right = labels[#labels] or string.format("%g/%g", value, maximum)
+	local suffix = progress.bar_style == "success" and " ✓" or ""
+	return { string.format("%s |%s| %s%s", left, bar, right, suffix) }, "widget"
+end
+
 local function dimensions(metadata, mime)
 	local values = type(metadata) == "table" and metadata[mime] or nil
 	if type(values) ~= "table" then
@@ -164,13 +237,17 @@ local function dimensions(metadata, mime)
 	return ""
 end
 
-local function render_bundle(data, metadata, options)
+local function render_bundle(data, metadata, options, cell)
 	if type(data) ~= "table" then
 		return { "[invalid MIME bundle]" }, "error"
 	end
 
+	if data["application/vnd.jupyter.widget-view+json"] then
+		return render_widget(data, cell)
+	end
+
 	if data["application/vnd.plotly.v1+json"] then
-		local lines = { "[Plotly interactive output · renderer planned for Stage 5]" }
+		local lines = { "[Plotly interactive output · <leader>nf for focus mode]" }
 		vim.list_extend(lines, split_text(data["text/plain"] or "Plotly figure"))
 		return lines, "interactive"
 	end
@@ -216,7 +293,7 @@ local function render_bundle(data, metadata, options)
 	return { "[unsupported MIME bundle: " .. table.concat(mime_types, ", ") .. "]" }, "unsupported"
 end
 
-local function render_item(item, options)
+local function render_item(item, options, cell)
 	local lines
 	local kind
 	if item.output_type == "stream" then
@@ -230,7 +307,7 @@ local function render_item(item, options)
 		end
 		kind = "error"
 	elseif item.output_type == "execute_result" or item.output_type == "display_data" then
-		lines, kind = render_bundle(item.data, item.metadata, options)
+		lines, kind = render_bundle(item.data, item.metadata, options, cell)
 	else
 		lines = { "[unsupported output type: " .. tostring(item.output_type) .. "]" }
 		kind = "unsupported"
@@ -250,7 +327,7 @@ function M.segments(cell, options)
 	local segments = {}
 	local total = 0
 	for output_index, item in ipairs(cell.outputs or {}) do
-		local lines, kinds = render_item(item, options)
+		local lines, kinds = render_item(item, options, cell)
 		segments[output_index] = { lines = lines, kinds = kinds }
 		total = total + #lines
 	end

@@ -13,6 +13,9 @@ import pytest
 
 ROOT = Path(__file__).resolve().parents[2]
 SIDECAR = ROOT / "python" / "nvjup_sidecar_main.py"
+sys.path.insert(0, str(ROOT / "python"))
+
+from nvjup_sidecar.server import Execution, KernelSession  # noqa: E402
 
 
 class SidecarProcess:
@@ -172,6 +175,61 @@ def enqueue(
     assert response["payload"] == {"execution_id": execution_id, "state": "queued"}
 
 
+def test_widget_comm_messages_are_bounded_and_routed() -> None:
+    events: list[dict[str, Any]] = []
+
+    class Server:
+        def event(self, event_type: str, **message: Any) -> None:
+            events.append({"type": event_type, **message})
+
+    session = object.__new__(KernelSession)
+    session.server = Server()
+    session.notebook_id = "notebook-widget"
+    session.widget_comm_ids = set()
+    execution = Execution("execution-widget", "cell-widget", 3, "pass")
+    model_id = "model-progress"
+
+    session._route_output(
+        execution,
+        {
+            "msg_type": "comm_open",
+            "content": {
+                "comm_id": model_id,
+                "target_name": "jupyter.widget",
+                "data": {
+                    "state": {
+                        "_model_name": "FloatProgressModel",
+                        "value": 0.0,
+                        "min": 0.0,
+                        "max": 4.0,
+                        "ignored": "not forwarded",
+                    }
+                },
+            },
+        },
+    )
+    session._route_output(
+        execution,
+        {
+            "msg_type": "comm_msg",
+            "content": {
+                "comm_id": model_id,
+                "data": {"method": "update", "state": {"value": 2.0}},
+            },
+        },
+    )
+
+    assert [event["type"] for event in events] == [
+        "execution.widget",
+        "execution.widget",
+    ]
+    assert events[0]["payload"]["state"]["_model_name"] == "FloatProgressModel"
+    assert "ignored" not in events[0]["payload"]["state"]
+    assert events[1]["payload"]["state"] == {"value": 2.0}
+    assert events[1]["cell_id"] == "cell-widget"
+    assert events[1]["revision"] == 3
+
+
 def test_sidecar_kernel_lifecycle_and_execution_routing(
     sidecar: SidecarProcess,
 ) -> None:
@@ -239,6 +297,31 @@ print('after', flush=True)
         == "42"
     )
     assert sidecar.event("execution.state", rich_id, state="completed")["revision"] == 1
+
+    widget_id = "execution-widget-live"
+    enqueue(
+        sidecar,
+        notebook_id,
+        widget_id,
+        "from tqdm.auto import tqdm\nimport time\nfor _ in tqdm(range(3)):\n time.sleep(0.12)",
+    )
+    opened = sidecar.wait_for(
+        lambda message: message.get("type") == "execution.widget"
+        and message.get("payload", {}).get("execution_id") == widget_id
+        and message.get("payload", {}).get("state", {}).get("_model_name")
+        == "FloatProgressModel"
+    )
+    progress_model = opened["payload"]["model_id"]
+    display = sidecar.event("execution.display", widget_id)
+    assert "application/vnd.jupyter.widget-view+json" in display["payload"]["data"]
+    updated = sidecar.wait_for(
+        lambda message: message.get("type") == "execution.widget"
+        and message.get("payload", {}).get("execution_id") == widget_id
+        and message.get("payload", {}).get("model_id") == progress_model
+        and message.get("payload", {}).get("state", {}).get("value", 0) >= 1
+    )
+    assert updated["payload"]["action"] == "update"
+    sidecar.event("execution.state", widget_id, state="completed")
 
     stdin_id = "execution-stdin"
     enqueue(

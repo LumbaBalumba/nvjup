@@ -1,6 +1,7 @@
 local config = require("nvjup.config")
 local features = require("nvjup.features")
 local image = require("nvjup.image")
+local interactive = require("nvjup.interactive")
 local kernel = require("nvjup.kernel")
 local lsp = require("nvjup.lsp")
 local notebook = require("nvjup.notebook")
@@ -71,6 +72,10 @@ local function define_buffer_commands(buf)
 			return { "float", "split", "vsplit", "tab" }
 		end,
 	})
+	command("NvJupPlotFocus", actions.plot_focus)
+	command("NvJupPlotStatus", function()
+		vim.notify(vim.inspect(interactive.status()), vim.log.levels.INFO, { title = "nvjup Plotly" })
+	end)
 	command("NvJupCellClearOutput", actions.clear_output)
 	command("NvJupClearAllOutputs", actions.clear_all_outputs)
 	command("NvJupOutline", actions.outline)
@@ -200,6 +205,7 @@ local function attach_buffer(state)
 		callback = function()
 			local current = notebook.get(buf)
 			kernel.detach(current)
+			interactive.detach(current)
 			image.detach(current)
 			if package.loaded["nvjup.cmp"] then
 				require("nvjup.cmp").detach(buf)
@@ -251,6 +257,11 @@ function M.setup(options)
 		callback = open_buffer,
 	})
 
+	vim.api.nvim_create_autocmd("VimLeavePre", {
+		group = group,
+		callback = interactive.shutdown,
+	})
+
 	vim.api.nvim_create_autocmd("WinResized", {
 		group = group,
 		callback = function()
@@ -265,6 +276,7 @@ end
 
 M.actions = actions
 M.image = image
+M.interactive = interactive
 M.kernel = kernel
 M.lsp = lsp
 M.notebook = notebook
