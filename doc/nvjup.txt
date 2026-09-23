@@ -117,8 +117,11 @@ the jumplist.
 <Leader>ni              Interrupt kernel.
 <Leader>nx              Restart kernel.
 
-These defaults follow jupynvim where an equivalent nvjup action exists. All
-mappings are buffer-local and configurable.
+These defaults follow jupynvim where an equivalent nvjup action exists. nvjup
+reserves <Leader>n buffer-locally, preventing a global mapping such as NvChad's
+line-number toggle from consuming the prefix. New paths and existing empty or
+whitespace-only *.ipynb files start with one code cell. All mappings are
+buffer-local and configurable.
 
 ==============================================================================
 5. LANGUAGE TOOLING                                        *nvjup-language*

@@ -14,6 +14,10 @@ end
 
 function M.attach(buf)
 	local keys = config.options.keymaps
+	-- NvChad maps <leader>n with nowait to line-number toggling. A local
+	-- non-nowait prefix prevents that global mapping from consuming jupynvim's
+	-- <leader>n… notebook mappings before their final key is entered.
+	map(buf, "n", "<leader>n", "<Nop>", "Notebook actions")
 	map(buf, { "n", "x", "o" }, keys.next_cell, actions.next_cell, "Next notebook cell")
 	map(buf, { "n", "x", "o" }, keys.previous_cell, actions.previous_cell, "Previous notebook cell")
 	map(buf, { "n", "x", "o" }, keys.next_code_cell, function()

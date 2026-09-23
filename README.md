@@ -101,7 +101,7 @@ Language actions intentionally mirror the normal-code mappings from the target N
 | `<leader>ca` | safe code action |
 | `<localleader>ls` | document symbols |
 
-The notebook mappings follow jupynvim's `<leader>n…`, `<S-CR>`, and `<C-CR>` defaults. All mappings are buffer-local and configurable.
+The notebook mappings follow jupynvim's `<leader>n…`, `<S-CR>`, and `<C-CR>` defaults. nvjup reserves `<leader>n` buffer-locally in every attached `.ipynb`, so a global mapping such as NvChad's line-number toggle cannot consume the notebook prefix. New paths and existing empty/whitespace-only `.ipynb` files both open with one code cell. All mappings are buffer-local and configurable.
 
 Commands:
 

@@ -631,6 +631,12 @@ function M.load(buf, path)
 	if not content then
 		return nil, read_err
 	end
+	-- Existing zero-byte/whitespace-only *.ipynb files are common after
+	-- `touch notebook.ipynb`. Treat them like BufNewFile, but keep rejecting
+	-- non-empty malformed JSON so an accidental write cannot destroy it.
+	if content:match("^%s*$") then
+		return M.create(buf, path)
+	end
 	local ok, document = pcall(vim.json.decode, content)
 	if not ok then
 		return nil, document
