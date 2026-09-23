@@ -1,0 +1,89 @@
+{
+ "version": 1,
+ "generated_by": "scripts/generate-fixtures.py",
+ "files": {
+  "notebooks/00_minimal.ipynb": [
+   "code_cells"
+  ],
+  "notebooks/01_markdown_code.ipynb": [
+   "markdown",
+   "code_cells",
+   "attachments",
+   "unicode",
+   "raw_cells"
+  ],
+  "notebooks/02_stream_error.ipynb": [
+   "streams",
+   "errors",
+   "ansi"
+  ],
+  "notebooks/03_rich_outputs.ipynb": [
+   "matplotlib",
+   "png",
+   "svg",
+   "html",
+   "latex",
+   "mime_priority"
+  ],
+  "notebooks/04_persisted_display.ipynb": [
+   "persisted_display",
+   "display_updates"
+  ],
+  "notebooks/05_plotly.ipynb": [
+   "plotly",
+   "interactive_mime",
+   "text_fallback"
+  ],
+  "notebooks/06_bokeh.ipynb": [
+   "bokeh",
+   "interactive_mime",
+   "text_fallback"
+  ],
+  "notebooks/07_unknown_metadata.ipynb": [
+   "unknown_metadata",
+   "unknown_mime",
+   "lossless_round_trip"
+  ],
+  "notebooks/08_large_output.ipynb": [
+   "large_output",
+   "unicode",
+   "stream_truncation"
+  ],
+  "notebooks/09_lsp_mapping.ipynb": [
+   "lsp_mapping",
+   "cross_cell_symbols",
+   "ipython_magics",
+   "unicode"
+  ],
+  "messages/display-update.jsonl": [
+   "display_updates",
+   "display_id",
+   "plotly"
+  ],
+  "messages/clear-output.jsonl": [
+   "clear_output",
+   "streams"
+  ],
+  "messages/stdin.jsonl": [
+   "stdin",
+   "input_request"
+  ]
+ },
+ "required_features": [
+  "markdown",
+  "code_cells",
+  "streams",
+  "errors",
+  "stdin",
+  "matplotlib",
+  "display_updates",
+  "clear_output",
+  "attachments",
+  "unknown_metadata",
+  "plotly",
+  "bokeh",
+  "large_output",
+  "unicode",
+  "lsp_mapping"
+ ]
+}

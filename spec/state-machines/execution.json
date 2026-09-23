@@ -1,0 +1,24 @@
+{
+  "name": "execution",
+  "initial": "created",
+  "terminal": ["completed", "failed", "cancelled", "stale"],
+  "states": ["created", "queued", "sent", "running", "waiting_input", "completed", "failed", "cancelled", "stale"],
+  "transitions": [
+    { "from": "created", "event": "enqueue", "to": "queued" },
+    { "from": "created", "event": "cancel", "to": "cancelled" },
+    { "from": "queued", "event": "send", "to": "sent" },
+    { "from": "queued", "event": "cancel", "to": "cancelled" },
+    { "from": "sent", "event": "kernel_busy", "to": "running" },
+    { "from": "sent", "event": "reject", "to": "failed" },
+    { "from": "sent", "event": "cancel_confirmed", "to": "cancelled" },
+    { "from": "running", "event": "input_request", "to": "waiting_input" },
+    { "from": "waiting_input", "event": "input_reply", "to": "running" },
+    { "from": "waiting_input", "event": "cancel_confirmed", "to": "cancelled" },
+    { "from": "running", "event": "complete", "to": "completed" },
+    { "from": "running", "event": "error", "to": "failed" },
+    { "from": "running", "event": "cancel_confirmed", "to": "cancelled" },
+    { "from": "sent", "event": "source_changed", "to": "stale" },
+    { "from": "running", "event": "source_changed", "to": "stale" },
+    { "from": "waiting_input", "event": "source_changed", "to": "stale" }
+  ]
+}

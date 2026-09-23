@@ -1,0 +1,43 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://nvjup.local/spec/rpc-message.schema.json",
+  "title": "nvjup protocol v1 message",
+  "type": "object",
+  "required": ["protocol", "kind", "type", "seq", "payload"],
+  "properties": {
+    "protocol": { "const": "nvjup/1" },
+    "kind": { "enum": ["request", "response", "event"] },
+    "type": {
+      "type": "string",
+      "pattern": "^[a-z][a-z0-9_]*(\\.[a-z][a-z0-9_]*)+$"
+    },
+    "id": { "type": "string", "minLength": 1, "maxLength": 256 },
+    "seq": { "type": "integer", "minimum": 0 },
+    "notebook_id": { "type": "string", "minLength": 1, "maxLength": 256 },
+    "cell_id": { "type": "string", "minLength": 1, "maxLength": 256 },
+    "revision": { "type": "integer", "minimum": 0 },
+    "payload": { "type": "object" },
+    "error": {
+      "type": "object",
+      "required": ["code", "message", "retryable"],
+      "properties": {
+        "code": { "type": "string", "pattern": "^[a-z][a-z0-9_]*$" },
+        "message": { "type": "string", "minLength": 1 },
+        "retryable": { "type": "boolean" },
+        "details": { "type": "object" }
+      },
+      "additionalProperties": true
+    }
+  },
+  "allOf": [
+    {
+      "if": { "properties": { "kind": { "enum": ["request", "response"] } } },
+      "then": { "required": ["id"] }
+    },
+    {
+      "if": { "required": ["error"] },
+      "then": { "properties": { "kind": { "const": "response" } } }
+    }
+  ],
+  "additionalProperties": true
+}

@@ -1,0 +1,6 @@
+{"protocol":"nvjup/1","kind":"request","type":"execution.enqueue","seq":1,"notebook_id":"notebook-fixture","payload":{"execution_id":"exec-clear","code":"clear_output(wait=True)"},"id":"request-clear","cell_id":"cell-fixture","revision":1}
+{"protocol":"nvjup/1","kind":"response","type":"execution.enqueue","seq":2,"notebook_id":"notebook-fixture","payload":{"accepted":true,"execution_id":"exec-clear"},"id":"request-clear","cell_id":"cell-fixture","revision":1}
+{"protocol":"nvjup/1","kind":"event","type":"execution.display","seq":3,"notebook_id":"notebook-fixture","payload":{"execution_id":"exec-clear","data":{"text/plain":"before"},"metadata":{}},"cell_id":"cell-fixture","revision":1}
+{"protocol":"nvjup/1","kind":"event","type":"execution.clear_output","seq":4,"notebook_id":"notebook-fixture","payload":{"execution_id":"exec-clear","wait":true},"cell_id":"cell-fixture","revision":1}
+{"protocol":"nvjup/1","kind":"event","type":"execution.stream","seq":5,"notebook_id":"notebook-fixture","payload":{"execution_id":"exec-clear","name":"stdout","text":"after\n","index":1},"cell_id":"cell-fixture","revision":1}
+{"protocol":"nvjup/1","kind":"event","type":"execution.state","seq":6,"notebook_id":"notebook-fixture","payload":{"execution_id":"exec-clear","state":"completed","execution_count":11},"cell_id":"cell-fixture","revision":1}

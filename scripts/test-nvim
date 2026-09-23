@@ -1,0 +1,19 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+root="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")/.." && pwd)"
+runtime="${NVJUP_TEST_RUNTIME:-${root}/.test-runtime}"
+
+mkdir -p \
+	"${runtime}/config" \
+	"${runtime}/data" \
+	"${runtime}/state" \
+	"${runtime}/cache"
+
+export NVJUP_PROJECT_ROOT="${root}"
+export XDG_CONFIG_HOME="${runtime}/config"
+export XDG_DATA_HOME="${runtime}/data"
+export XDG_STATE_HOME="${runtime}/state"
+export XDG_CACHE_HOME="${runtime}/cache"
+
+exec nvim -u "${root}/tests/nvim/init.lua" "$@"

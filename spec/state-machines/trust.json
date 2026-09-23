@@ -1,0 +1,20 @@
+{
+  "name": "trust",
+  "initial": "unknown",
+  "terminal": [],
+  "states": ["unknown", "untrusted", "trusted_static", "trusted_interactive", "revoked"],
+  "transitions": [
+    { "from": "unknown", "event": "deny", "to": "untrusted" },
+    { "from": "unknown", "event": "trust_static", "to": "trusted_static" },
+    { "from": "unknown", "event": "trust_interactive", "to": "trusted_interactive" },
+    { "from": "untrusted", "event": "trust_static", "to": "trusted_static" },
+    { "from": "untrusted", "event": "trust_interactive", "to": "trusted_interactive" },
+    { "from": "trusted_static", "event": "trust_interactive", "to": "trusted_interactive" },
+    { "from": "trusted_static", "event": "content_changed", "to": "unknown" },
+    { "from": "trusted_interactive", "event": "content_changed", "to": "unknown" },
+    { "from": "trusted_static", "event": "revoke", "to": "revoked" },
+    { "from": "trusted_interactive", "event": "revoke", "to": "revoked" },
+    { "from": "untrusted", "event": "revoke", "to": "revoked" },
+    { "from": "revoked", "event": "review", "to": "unknown" }
+  ]
+}

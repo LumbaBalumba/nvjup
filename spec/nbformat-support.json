@@ -1,0 +1,40 @@
+{
+  "contract_version": 1,
+  "nbformat_major": 4,
+  "minor_policy": "preserve-and-validate",
+  "cell_types": {
+    "code": "read-write-execute",
+    "markdown": "read-write-render",
+    "raw": "read-write-preserve"
+  },
+  "output_types": {
+    "stream": "render-and-preserve",
+    "execute_result": "render-and-preserve",
+    "display_data": "render-and-preserve",
+    "error": "render-and-preserve"
+  },
+  "mime_types": {
+    "text/plain": "v0.1",
+    "text/markdown": "v0.2",
+    "text/html": "v0.2-sanitized",
+    "text/latex": "v0.2",
+    "image/png": "v0.1",
+    "image/jpeg": "v0.1",
+    "image/svg+xml": "v0.2-rasterized",
+    "application/pdf": "v0.2-rasterized",
+    "application/json": "preserve",
+    "application/vnd.plotly.v1+json": "v0.2-interactive",
+    "application/vnd.bokehjs_exec.v0+json": "v0.3-interactive",
+    "*/*": "preserve-with-text-fallback"
+  },
+  "round_trip": {
+    "unknown_notebook_fields": "preserve",
+    "unknown_cell_fields": "preserve",
+    "unknown_metadata": "preserve",
+    "unknown_mime": "preserve",
+    "attachments": "preserve",
+    "cell_ids": "preserve",
+    "source_encoding": "semantic-equivalence",
+    "json_formatting": "not-preserved"
+  }
+}

@@ -1,0 +1,27 @@
+{
+  "name": "renderer",
+  "initial": "stopped",
+  "terminal": [],
+  "states": ["stopped", "starting", "ready", "rendering", "interactive", "suspended", "disposing", "crashed", "blocked"],
+  "transitions": [
+    { "from": "stopped", "event": "start", "to": "starting" },
+    { "from": "starting", "event": "ready", "to": "ready" },
+    { "from": "starting", "event": "fail", "to": "crashed" },
+    { "from": "starting", "event": "trust_denied", "to": "blocked" },
+    { "from": "ready", "event": "render", "to": "rendering" },
+    { "from": "rendering", "event": "frame_ready", "to": "interactive" },
+    { "from": "rendering", "event": "fail", "to": "crashed" },
+    { "from": "interactive", "event": "render", "to": "rendering" },
+    { "from": "interactive", "event": "hide", "to": "suspended" },
+    { "from": "suspended", "event": "show", "to": "interactive" },
+    { "from": "ready", "event": "dispose", "to": "disposing" },
+    { "from": "rendering", "event": "dispose", "to": "disposing" },
+    { "from": "interactive", "event": "dispose", "to": "disposing" },
+    { "from": "suspended", "event": "dispose", "to": "disposing" },
+    { "from": "blocked", "event": "dispose", "to": "disposing" },
+    { "from": "crashed", "event": "dispose", "to": "disposing" },
+    { "from": "disposing", "event": "stopped", "to": "stopped" },
+    { "from": "crashed", "event": "restart", "to": "starting" },
+    { "from": "blocked", "event": "trust_granted", "to": "starting" }
+  ]
+}

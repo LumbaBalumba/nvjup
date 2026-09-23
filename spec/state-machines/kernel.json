@@ -1,0 +1,31 @@
+{
+  "name": "kernel",
+  "initial": "stopped",
+  "terminal": [],
+  "states": ["stopped", "starting", "idle", "busy", "interrupting", "restarting", "shutting_down", "dead", "error"],
+  "transitions": [
+    { "from": "stopped", "event": "start", "to": "starting" },
+    { "from": "stopped", "event": "attach", "to": "starting" },
+    { "from": "starting", "event": "ready", "to": "idle" },
+    { "from": "starting", "event": "fail", "to": "error" },
+    { "from": "idle", "event": "execute", "to": "busy" },
+    { "from": "busy", "event": "all_idle", "to": "idle" },
+    { "from": "busy", "event": "interrupt", "to": "interrupting" },
+    { "from": "interrupting", "event": "idle", "to": "idle" },
+    { "from": "interrupting", "event": "timeout", "to": "dead" },
+    { "from": "idle", "event": "restart", "to": "restarting" },
+    { "from": "busy", "event": "restart", "to": "restarting" },
+    { "from": "interrupting", "event": "restart", "to": "restarting" },
+    { "from": "restarting", "event": "ready", "to": "idle" },
+    { "from": "restarting", "event": "fail", "to": "dead" },
+    { "from": "idle", "event": "shutdown", "to": "shutting_down" },
+    { "from": "busy", "event": "shutdown", "to": "shutting_down" },
+    { "from": "error", "event": "shutdown", "to": "shutting_down" },
+    { "from": "dead", "event": "shutdown", "to": "shutting_down" },
+    { "from": "shutting_down", "event": "stopped", "to": "stopped" },
+    { "from": "idle", "event": "process_exit", "to": "dead" },
+    { "from": "busy", "event": "process_exit", "to": "dead" },
+    { "from": "dead", "event": "start", "to": "starting" },
+    { "from": "error", "event": "start", "to": "starting" }
+  ]
+}

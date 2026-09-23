@@ -1,0 +1,11 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+root="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")/.." && pwd)"
+cd "${root}"
+
+uv run --frozen --group test pytest
+./scripts/test-nvim --headless \
+	'+lua assert(vim.g.nvjup_test_config == 1, "isolated config was not loaded")' \
+	'+lua assert(vim.fn.stdpath("config"):find(".test%-runtime", 1, false), "XDG config is not isolated")' \
+	'+qa'
