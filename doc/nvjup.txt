@@ -44,6 +44,8 @@ Options include:
     },
     lsp = {
       auto_start = true,
+      -- false enables automatic .venv/venv discovery.
+      python_path = false,
       -- Python defaults to Pyright and Ruff when installed.
     },
     keymaps = {
@@ -96,6 +98,11 @@ the shadow document.
 
 Tree-sitter parses each cell in its own language and projects highlight
 captures into the visible composite buffer. Missing parsers degrade cleanly.
+
+When nvim-cmp is installed, nvjup adds a buffer-local `nvjup` source because
+the ordinary `nvim_lsp` source cannot see clients attached to hidden shadow
+buffers. Existing completion sources remain enabled. Pyright automatically
+uses a project-root .venv or venv unless `lsp.python_path` overrides it.
 
 The default LSP mappings mirror ordinary code buffers:
 
@@ -154,8 +161,7 @@ or IPython placeholder are rejected.
 
 Stage 2 does not execute cells. Saved outputs are rendered as terminal text and
 capability placeholders. Kitty image placement, interactive Plotly/Bokeh, and
-Jupyter kernels are scheduled for later stages. Completion currently uses
-Neovim's built-in completion UI and does not apply completion-item additional
-text edits.
+Jupyter kernels are scheduled for later stages. Completion uses nvim-cmp when
+available and Neovim's built-in completion UI as a fallback.
 
 vim:tw=78:ts=8:noet:ft=help:norl:

@@ -30,6 +30,49 @@ local function project_root(path)
 	) or start
 end
 
+local function executable_file(path)
+	local stat = path and vim.uv.fs_stat(path) or nil
+	return stat ~= nil and stat.type == "file"
+end
+
+local function configured_python_path(state, root)
+	local configured = config.options.lsp.python_path
+	if type(configured) == "function" then
+		configured = configured(state, root)
+	end
+	if type(configured) == "string" and configured ~= "" then
+		local is_absolute = configured:match("^/") or configured:match("^%a:[/\\]")
+		local absolute = is_absolute and configured or vim.fs.joinpath(root, configured)
+		if executable_file(absolute) then
+			return absolute
+		end
+	end
+
+	for _, relative in ipairs({
+		".venv/bin/python",
+		"venv/bin/python",
+		".venv/Scripts/python.exe",
+		"venv/Scripts/python.exe",
+	}) do
+		local candidate = vim.fs.joinpath(root, relative)
+		if executable_file(candidate) then
+			return candidate
+		end
+	end
+
+	local active = vim.env.VIRTUAL_ENV
+	if type(active) == "string" and active ~= "" then
+		for _, relative in ipairs({ "bin/python", "Scripts/python.exe" }) do
+			local candidate = vim.fs.joinpath(active, relative)
+			if executable_file(candidate) then
+				return candidate
+			end
+		end
+	end
+	local system = vim.fn.exepath("python3")
+	return system ~= "" and system or "python"
+end
+
 local function command_available(command)
 	if type(command) == "function" then
 		return true
@@ -105,8 +148,14 @@ local function start_servers(session, document)
 		if server and command_available(server.cmd) then
 			server.name = server.name or ("nvjup-" .. document.lang)
 			server.root_dir = server.root_dir or project_root(session.state.path)
-			if server.name:lower():find("pyright", 1, true) and not server.settings then
-				server.settings = { python = { analysis = {} } }
+			if server.name:lower():find("pyright", 1, true) then
+				server.settings = server.settings or {}
+				server.settings.python = server.settings.python or {}
+				server.settings.python.analysis = server.settings.python.analysis or {}
+				server.settings.python.pythonPath = server.settings.python.pythonPath
+					or configured_python_path(session.state, server.root_dir)
+				session.python_paths = session.python_paths or {}
+				session.python_paths[document.buf] = server.settings.python.pythonPath
 			end
 			server.capabilities = server.capabilities or vim.lsp.protocol.make_client_capabilities()
 			-- Neovim 0.12 can issue a pull-diagnostic request before replying to
@@ -454,38 +503,207 @@ local function completion_documentation(documentation)
 	return ""
 end
 
+local function completion_state(buf)
+	local state = notebook.get(buf)
+	if not state then
+		return nil
+	end
+	local ok = state:sync_from_buffer()
+	if not ok then
+		return nil
+	end
+	local changed, manager = shadow.update(state)
+	M.update(state, manager, changed)
+	return state, manager
+end
+
+local function sanitize_completion_item(item, response, version)
+	local result = vim.deepcopy(item)
+	local edit = result.textEdit
+	if edit and edit.newText then
+		result.insertText = edit.newText
+	end
+	result.textEdit = nil
+	result._nvjup = {
+		client_id = response.client.id,
+		document_buf = response.document.buf,
+		document_uri = response.document.uri,
+		version = version,
+		additional_text_edits = result.additionalTextEdits,
+		command = result.command,
+	}
+	-- nvim-cmp would otherwise apply shadow-document ranges directly to the
+	-- visible notebook. Additional edits are applied through execute_completion.
+	result.additionalTextEdits = nil
+	result.command = nil
+	return result
+end
+
+function M.complete_at(buf, row, byte_col, completion_context, callback)
+	local state, manager = completion_state(buf)
+	if not state then
+		callback({ isIncomplete = false, items = {} })
+		return
+	end
+	local requests = {}
+	for _, document in pairs(manager.documents) do
+		for _, client in ipairs(clients_for(document, "textDocument/completion")) do
+			local mapped = manager:notebook_to_shadow(row, byte_col, client.offset_encoding)
+			if mapped and mapped.document == document and not mapped.transformed then
+				table.insert(requests, { document = document, client = client, mapped = mapped })
+			end
+		end
+	end
+	if #requests == 0 then
+		callback({ isIncomplete = false, items = {} })
+		return
+	end
+
+	local expected_version = manager.version
+	local pending = #requests
+	local responses = {}
+	local finished = false
+	local function finish()
+		if finished or pending > 0 then
+			return
+		end
+		finished = true
+		if manager.version ~= expected_version then
+			callback({ isIncomplete = false, items = {} })
+			return
+		end
+		local items, seen = {}, {}
+		local incomplete = false
+		for _, response in ipairs(responses) do
+			if not response.err and response.result then
+				incomplete = incomplete or response.result.isIncomplete == true
+				local source_items = response.result.items or response.result
+				for _, item in ipairs(source_items) do
+					local inserted = item.insertText or (item.textEdit and item.textEdit.newText) or item.label
+					local key = table.concat({ item.label or "", inserted or "", tostring(item.kind or "") }, "\0")
+					if not seen[key] then
+						seen[key] = true
+						table.insert(items, sanitize_completion_item(item, response, expected_version))
+					end
+				end
+			end
+		end
+		callback({ isIncomplete = incomplete, items = items })
+	end
+
+	for _, request in ipairs(requests) do
+		local params = text_document_position(request.document, request.mapped)
+		params.context = completion_context or { triggerKind = 1 }
+		local sent = request.client:request("textDocument/completion", params, function(err, result)
+			table.insert(responses, {
+				err = err,
+				result = result,
+				client = request.client,
+				document = request.document,
+			})
+			pending = pending - 1
+			finish()
+		end, request.document.buf)
+		if not sent then
+			pending = pending - 1
+		end
+	end
+	finish()
+end
+
+function M.completion_trigger_characters(buf)
+	local state = notebook.get(buf)
+	local manager = state and shadow.get(state) or nil
+	local characters, seen = {}, {}
+	for _, document in pairs(manager and manager.documents or {}) do
+		for _, client in ipairs(clients_for(document, "textDocument/completion")) do
+			local provider = client.server_capabilities.completionProvider or {}
+			for _, character in ipairs(provider.triggerCharacters or {}) do
+				if not seen[character] then
+					seen[character] = true
+					table.insert(characters, character)
+				end
+			end
+		end
+	end
+	return characters
+end
+
+function M.resolve_completion(item, callback)
+	local metadata = item and item._nvjup
+	local client = metadata and vim.lsp.get_client_by_id(metadata.client_id) or nil
+	local supported = client and client:supports_method("completionItem/resolve", { bufnr = metadata.document_buf })
+	if not supported then
+		callback(item)
+		return
+	end
+	local request = vim.deepcopy(item)
+	request._nvjup = nil
+	client:request("completionItem/resolve", request, function(err, result)
+		if err or not result then
+			callback(item)
+			return
+		end
+		if result.textEdit and result.textEdit.newText then
+			result.insertText = result.textEdit.newText
+		end
+		result.textEdit = nil
+		metadata.additional_text_edits = result.additionalTextEdits or metadata.additional_text_edits
+		metadata.command = result.command or metadata.command
+		result._nvjup = metadata
+		result.additionalTextEdits = nil
+		result.command = nil
+		callback(result)
+	end, metadata.document_buf)
+end
+
+function M.execute_completion(item, callback)
+	local metadata = item and item._nvjup
+	local client = metadata and vim.lsp.get_client_by_id(metadata.client_id) or nil
+	local state = notebook.get()
+	local manager = state and shadow.get(state) or nil
+	if client and state and manager and metadata.additional_text_edits then
+		local ok, err = M.apply_workspace_edit(state, manager, {
+			changes = { [metadata.document_uri] = metadata.additional_text_edits },
+		}, client, metadata.version)
+		if not ok then
+			notify(err, vim.log.levels.ERROR)
+		end
+	end
+	if client and metadata and metadata.command then
+		client:exec_cmd(metadata.command, { bufnr = metadata.document_buf })
+	end
+	callback(item)
+end
+
 function M.completion()
 	local notebook_buf = vim.api.nvim_get_current_buf()
+	local cmp_ok, cmp = pcall(require, "cmp")
+	if cmp_ok then
+		pcall(require("nvjup.cmp").attach, notebook_buf)
+		cmp.complete()
+		return
+	end
+
 	local cursor = vim.api.nvim_win_get_cursor(0)
 	local line = vim.api.nvim_get_current_line()
 	local before = line:sub(1, cursor[2])
 	local word = before:match("[%w_]*$") or ""
 	local start_col = cursor[2] - #word
-	request_at_cursor("textDocument/completion", function(_, document, mapped)
-		local params = text_document_position(document, mapped)
-		params.context = { triggerKind = 1 }
-		return params
-	end, function(results)
+	M.complete_at(notebook_buf, cursor[1] - 1, cursor[2], { triggerKind = 1 }, function(response)
 		if vim.api.nvim_get_current_buf() ~= notebook_buf or vim.fn.mode():sub(1, 1) ~= "i" then
 			return
 		end
 		local matches = {}
-		local seen = {}
-		for _, response in ipairs(results) do
-			local items = response.result and (response.result.items or response.result) or {}
-			for _, item in ipairs(items) do
-				local inserted = item.insertText or (item.textEdit and item.textEdit.newText) or item.label
-				if inserted and not seen[inserted] then
-					seen[inserted] = true
-					table.insert(matches, {
-						word = inserted,
-						abbr = item.label,
-						menu = item.detail or "",
-						info = completion_documentation(item.documentation),
-						kind = item.kind and tostring(item.kind) or "",
-					})
-				end
-			end
+		for _, item in ipairs(response.items) do
+			local inserted = item.insertText or item.label
+			table.insert(matches, {
+				word = inserted,
+				abbr = item.label,
+				menu = item.detail or "",
+				info = completion_documentation(item.documentation),
+				kind = item.kind and tostring(item.kind) or "",
+			})
 		end
 		if #matches > 0 then
 			vim.fn.complete(start_col + 1, matches)
@@ -799,6 +1017,7 @@ end
 
 function M.status(state)
 	local manager = state and state.shadow
+	local session = state and sessions[state.buf]
 	local result = { version = manager and manager.version or 0, documents = {} }
 	if not manager then
 		return result
@@ -810,6 +1029,7 @@ function M.status(state)
 			buf = document.buf,
 			uri = document.uri,
 			segments = #document.segments,
+			python_path = session and session.python_paths and session.python_paths[document.buf] or nil,
 			clients = vim.tbl_map(function(client)
 				return client.name
 			end, clients),
@@ -830,5 +1050,7 @@ end
 
 M._sessions = sessions
 M._collect_text_edits = collect_text_edits
+M.find_python_path = configured_python_path
+M.project_root = project_root
 
 return M

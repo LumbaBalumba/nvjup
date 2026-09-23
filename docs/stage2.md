@@ -61,6 +61,12 @@ A shadow-targeted edit is accepted only when both range endpoints:
 
 The complete WorkspaceEdit is validated before notebook edits are applied. External project-file edits remain delegated to Neovim.
 
+## Completion frontend
+
+`cmp-nvim-lsp` only discovers clients attached to the current buffer. nvjup clients are intentionally attached to hidden shadow buffers, so the ordinary `nvim_lsp` source cannot provide completion in the visible notebook.
+
+When `nvim-cmp` loads, nvjup registers a dedicated buffer-local `nvjup` source. It forwards automatic and manual completion requests to the correct shadow client, removes shadow-only text-edit ranges before confirmation, and preserves the user's existing snippet, buffer, path, and other sources. `<C-Space>` invokes nvim-cmp when it is available and falls back to built-in completion otherwise.
+
 ## Python defaults
 
 When available, Python shadows start:
@@ -68,11 +74,21 @@ When available, Python shadows start:
 - `pyright-langserver --stdio`;
 - `ruff server`.
 
+The project root is discovered from `pyproject.toml`, packaging files, language-specific project markers, or `.git`. Pyright receives the first valid interpreter from:
+
+1. explicit `lsp.python_path` configuration;
+2. `.venv/bin/python` or `venv/bin/python` under the project root;
+3. Windows virtual-environment equivalents;
+4. `$VIRTUAL_ENV`;
+5. system Python.
+
+This mirrors the local-environment behavior of the target Neovim Pyright configuration without depending on Plenary.
+
 Pyright 1.1.408 can leave workspace folders uninitialized unless a client sends `workspace/didChangeConfiguration`. The default Pyright settings are intentionally non-empty so Neovim sends that notification. Pull-diagnostic dynamic registration is disabled by default because its registration handshake can deadlock that Pyright release; standard published diagnostics are projected instead.
 
 ## Tests
 
-The hermetic suite validates source maps, Unicode position encodings, multi-language documents, magic preprocessing, projected Tree-sitter captures, parser fallback, diagnostics, safe and stale edits, and normal-code-equivalent mappings.
+The hermetic suite validates source maps, Unicode position encodings, multi-language documents, magic preprocessing, projected Tree-sitter captures, parser fallback, project-local Python discovery, nvim-cmp source registration, diagnostics, completion responses, safe and stale edits, and normal-code-equivalent mappings.
 
 A deterministic Python LSP server validates Neovim's real LSP transport, asynchronous diagnostics, cross-cell definition, hover, signature help, semantic tokens, rename, and code actions.
 

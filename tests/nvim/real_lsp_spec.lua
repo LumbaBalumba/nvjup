@@ -37,6 +37,18 @@ local ok, err = xpcall(function()
 		"Pyright did not initialize on the shadow document"
 	)
 
+	local expected_python = vim.fs.joinpath(root, ".venv", "bin", "python")
+	if vim.uv.fs_stat(expected_python) then
+		local pyright
+		for _, client in ipairs(clients) do
+			if client.name == "nvjup-pyright" then
+				pyright = client
+				break
+			end
+		end
+		assert(pyright and pyright.config.settings.python.pythonPath == expected_python)
+	end
+
 	assert(
 		vim.wait(15000, function()
 			lsp.publish_diagnostics(state)
@@ -79,7 +91,14 @@ local ok, err = xpcall(function()
 		"Pyright definition did not map to the earlier code cell"
 	)
 
-	print(string.format("Real LSP test passed: %d client(s), Pyright cross-cell definition mapped", #clients))
+	local status = lsp.status(state)
+	print(
+		string.format(
+			"Real LSP test passed: %d client(s), Python %s, Pyright cross-cell definition mapped",
+			#clients,
+			status.documents[1].python_path or "<system>"
+		)
+	)
 end, debug.traceback)
 
 config.options.lsp.auto_start = original_auto_start

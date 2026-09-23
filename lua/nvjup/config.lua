@@ -17,6 +17,7 @@ M.defaults = {
 		auto_start = true,
 		diagnostics = true,
 		pull_diagnostics = false,
+		python_path = false,
 		servers = {
 			python = {
 				{

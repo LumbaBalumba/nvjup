@@ -105,6 +105,21 @@ else
 		end, "mapped diagnostic was not published")
 	end)
 
+	test("returns asynchronous completion items from the shadow document", function()
+		local row, col = local_source_row(state.cells[5], "length")
+		local response
+		lsp.complete_at(state.buf, row, col + #"length", { triggerKind = 1 }, function(result)
+			response = result
+		end)
+		wait_for(function()
+			return response ~= nil
+		end, "completion response was not returned")
+		assert(#response.items >= 1)
+		assert(response.items[1].label == "length")
+		assert(response.items[1].insertText == "length")
+		assert(response.items[1].textEdit == nil)
+	end)
+
 	test("references and document symbols map into notebook quickfix entries", function()
 		local row, col = local_source_row(state.cells[5], "length")
 		vim.api.nvim_set_current_buf(state.buf)

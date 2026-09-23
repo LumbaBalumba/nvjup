@@ -15,6 +15,8 @@ The repository now contains the **Stage 2 notebook editor and language tooling f
 - undo-aware structural representation;
 - one versioned LSP shadow document per code language;
 - cross-cell diagnostics, completion, hover, signature help, navigation, references, symbols, semantic tokens, rename, and safe code actions;
+- native `nvim-cmp` source for automatic and manually triggered notebook completion;
+- automatic project-local `.venv`/`venv` selection for Pyright;
 - IPython magic preprocessing and UTF-8/UTF-16/UTF-32 source maps;
 - projected Tree-sitter highlighting for code and Markdown cells, including mixed-language notebooks;
 - independent Neovim test configuration and Docker validation.
@@ -130,6 +132,8 @@ require("nvjup").setup({
   treesitter = { enabled = true },
   lsp = {
     auto_start = true,
+    -- Optional override; otherwise .venv/bin/python is detected from root_dir.
+    python_path = false,
     servers = {
       python = {
         {
@@ -147,6 +151,10 @@ require("nvjup").setup({
 The notebook `metadata.language_info.name` chooses the primary language. A code cell can override it through `cell.metadata.language`, `cell.metadata.languageId`, `cell.metadata.nvjup.language`, or `cell.metadata.vscode.languageId`.
 
 Tree-sitter parses each cell independently and projects captures into the composite buffer. This avoids treating Markdown and code as one language and does not require generated fenced-code wrappers.
+
+Because language servers are attached to hidden shadow buffers, the ordinary `nvim_lsp` completion source cannot see them from the visible notebook buffer. When `nvim-cmp` is installed, nvjup registers a dedicated `nvjup` source and adds it to the notebook's buffer-local source list. Existing `buffer`, `path`, snippets, and other completion sources remain enabled.
+
+For Python, nvjup searches the project root for `.venv/bin/python`, `venv/bin/python`, and their Windows equivalents. An explicitly configured `lsp.python_path` takes precedence, followed by `$VIRTUAL_ENV` and the system Python.
 
 ## Run all automated tests
 

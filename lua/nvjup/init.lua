@@ -95,6 +95,23 @@ local function attach_buffer(state)
 	keymaps.attach(buf)
 	define_buffer_commands(buf)
 
+	vim.api.nvim_create_autocmd("InsertEnter", {
+		group = group,
+		buffer = buf,
+		callback = function()
+			vim.schedule(function()
+				if vim.api.nvim_buf_is_valid(buf) then
+					require("nvjup.cmp").attach(buf)
+				end
+			end)
+		end,
+	})
+	if package.loaded.cmp then
+		vim.schedule(function()
+			require("nvjup.cmp").attach(buf)
+		end)
+	end
+
 	vim.api.nvim_create_autocmd("BufWriteCmd", {
 		group = group,
 		buffer = buf,
@@ -148,6 +165,9 @@ local function attach_buffer(state)
 		buffer = buf,
 		once = true,
 		callback = function()
+			if package.loaded["nvjup.cmp"] then
+				require("nvjup.cmp").detach(buf)
+			end
 			features.detach(notebook.get(buf))
 			notebook.detach(buf)
 		end,

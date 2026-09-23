@@ -183,6 +183,13 @@ def handle_request(message: dict[str, Any]) -> bool:
                         "kind": 3,
                         "detail": "nvjup mock completion",
                         "documentation": "Cross-cell completion from one shadow document.",
+                        "textEdit": {
+                            "range": {
+                                "start": params["position"],
+                                "end": params["position"],
+                            },
+                            "newText": "length",
+                        },
                     }
                 ],
             },

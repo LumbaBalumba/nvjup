@@ -1,3 +1,4 @@
+local config = require("nvjup.config")
 local lsp = require("nvjup.lsp")
 local notebook = require("nvjup.notebook")
 local render = require("nvjup.render")
@@ -234,6 +235,56 @@ test("rejects WorkspaceEdits produced for an obsolete source-map version", funct
 	}, { offset_encoding = "utf-16" }, manager.version - 1)
 	assert(not ok)
 	assert(err:find("source map changed", 1, true))
+	close_fixture(state)
+end)
+
+test("selects a project-local Python environment for Pyright", function()
+	local directory = vim.fn.tempname()
+	assert(vim.fn.mkdir(vim.fs.joinpath(directory, ".venv", "bin"), "p") == 1)
+	local python = vim.fs.joinpath(directory, ".venv", "bin", "python")
+	local file = assert(io.open(python, "wb"))
+	file:write("#!/bin/sh\n")
+	file:close()
+	local old = config.options.lsp.python_path
+	config.options.lsp.python_path = false
+	assert(lsp.find_python_path({}, directory) == python)
+	config.options.lsp.python_path = ".venv/bin/python"
+	assert(lsp.find_python_path({}, directory) == python)
+	config.options.lsp.python_path = old
+	vim.fs.rm(directory, { recursive = true, force = true })
+end)
+
+test("registers a notebook-aware nvim-cmp source without removing existing sources", function()
+	local state = open_fixture("09_lsp_mapping.ipynb")
+	local registered_name, registered_source, buffer_config
+	local setup = setmetatable({
+		buffer = function(options)
+			buffer_config = options
+		end,
+	}, {
+		__call = function() end,
+	})
+	package.loaded.cmp = {
+		get_config = function()
+			return { sources = { { name = "buffer" }, { name = "path" } } }
+		end,
+		register_source = function(name, source)
+			registered_name, registered_source = name, source
+			return 1
+		end,
+		setup = setup,
+	}
+	package.loaded["nvjup.cmp"] = nil
+	local bridge = require("nvjup.cmp")
+	assert(bridge.attach(state.buf))
+	assert(registered_name == "nvjup")
+	assert(registered_source:is_available())
+	assert(buffer_config.sources[1].name == "nvjup")
+	assert(buffer_config.sources[2].name == "buffer")
+	assert(buffer_config.sources[3].name == "path")
+	bridge.detach(state.buf)
+	package.loaded["nvjup.cmp"] = nil
+	package.loaded.cmp = nil
 	close_fixture(state)
 end)
 
