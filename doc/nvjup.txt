@@ -111,7 +111,7 @@ the jumplist.
 <Leader>nm              Convert current cell to Markdown.
 <Leader>ny              Convert current cell to code.
 <Leader>nz              Collapse or expand cell source.
-<Leader>no              Collapse or expand cell output.
+<Leader>no              Expand or restore the inline output line limit.
 <Leader>np              Open complete cell output in a floating pager.
 <Leader>nc              Clear cell output.
 <Leader>nC              Clear all notebook outputs.
@@ -214,6 +214,7 @@ HTML is never executed. SVG containing scripts, event handlers, external
 references, entities, embedded objects, or CSS URLs is rejected. Configurable
 byte, pixel, conversion-time, memory, disk, and output-size bounds apply.
 
+<Leader>no toggles the inline max_output_lines limit for the current cell.
 <Leader>np or :NvJupOutputOpen opens the current cell's untruncated output.
 Optional modes are split, vsplit, and tab. See docs/stage4.md for protocol and
 security details. :checkhealth nvjup reports the selected backend.
@@ -235,7 +236,7 @@ security details. :checkhealth nvjup reports the selected backend.
 :NvJupCellMergeBelow    Merge current cell with the next cell.
 :NvJupCellType          Set or cycle cell type.
 :NvJupCellToggleSource  Collapse or expand current cell source.
-:NvJupCellToggleOutput  Collapse or expand current cell output.
+:NvJupCellToggleOutput  Expand or restore the inline output line limit.
 :NvJupOutputOpen        Open full output; optional float/split/vsplit/tab mode.
 :NvJupCellClearOutput   Clear output and execution count.
 :NvJupClearAllOutputs   Clear every output and execution count.

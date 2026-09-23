@@ -62,6 +62,7 @@ local function clear_cell_for_execution(session, cell)
 	cell.execution_count = nil
 	cell.raw.execution_count = vim.NIL
 	cell.output_collapsed = false
+	cell.output_expanded = false
 	cell.clear_output_wait = false
 	cell.execution_duration_ns = nil
 	cell.stale = false

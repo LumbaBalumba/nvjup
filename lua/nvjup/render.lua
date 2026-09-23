@@ -142,33 +142,35 @@ local function output_virtual_lines(state, cell, width)
 	local result = { { { footer_text(state, cell, width), "NvJupBorder" } } }
 	local segments = {}
 	if config.options.render.outputs then
-		segments = output.segments(cell, { include_images = false })
+		local output_options = { include_images = false }
+		if cell.output_expanded then
+			output_options.limit = false
+		end
+		segments = output.segments(cell, output_options)
 	end
 	local image_lines, seen_images, images_by_output = image.render(state, cell, width)
 	local text_line_count = 0
 	for _, segment in pairs(segments) do
 		text_line_count = text_line_count + #segment.lines
 	end
-	if text_line_count > 0 or #image_lines > 0 or (cell.output_collapsed and #(cell.outputs or {}) > 0) then
+	if text_line_count > 0 or #image_lines > 0 then
 		local execution = cell.execution_count ~= nil
 				and cell.execution_count ~= vim.NIL
 				and tostring(cell.execution_count)
 			or " "
-		local suffix = cell.output_collapsed and string.format(" · %d lines collapsed", text_line_count) or ""
+		local suffix = cell.output_expanded and " · full output" or ""
 		table.insert(result, { { string.format("  Out[%s]%s", execution, suffix), "NvJupOutputHeader" } })
-		if not cell.output_collapsed then
-			for output_index = 1, #(cell.outputs or {}) do
-				local segment = segments[output_index]
-				if segment then
-					for index, line in ipairs(segment.lines) do
-						local clipped = vim.fn.strcharpart(line, 0, math.max(1, width - 3))
-						table.insert(result, {
-							{ "  " .. clipped, kind_highlight[segment.kinds[index]] or "NvJupOutput" },
-						})
-					end
+		for output_index = 1, #(cell.outputs or {}) do
+			local segment = segments[output_index]
+			if segment then
+				for index, line in ipairs(segment.lines) do
+					local clipped = vim.fn.strcharpart(line, 0, math.max(1, width - 3))
+					table.insert(result, {
+						{ "  " .. clipped, kind_highlight[segment.kinds[index]] or "NvJupOutput" },
+					})
 				end
-				vim.list_extend(result, images_by_output[output_index] or {})
 			end
+			vim.list_extend(result, images_by_output[output_index] or {})
 		end
 	end
 	return result, seen_images

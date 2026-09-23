@@ -417,11 +417,11 @@ test("duplicates source and metadata with a new id and cleared execution", funct
 	close_fixture(state)
 end)
 
-test("collapses and clears saved output", function()
-	local state = open_fixture("01_markdown_code.ipynb")
-	state:goto_cell(3)
+test("expands truncated output and clears saved output", function()
+	local state = open_fixture("08_large_output.ipynb")
+	state:goto_cell(1)
 	assert(actions.toggle_output() == true)
-	assert(state.cells[3].output_collapsed == true)
+	assert(state.cells[1].output_expanded == true)
 	local virtual_text = {}
 	for _, mark in ipairs(details(state, state.render_ns)) do
 		for _, virtual_line in ipairs(mark[4].virt_lines or {}) do
@@ -430,11 +430,13 @@ test("collapses and clears saved output", function()
 			end
 		end
 	end
-	assert(find_line(virtual_text, "lines collapsed"))
+	assert(find_line(virtual_text, "full output"))
+	assert(not find_line(virtual_text, "more output lines"))
 	assert(actions.toggle_output() == false)
+	assert(state.cells[1].output_expanded == false)
 	assert(actions.clear_output())
-	assert(#state.cells[3].outputs == 0)
-	assert(state.cells[3].execution_count == nil)
+	assert(#state.cells[1].outputs == 0)
+	assert(state.cells[1].execution_count == nil)
 	assert(vim.bo[state.buf].modified)
 	close_fixture(state)
 end)

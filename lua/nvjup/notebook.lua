@@ -477,6 +477,7 @@ function Notebook:clear_output(index)
 	local cell = assert(self.cells[index], "invalid cell index")
 	clear_execution(cell)
 	cell.output_collapsed = false
+	cell.output_expanded = false
 	vim.bo[self.buf].modified = true
 	return true
 end
@@ -486,6 +487,7 @@ function Notebook:clear_all_outputs()
 	for _, cell in ipairs(self.cells) do
 		clear_execution(cell)
 		cell.output_collapsed = false
+		cell.output_expanded = false
 	end
 	vim.bo[self.buf].modified = true
 	return true
@@ -493,8 +495,9 @@ end
 
 function Notebook:toggle_output(index)
 	local cell = assert(self.cells[index], "invalid cell index")
-	cell.output_collapsed = not cell.output_collapsed
-	return cell.output_collapsed
+	cell.output_expanded = not cell.output_expanded
+	cell.output_collapsed = false
+	return cell.output_expanded
 end
 
 function Notebook:merge_below(index)

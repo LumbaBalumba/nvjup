@@ -55,7 +55,7 @@ HTML is never loaded into a browser or evaluated. Scripts, styles, iframe, and o
 
 ## Full-output pager
 
-Inline text is capped by `render.max_output_lines`. `<leader>np` or:
+Inline text is capped by `render.max_output_lines`. `<leader>no` toggles full inline rendering for the current cell. `<leader>np` or:
 
 ```vim
 :NvJupOutputOpen

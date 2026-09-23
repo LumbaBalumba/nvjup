@@ -77,6 +77,29 @@ test("renders HTML tables as bounded terminal tables", function()
 	assert(lines[#lines]:find("└", 1, true))
 end)
 
+test("renders every table row when output limits are disabled", function()
+	local rows = { "<tr><th>index</th><th>value</th></tr>" }
+	for index = 1, 30 do
+		table.insert(rows, string.format("<tr><th>%d</th><td>%d</td></tr>", index, index * 10))
+	end
+	local cell = {
+		outputs = {
+			{
+				output_type = "display_data",
+				data = { ["text/html"] = "<table>" .. table.concat(rows) .. "</table>" },
+				metadata = {},
+			},
+		},
+	}
+	local limited = output.render(cell)
+	local full = output.render(cell, { limit = false })
+	assert(#limited == config.options.render.max_output_lines + 1)
+	assert(#full == 63)
+	assert(contains(full, " 30 "))
+	assert(contains(full, " 300 "))
+	assert(not contains(full, "more output"))
+end)
+
 test("renders only the latest tqdm carriage-return frame", function()
 	local cell = {
 		outputs = {

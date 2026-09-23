@@ -82,7 +82,7 @@ The launcher redirects config, data, state, and cache into `.test-runtime/`.
 | `<leader>nt` | cycle code → Markdown → raw |
 | `<leader>nm` / `<leader>ny` | convert to Markdown / code |
 | `<leader>nz` | collapse/expand cell source |
-| `<leader>no` | collapse/expand cell output |
+| `<leader>no` | expand/collapse truncated inline output |
 | `<leader>np` | open full output in a floating pager |
 | `<leader>nc` / `<leader>nC` | clear current / all outputs |
 | `<leader>nl` / `<leader>nL` | notebook outline / refresh display |
@@ -217,7 +217,7 @@ Stream rendering implements bare-carriage-return overwrite semantics used by tqd
 
 HTML is never executed. Stage 4 strips active elements and renders ordinary text or `<table>` content in the terminal. SVG with scripts, event handlers, external references, entities, or embedded objects is rejected before rasterization. Image byte, pixel, conversion-time, memory, and disk limits are configurable.
 
-Use `<leader>np` or `:NvJupOutputOpen` to inspect complete output without `max_output_lines` truncation. The command also accepts `split`, `vsplit`, or `tab`.
+Use `<leader>no` to toggle the inline `max_output_lines` limit for the current cell. Use `<leader>np` or `:NvJupOutputOpen` to inspect complete output without truncation in a pager; the command also accepts `split`, `vsplit`, or `tab`.
 
 See [`docs/stage4.md`](docs/stage4.md) for lifecycle, fallback, and security details.
 

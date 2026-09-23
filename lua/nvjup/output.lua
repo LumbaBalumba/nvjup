@@ -255,7 +255,10 @@ function M.segments(cell, options)
 		total = total + #lines
 	end
 
-	local maximum = options.limit == false and nil or config.options.render.max_output_lines
+	local maximum
+	if options.limit ~= false then
+		maximum = config.options.render.max_output_lines
+	end
 	if maximum and total > maximum then
 		local retained = 0
 		for output_index = 1, #(cell.outputs or {}) do
