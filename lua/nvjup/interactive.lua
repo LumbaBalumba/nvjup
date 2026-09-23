@@ -450,7 +450,10 @@ local function pixel_position(mouse, geometry, entry)
 	local source_width = entry.source_width or entry.width
 	local source_height = entry.source_height or entry.height
 	local x = geometry.cols > 1 and (column / (geometry.cols - 1)) * (source_width - 1) or 0
-	local y = geometry.rows > 1 and (row / (geometry.rows - 1)) * (source_height - 1) or 0
+	-- Kitty reports the terminal cell occupied by the pointer. Compensate for
+	-- its one-cell vertical hotspot so the browser pointer does not trail below it.
+	local adjusted_row = math.max(0, row - 1)
+	local y = geometry.rows > 1 and (adjusted_row / (geometry.rows - 1)) * (source_height - 1) or 0
 	return x, y
 end
 
