@@ -415,11 +415,12 @@ local function run_bounded(command, callback)
 end
 
 local function convert_to_png(state, entry, descriptor, bytes)
-	local executable = vim.fn.executable("magick") == 1 and "magick"
+	local imagemagick = vim.fn.executable("magick") == 1 and "magick"
 		or (vim.fn.executable("convert") == 1 and "convert" or nil)
-	if not executable then
+	local use_rsvg = descriptor.mime == "image/svg+xml" and vim.fn.executable("rsvg-convert") == 1
+	if not imagemagick and not use_rsvg then
 		entry.status = "failed"
-		entry.error = "ImageMagick is required for " .. descriptor.mime
+		entry.error = "ImageMagick or rsvg-convert is required for " .. descriptor.mime
 		return
 	end
 	entry.status = "pending"
@@ -430,27 +431,34 @@ local function convert_to_png(state, entry, descriptor, bytes)
 		entry.error = "could not create image conversion input"
 		return
 	end
-	local source = descriptor.mime == "application/pdf" and (input .. "[0]") or input
-	local command = {
-		executable,
-		"-limit",
-		"memory",
-		"128MiB",
-		"-limit",
-		"map",
-		"256MiB",
-		"-limit",
-		"area",
-		"64MP",
-		"-limit",
-		"disk",
-		"256MiB",
-		source,
-		"-thumbnail",
-		"4096x4096>",
-		"-strip",
-		destination,
-	}
+	local command
+	if use_rsvg then
+		-- librsvg does not resolve any references because the SVG sanitizer
+		-- rejects href/src/url/import. Explicit dimensions also bound output.
+		command = { "rsvg-convert", "-a", "-w", "4096", "-h", "4096", "-o", destination, input }
+	else
+		local source = descriptor.mime == "application/pdf" and (input .. "[0]") or input
+		command = {
+			imagemagick,
+			"-limit",
+			"memory",
+			"128MiB",
+			"-limit",
+			"map",
+			"256MiB",
+			"-limit",
+			"area",
+			"64MP",
+			"-limit",
+			"disk",
+			"256MiB",
+			source,
+			"-thumbnail",
+			"4096x4096>",
+			"-strip",
+			destination,
+		}
+	end
 	run_bounded(command, function(result, timed_out)
 		local png = result.code == 0 and read_bytes(destination) or nil
 		pcall(os.remove, input)
@@ -460,8 +468,9 @@ local function convert_to_png(state, entry, descriptor, bytes)
 		end
 		if not png then
 			entry.status = "failed"
+			local stderr = (result.stderr or ""):gsub("%s+$", "")
 			entry.error = timed_out and "image conversion timed out"
-				or ((result.stderr or "image conversion failed"):gsub("%s+$", ""))
+				or (stderr ~= "" and stderr or "image conversion failed")
 		else
 			entry.png_bytes = png
 			entry.png_base64 = vim.base64.encode(png)
@@ -655,6 +664,7 @@ function M.capabilities()
 		kitty = kitty_environment(),
 		chafa = vim.fn.executable("chafa") == 1,
 		imagemagick = vim.fn.executable("magick") == 1 or vim.fn.executable("convert") == 1,
+		rsvg = vim.fn.executable("rsvg-convert") == 1,
 	}
 end
 

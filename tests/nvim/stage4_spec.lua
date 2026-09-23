@@ -63,15 +63,35 @@ test("renders HTML tables as bounded terminal tables", function()
 		outputs = {
 			{
 				output_type = "display_data",
-				data = { ["text/html"] = "<table><tr><th>a</th><th>b</th></tr><tr><td>1</td><td>2</td></tr></table>" },
+				data = {
+					["text/html"] = "<table><thead><tr><th></th><th>a</th><th>b</th></tr></thead><tbody><tr><th>0</th><td>1.25</td><td>-2</td></tr></tbody></table>",
+				},
 				metadata = {},
 			},
 		},
 	})
 	assert(lines[1]:find("┌", 1, true))
 	assert(contains(lines, " a "))
-	assert(contains(lines, " 2 "))
+	assert(contains(lines, " 1.25 "))
+	assert(contains(lines, " -2 "))
 	assert(lines[#lines]:find("└", 1, true))
+end)
+
+test("renders only the latest tqdm carriage-return frame", function()
+	local cell = {
+		outputs = {
+			{ output_type = "stream", name = "stderr", text = "first\r\n\r  0%\r 50%\r100%\ncomplete\r" },
+		},
+	}
+	local lines = output.render(cell, { limit = false })
+	assert(contains(lines, "first"))
+	assert(contains(lines, "100%"))
+	assert(contains(lines, "complete"))
+	assert(not contains(lines, "  0%"))
+	assert(not contains(lines, " 50%"))
+	cell.outputs[1].text = cell.outputs[1].text .. "\rnew progress"
+	lines = output.render(cell, { limit = false })
+	assert(contains(lines, "new progress"))
 end)
 
 test("sanitizes active HTML instead of executing it", function()

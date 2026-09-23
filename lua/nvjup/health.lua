@@ -72,9 +72,16 @@ function M.check()
 		vim.health.info("Kitty graphics and chafa are unavailable; image outputs use text fallbacks")
 	end
 	if capabilities.imagemagick then
-		vim.health.ok("ImageMagick is available for JPEG, SVG, and PDF rasterization")
+		vim.health.ok("ImageMagick is available for JPEG and PDF rasterization")
 	else
-		vim.health.warn("ImageMagick is unavailable; native Kitty rendering is limited to PNG")
+		vim.health.warn("ImageMagick is unavailable; JPEG/PDF use a fallback")
+	end
+	if capabilities.rsvg then
+		vim.health.ok("rsvg-convert is available for bounded SVG rasterization")
+	elseif capabilities.imagemagick then
+		vim.health.info("rsvg-convert is unavailable; safe SVG falls back to ImageMagick")
+	else
+		vim.health.warn("no SVG rasterizer is available")
 	end
 	vim.health.info("selected image backend: " .. capabilities.backend)
 

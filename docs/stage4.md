@@ -9,7 +9,8 @@ Stage 4 adds safe static MIME rendering without changing nbformat persistence or
 - sanitized `text/html`;
 - bounded terminal tables for HTML `<table>` output;
 - PNG through Kitty's Unicode-placeholder graphics protocol;
-- JPEG, sanitized SVG, and the first PDF page through ImageMagick-to-PNG conversion;
+- JPEG and the first PDF page through ImageMagick-to-PNG conversion;
+- sanitized SVG through `rsvg-convert`, with ImageMagick fallback;
 - chafa symbol rendering when a compatible Kitty terminal is unavailable;
 - bounded textual image diagnostics when neither graphics backend is available;
 - explicit non-executing Plotly/Bokeh placeholders for later stages.
@@ -44,7 +45,9 @@ Headless Neovim never writes graphics escapes merely because it inherited `KITTY
 
 ## Conversion and security
 
-PNG is validated and transmitted directly. Other static formats are written to private temporary files and converted asynchronously. Conversion has configurable time, input-byte, source-pixel, ImageMagick memory, map, disk, and output-dimension limits. Temporary files are removed after success, failure, timeout, or supersession.
+PNG is validated and transmitted directly. Other static formats are written to private temporary files and converted asynchronously. Safe SVG prefers `rsvg-convert` with explicit maximum dimensions; JPEG/PDF and the SVG fallback use ImageMagick. Conversion has configurable time, input-byte, source-pixel, ImageMagick memory, map, disk, and output-dimension limits. Temporary files are removed after success, failure, timeout, or supersession.
+
+Stream text applies terminal carriage-return overwrite semantics. This lets tqdm and similar progress bars update one virtual line while execution is running instead of displaying every historical frame.
 
 SVG is rejected before conversion if it contains declarations/entities, scripts, event handlers, `foreignObject`, iframe/object/embed, `href`/`src`, JavaScript/file URLs, CSS `url()`, or imports. This deliberately rejects some legitimate linked SVGs rather than allowing ImageMagick to resolve external resources.
 
@@ -99,4 +102,4 @@ require("nvjup").setup({
 - full-output pager behavior;
 - rendering order and notebook command/keymap integration.
 
-The Docker image includes ImageMagick and chafa. Headless CI verifies protocol bytes and placeholder structure, not terminal pixels. Run `./scripts/test-kitty-images` for host visual validation in an isolated Kitty/Ghostty UI.
+The Docker image includes ImageMagick, `rsvg-convert`, and chafa. Headless CI verifies protocol bytes and placeholder structure, not terminal pixels. Run `./scripts/test-kitty-images` for host visual validation in an isolated Kitty/Ghostty UI.

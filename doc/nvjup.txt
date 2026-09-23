@@ -200,9 +200,10 @@ cancelled, and stale.
 7. RICH STATIC OUTPUTS                                 *nvjup-rich-output*
 
 Stage 4 renders streams, errors, Markdown, sanitized HTML, terminal tables,
-and static images. PNG uses Kitty Unicode placeholders. JPEG, sanitized SVG,
-and the first PDF page are rasterized through ImageMagick. Without a compatible
-Kitty/Ghostty UI, auto mode uses chafa and then a bounded text fallback.
+and static images. PNG uses Kitty Unicode placeholders. JPEG/PDF use
+ImageMagick; sanitized SVG prefers rsvg-convert and falls back to ImageMagick.
+Without a compatible Kitty/Ghostty UI, auto mode uses chafa and then a bounded
+text fallback. Bare carriage returns update one live tqdm-style progress line.
 
 Image placeholders are anchored to extmark virtual lines, so they follow
 scrolling, resizing, folds, and hidden windows without Kitty remote control.

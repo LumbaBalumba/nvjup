@@ -41,7 +41,8 @@ The complete roadmap is in [`docs/nvjup-plan.md`](docs/nvjup-plan.md). Normative
 - an installed kernelspec, such as the one provided by `ipykernel`;
 - [`uv`](https://docs.astral.sh/uv/) for the development and test environment;
 - Kitty or Ghostty for native terminal images (optional; chafa/text fallback otherwise);
-- ImageMagick for JPEG/SVG/PDF rasterization (optional but recommended);
+- ImageMagick for JPEG/PDF rasterization and an SVG fallback (optional but recommended);
+- `rsvg-convert` for bounded SVG rasterization (optional; preferred when available);
 - chafa for a terminal-symbol image fallback outside Kitty (optional).
 
 The editor and LSP proxy remain pure Lua. Kernel transport runs in a separate Python sidecar and does not depend on `pynvim` or `python3_host_prog`. Python notebooks use `pyright-langserver` and `ruff server` automatically when those executables are available. Missing parsers and servers degrade gracefully.
@@ -210,7 +211,9 @@ require("nvjup").setup({
 })
 ```
 
-`auto` selects Kitty Unicode placeholders when a compatible terminal UI is attached, then chafa, then a bounded textual fallback. PNG is sent directly. JPEG, sanitized SVG, and the first PDF page are rasterized through ImageMagick. Image IDs are cached by output content and deleted when output changes, is collapsed/cleared, or the notebook buffer closes. Unicode placeholders are part of extmark virtual lines, so images naturally follow scrolling, resizing, folds, and hidden windows without Kitty remote control.
+`auto` selects Kitty Unicode placeholders when a compatible terminal UI is attached, then chafa, then a bounded textual fallback. PNG is sent directly. JPEG and the first PDF page use ImageMagick; sanitized SVG prefers `rsvg-convert` and falls back to ImageMagick. Image IDs are cached by output content and deleted when output changes, is collapsed/cleared, or the notebook buffer closes. Unicode placeholders are part of extmark virtual lines, so images naturally follow scrolling, resizing, folds, and hidden windows without Kitty remote control.
+
+Stream rendering implements bare-carriage-return overwrite semantics used by tqdm and similar progress bars. Each kernel update redraws the latest progress frame instead of accumulating stale percentages or exposing `\r` characters.
 
 HTML is never executed. Stage 4 strips active elements and renders ordinary text or `<table>` content in the terminal. SVG with scripts, event handlers, external references, entities, or embedded objects is rejected before rasterization. Image byte, pixel, conversion-time, memory, and disk limits are configurable.
 

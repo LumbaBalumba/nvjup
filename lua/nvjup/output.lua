@@ -6,6 +6,27 @@ local function strip_ansi(value)
 	return value:gsub("\27%[[0-?]*[ -/]*[@-~]", "")
 end
 
+local function process_carriage_returns(value)
+	-- tqdm and similar progress renderers rewrite one logical line with bare
+	-- carriage returns. Jupyter preserves those updates in stream.text; keeping
+	-- every segment either exposes control characters or shows stale frames.
+	-- CRLF remains an ordinary newline, while each bare-CR line keeps only its
+	-- latest frame.
+	value = value:gsub("\r\n", "\n")
+	local lines = {}
+	for line in (value .. "\n"):gmatch("([^\n]*)\n") do
+		local latest = line
+		if line:find("\r", 1, true) then
+			latest = line:match("([^\r]+)\r*$") or ""
+		end
+		table.insert(lines, latest)
+	end
+	if lines[#lines] == "" then
+		table.remove(lines)
+	end
+	return table.concat(lines, "\n")
+end
+
 local function split_text(value)
 	if type(value) == "table" then
 		value = table.concat(value)
@@ -13,7 +34,7 @@ local function split_text(value)
 	if type(value) ~= "string" then
 		value = vim.inspect(value)
 	end
-	return vim.split(strip_ansi(value), "\n", { plain = true, trimempty = true })
+	return vim.split(process_carriage_returns(strip_ansi(value)), "\n", { plain = true, trimempty = true })
 end
 
 local function decode_entities(value)
@@ -63,14 +84,12 @@ local function table_rows(html)
 	local rows = {}
 	for row in html:gmatch("<[tT][rR][^>]*>([%s%S]-)</[tT][rR]%s*>") do
 		local cells = {}
-		for _, tag in ipairs({ "[tT][hH]", "[tT][dD]" }) do
-			for cell in row:gmatch("<" .. tag .. "[^>]*>([%s%S]-)</" .. tag .. "%s*>") do
-				local text = strip_tags(cell):gsub("%s+", " "):gsub("^%s+", ""):gsub("%s+$", "")
-				table.insert(cells, text)
-			end
-			if #cells > 0 then
-				break
-			end
+		-- Pandas uses <th> for the row index and <td> for numeric values in
+		-- the same <tr>. Parse both tags in document order; choosing one tag
+		-- family per row silently discarded every data value after the index.
+		for cell in row:gmatch("<[tT][hHdD][^>]*>([%s%S]-)</[tT][hHdD]%s*>") do
+			local text = strip_tags(cell):gsub("%s+", " "):gsub("^%s+", ""):gsub("%s+$", "")
+			table.insert(cells, text)
 		end
 		if #cells > 0 then
 			table.insert(rows, cells)

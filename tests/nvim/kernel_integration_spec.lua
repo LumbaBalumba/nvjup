@@ -1,6 +1,7 @@
 local config = require("nvjup.config")
 local kernel = require("nvjup.kernel")
 local notebook = require("nvjup.notebook")
+local output = require("nvjup.output")
 local render = require("nvjup.render")
 
 local root = assert(vim.g.nvjup_project_root)
@@ -87,6 +88,31 @@ test("streams output and persists a real execute result", function()
 	}, { text = true }):wait(10000)
 	assert(validation.code == 0, validation.stderr)
 	vim.fs.rm(path, { force = true })
+end)
+
+test("renders live carriage-return progress as the latest frame", function()
+	set_source(
+		cell,
+		"import sys, time\nfor progress in (0, 50, 100):\n    sys.stdout.write(f'\\r{progress}%')\n    sys.stdout.flush()\n    time.sleep(0.35)\nprint()"
+	)
+	kernel.run_cells(state, { cell })
+	local observed
+	wait_for(function()
+		local lines = output.render(cell, { limit = false })
+		local current = table.concat(lines, "\n")
+		if cell.execution_status == "running" and (current == "0%" or current == "50%") then
+			observed = current
+			return true
+		end
+		return false
+	end, "progress output did not update while the cell was running", 40000)
+	assert(observed == "0%" or observed == "50%")
+	wait_for(function()
+		return cell.execution_status == "completed"
+	end, "progress execution did not complete", 40000)
+	local lines = output.render(cell, { limit = false })
+	local rendered = table.concat(lines, "\n")
+	assert(rendered == "100%", vim.inspect(rendered))
 end)
 
 test("shares one namespace across cells containing an indented %time magic", function()
