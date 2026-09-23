@@ -55,7 +55,7 @@ end
 local setup_ok, setup_error = xpcall(function()
 	vim.cmd.edit(vim.fn.fnameescape(fixture))
 	state = assert(notebook.get())
-	state.cells[5].source = state.cells[5].source .. "missing_name\n"
+	state.cells[5].source = state.cells[5].source .. "missing_name\n%time timed = length(point)\n"
 	state:replace_buffer()
 	render.render(state)
 
@@ -198,6 +198,7 @@ else
 			state:sync_from_buffer()
 			return state.cells[2].source:find("def measure", 1, true)
 				and state.cells[5].source:find("measure(point)", 1, true)
+				and state.cells[5].source:find("%time timed = measure(point)", 1, true)
 		end, "rename edits were not mapped across cells")
 	end)
 

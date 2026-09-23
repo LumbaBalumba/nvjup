@@ -118,8 +118,9 @@ All mappings are buffer-local and configurable.
 
 Each code language has one hidden shadow document, allowing language servers
 to see definitions and references across code cells. Markdown and raw cells
-are excluded. IPython magics are replaced by syntax-safe placeholders only in
-the shadow document.
+are excluded. Non-Python IPython magics use syntax-safe placeholders only in
+the shadow document. Python expressions inside %time, %timeit, and %prun stay
+visible to LSP, so rename updates identifiers there while protecting prefixes.
 
 Tree-sitter parses each cell in its own language and projects highlight
 captures into the visible composite buffer. Missing parsers degrade cleanly.

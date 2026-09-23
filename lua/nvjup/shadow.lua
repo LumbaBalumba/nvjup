@@ -29,6 +29,27 @@ local function python_placeholder(line)
 	return "#" .. string.rep(" ", math.max(0, #line - 1))
 end
 
+local python_code_line_magics = { time = true, timeit = true, prun = true }
+local python_code_cell_magics = { time = true, timeit = true, prun = true }
+
+local function full_placeholder(lines, transformed, index, line)
+	lines[index] = python_placeholder(line)
+	transformed[index] = true
+end
+
+local function preserve_python_magic(lines, transformed, index, line)
+	local indent, name, whitespace, suffix = line:match("^(%s*)%%([%a_][%w_]*)(%s+)(.*)$")
+	if not name or not python_code_line_magics[name] or suffix == "" or suffix:match("^%-") then
+		return false
+	end
+	local prefix_width = 1 + #name + #whitespace
+	lines[index] = indent .. "pass;" .. string.rep(" ", prefix_width - #"pass;") .. suffix
+	transformed[index] = {
+		{ start_col = #indent, end_col = #indent + prefix_width },
+	}
+	return true
+end
+
 local function transform_source(lang, source)
 	local lines = util.source_to_lines(source)
 	local transformed = {}
@@ -36,17 +57,27 @@ local function transform_source(lang, source)
 		return lines, transformed
 	end
 
-	local cell_magic = false
-	for _, line in ipairs(lines) do
+	local cell_magic_name
+	local cell_magic_index
+	for index, line in ipairs(lines) do
 		if line:match("%S") then
-			cell_magic = line:match("^%s*%%%%") ~= nil
+			cell_magic_name = line:match("^%s*%%%%([%a_][%w_]*)")
+			cell_magic_index = cell_magic_name and index or nil
 			break
 		end
 	end
+	local python_cell_magic = cell_magic_name and python_code_cell_magics[cell_magic_name]
 	for index, line in ipairs(lines) do
-		if cell_magic or line:match("^%s*[%%!]") or line:match("^%s*%?[%w_.]") then
-			lines[index] = python_placeholder(line)
-			transformed[index] = true
+		if cell_magic_name and not python_cell_magic then
+			full_placeholder(lines, transformed, index, line)
+		elseif index == cell_magic_index then
+			full_placeholder(lines, transformed, index, line)
+		elseif line:match("^%s*%%") then
+			if not preserve_python_magic(lines, transformed, index, line) then
+				full_placeholder(lines, transformed, index, line)
+			end
+		elseif line:match("^%s*!") or line:match("^%s*%?[%w_.]") then
+			full_placeholder(lines, transformed, index, line)
 		end
 	end
 	return lines, transformed
@@ -157,6 +188,47 @@ function Manager:document_for_uri(uri)
 	return nil
 end
 
+local function transformed_at(segment, local_row, col)
+	local value = segment.transformed_lines[local_row + 1]
+	if value == true then
+		return true
+	end
+	for _, range in ipairs(type(value) == "table" and value or {}) do
+		if col >= range.start_col and col < range.end_col then
+			return true
+		end
+	end
+	return false
+end
+
+local function range_touches_transformed(document, range, encoding)
+	for _, segment in ipairs(document.segments) do
+		local first_row = math.max(range.start.line, segment.shadow_start_row)
+		local last_row = math.min(range["end"].line, segment.shadow_end_exclusive - 1)
+		for shadow_row = first_row, last_row do
+			local local_row = shadow_row - segment.shadow_start_row
+			local line = segment.source_lines[local_row + 1] or ""
+			local start_col = shadow_row == range.start.line and byte_column(line, range.start.character, encoding) or 0
+			local end_col = shadow_row == range["end"].line and byte_column(line, range["end"].character, encoding)
+				or #line
+			local value = segment.transformed_lines[local_row + 1]
+			if value == true then
+				return true
+			end
+			for _, transformed_range in ipairs(type(value) == "table" and value or {}) do
+				if start_col == end_col then
+					if start_col >= transformed_range.start_col and start_col < transformed_range.end_col then
+						return true
+					end
+				elseif start_col < transformed_range.end_col and end_col > transformed_range.start_col then
+					return true
+				end
+			end
+		end
+	end
+	return false
+end
+
 function Manager:notebook_to_shadow(row, byte_col, encoding)
 	for _, document in pairs(self.documents) do
 		for _, segment in ipairs(document.segments) do
@@ -169,7 +241,7 @@ function Manager:notebook_to_shadow(row, byte_col, encoding)
 				return {
 					document = document,
 					cell_id = segment.cell_id,
-					transformed = segment.transformed_lines[local_row + 1] == true,
+					transformed = transformed_at(segment, local_row, source_col),
 					position = {
 						line = segment.shadow_start_row + local_row,
 						character = encoding_column(segment.source_lines[local_row + 1], source_col, encoding),
@@ -193,7 +265,7 @@ function Manager:shadow_to_notebook(document, position, encoding)
 				cell_id = segment.cell_id,
 				row = segment.notebook_start_row + local_row,
 				col = col + visible_offset,
-				transformed = segment.transformed_lines[local_row + 1] == true,
+				transformed = transformed_at(segment, local_row, col),
 			}
 		end
 	end
@@ -212,7 +284,11 @@ function Manager:range_to_notebook(document, range, encoding)
 	if start_position.cell_id ~= end_position.cell_id then
 		return nil, "edit crosses a cell boundary"
 	end
-	if start_position.transformed or end_position.transformed then
+	if
+		start_position.transformed
+		or end_position.transformed
+		or range_touches_transformed(document, range, encoding)
+	then
 		return nil, "edit touches an IPython magic placeholder"
 	end
 	return {

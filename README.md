@@ -17,7 +17,7 @@ The repository now contains the **Stage 3 notebook editor, language tooling, and
 - cross-cell diagnostics, completion, hover, signature help, navigation, references, symbols, semantic tokens, rename, and safe code actions;
 - native `nvim-cmp` source for automatic and manually triggered notebook completion;
 - automatic project-local `.venv`/`venv` selection for Pyright;
-- IPython magic preprocessing and UTF-8/UTF-16/UTF-32 source maps;
+- IPython magic preprocessing that preserves Python expressions for LSP rename, plus UTF-8/UTF-16/UTF-32 source maps;
 - projected Tree-sitter highlighting for code and Markdown cells, including mixed-language notebooks;
 - an isolated Python `jupyter_client` sidecar with owned kernel lifecycle;
 - current/advance/above/below/all/range execution through an immutable sequential queue;

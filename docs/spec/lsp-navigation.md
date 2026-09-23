@@ -43,7 +43,7 @@ An edit is applied only when all notebook-targeted ranges map to editable code s
 
 ## IPython transformations
 
-Line and cell magics and shell escapes are replaced in the shadow document by syntax-safe placeholders. Transformations preserve line count and mapped columns for surrounding code. The original notebook source is never rewritten merely to satisfy an LSP.
+Shell escapes and non-Python line/cell magics are replaced in the shadow document by syntax-safe placeholders. For Python-code magics such as `%time`, `%timeit`, `%prun`, and their supported cell-magic forms, only the magic prefix/header is replaced; the Python expression or body remains visible to the language server. Transformations preserve line count and byte width, so rename and other safe edits can update identifiers inside magic arguments without touching the magic prefix. The original notebook source is never rewritten merely to satisfy an LSP.
 
 ## Navigation
 

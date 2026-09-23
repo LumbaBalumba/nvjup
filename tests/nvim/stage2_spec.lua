@@ -97,6 +97,41 @@ test("replaces IPython magics with same-width syntax-safe placeholders", functio
 	close_fixture(state)
 end)
 
+test("preserves Python expressions inside %time while protecting the magic prefix", function()
+	local state = open_fixture("09_lsp_mapping.ipynb")
+	state.cells[2].source = "env = object()\nfor _ in range(1):\n    %time result = env\nprint(result)"
+	state:replace_buffer()
+	render.render(state)
+	local document = assert(state.shadow:document("python"))
+	local segment = document.segments[1]
+	local shadow_line = shadow_lines(document)[segment.shadow_start_row + 3]
+	assert(shadow_line == "    pass; result = env")
+	assert(#shadow_line == #"    %time result = env")
+	local row = state.cells[2].range.start_row + 2
+	local prefix = assert(state.shadow:notebook_to_shadow(row, #"    %t", "utf-8"))
+	local identifier = assert(state.shadow:notebook_to_shadow(row, #"    %time result = ", "utf-8"))
+	assert(prefix.transformed)
+	assert(not identifier.transformed)
+	local mapped = assert(state.shadow:range_to_notebook(document, {
+		start = { line = segment.shadow_start_row + 2, character = #"    pass; result = " },
+		["end"] = { line = segment.shadow_start_row + 2, character = #"    pass; result = env" },
+	}, "utf-8"))
+	assert(mapped.start.line == row)
+	assert(mapped.start.character == #"    %time result = ")
+
+	state.cells[2].source = "%%time\nvalue = env\nprint(value)"
+	state:replace_buffer()
+	render.render(state)
+	document = assert(state.shadow:document("python"))
+	segment = document.segments[1]
+	local cell_magic_lines = shadow_lines(document)
+	assert(cell_magic_lines[segment.shadow_start_row + 1]:sub(1, 1) == "#")
+	assert(cell_magic_lines[segment.shadow_start_row + 2] == "value = env")
+	assert(segment.transformed_lines[1])
+	assert(not segment.transformed_lines[2])
+	close_fixture(state)
+end)
+
 test("creates independent shadow documents for per-cell languages", function()
 	local state = open_fixture("09_lsp_mapping.ipynb")
 	state.cells[2].raw.metadata.language = "lua"

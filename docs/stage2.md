@@ -30,7 +30,7 @@ Notebook byte columns are converted to and from each client's negotiated UTF-8, 
 
 ## IPython syntax
 
-For Python shadows, `%` line magics, `!` shell escapes, help syntax, and `%%` cell magics are replaced with same-byte-width comments. The notebook source is never changed. Edits targeting transformed lines are rejected.
+For Python shadows, shell escapes and non-Python magics are replaced with same-byte-width comments. Python-code magics such as `%time`, `%timeit`, and `%prun` use a same-width protected prefix while leaving their Python expression visible to the language server; supported `%%` forms likewise preserve their Python body. This allows rename to update identifiers inside magic code while edits touching the transformed prefix remain rejected. The notebook source is never changed merely for LSP parsing.
 
 ## LSP proxy
 
