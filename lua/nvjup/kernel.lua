@@ -63,6 +63,7 @@ local function clear_cell_for_execution(session, cell)
 	cell.raw.execution_count = vim.NIL
 	cell.output_collapsed = false
 	cell.clear_output_wait = false
+	cell.execution_duration_ns = nil
 	cell.stale = false
 	vim.bo[session.state.buf].modified = true
 end
@@ -179,8 +180,12 @@ local function finish_execution(session, item, state_name, payload)
 	end
 	item.terminal = true
 	item.state = state_name
+	if item.started_ns then
+		item.duration_ns = vim.uv.hrtime() - item.started_ns
+	end
 	local cell = session.state:cell_by_id(item.cell_id)
 	if cell then
+		cell.execution_duration_ns = item.duration_ns
 		if payload.execution_count ~= nil and payload.execution_count ~= vim.NIL then
 			cell.execution_count = payload.execution_count
 		end
@@ -529,6 +534,7 @@ function M._pump(session)
 		end
 		item.execution_id = next_execution_id()
 		item.state = "created"
+		item.started_ns = vim.uv.hrtime()
 		session.active = item
 		session.executions[item.execution_id] = item
 		if config.options.execution.clear_before_run then
@@ -700,6 +706,17 @@ function M.cancel(state, execution_id)
 	session.client:request("execution.cancel", { execution_id = execution_id }, {
 		notebook_id = session.notebook_id,
 	})
+	return true
+end
+
+function M.start()
+	local state = current_state()
+	local session = get_session(state)
+	ensure_kernel(session, function(err)
+		if err then
+			notify(err.message or tostring(err), vim.log.levels.ERROR)
+		end
+	end)
 	return true
 end
 

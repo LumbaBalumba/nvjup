@@ -362,8 +362,11 @@ test("exposes interrupt, restart, status, commands, and execution mappings", fun
 	}) do
 		assert(vim.api.nvim_buf_get_commands(state.buf, {})[command], command)
 	end
-	for _, mapping in ipairs({ "<localleader>jr", "<localleader>jn", "<localleader>ja" }) do
+	for _, mapping in ipairs({ "<C-CR>", "<S-CR>", "<leader>nr", "<leader>nR", "<leader>nA", "<leader>nB" }) do
 		assert(vim.fn.maparg(mapping, "n", false, true).buffer == 1, mapping)
+	end
+	for _, mapping in ipairs({ "<C-CR>", "<S-CR>" }) do
+		assert(vim.fn.maparg(mapping, "i", false, true).buffer == 1, mapping .. " insert mode")
 	end
 	close_fixture(state)
 end)

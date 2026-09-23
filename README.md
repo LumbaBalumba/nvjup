@@ -66,24 +66,25 @@ The launcher redirects config, data, state, and cache into `.test-runtime/`.
 | `]c` / `[c` | next / previous cell |
 | `]C` / `[C` | next / previous code cell |
 | `ic` / `ac` | inner / around cell text object |
-| `<localleader>jo` | insert code cell below |
-| `<localleader>jO` | insert code cell above |
-| `<localleader>jy` | duplicate cell with cleared execution |
-| `<localleader>jd` | delete cell |
-| `<localleader>jk` / `<localleader>jj` | move cell up / down |
-| `<localleader>js` | split cell at cursor |
-| `<localleader>jm` | merge with cell below |
-| `<localleader>jt` | cycle code → Markdown → raw |
-| `<localleader>jz` | collapse/expand cell source |
-| `<localleader>jx` | collapse/expand cell output |
-| `<localleader>jc` / `<localleader>jC` | clear current / all outputs |
-| `<localleader>jl` | notebook outline |
-| `<localleader>jr` | run current cell |
-| `<localleader>jn` | run current cell and advance |
-| `<localleader>ju` / `<localleader>jb` | run code cells above / below |
-| `<localleader>ja` | run all code cells |
-| `<localleader>ji` | interrupt kernel |
-| `<localleader>jR` | restart kernel |
+| `<leader>na` / `<leader>nb` | insert code cell above / below |
+| `<leader>nyy` | duplicate cell with cleared execution |
+| `<leader>nd` | delete cell |
+| `<leader>nk` / `<leader>nj` | move cell up / down |
+| `<leader>nq` | split cell at cursor |
+| `<leader>nM` | merge with cell below |
+| `<leader>nt` | cycle code → Markdown → raw |
+| `<leader>nm` / `<leader>ny` | convert to Markdown / code |
+| `<leader>nz` | collapse/expand cell source |
+| `<leader>no` | collapse/expand cell output |
+| `<leader>nc` / `<leader>nC` | clear current / all outputs |
+| `<leader>nl` / `<leader>nL` | notebook outline / refresh display |
+| `<C-CR>` | run current cell (Normal and Insert modes) |
+| `<S-CR>` / `<leader>nr` | run current cell and advance |
+| `<leader>nA` / `<leader>nB` | run code cells above / below |
+| `<leader>nR` | run all code cells |
+| `<leader>ns` / `<leader>nS` | start / stop kernel |
+| `<leader>ni` | interrupt kernel |
+| `<leader>nx` | restart kernel |
 
 Language actions intentionally mirror the normal-code mappings from the target Neovim configuration:
 
@@ -100,7 +101,7 @@ Language actions intentionally mirror the normal-code mappings from the target N
 | `<leader>ca` | safe code action |
 | `<localleader>ls` | document symbols |
 
-The isolated config sets `<localleader>` to `,`, so insert-below is `,jo` there. All mappings are buffer-local and configurable.
+The notebook mappings follow jupynvim's `<leader>n…`, `<S-CR>`, and `<C-CR>` defaults. All mappings are buffer-local and configurable.
 
 Commands:
 

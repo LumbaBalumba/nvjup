@@ -137,18 +137,22 @@ test("wraps long source lines and repeats both borders on visual rows", function
 	close_fixture(state)
 end)
 
-test("renders active header with cell index type id and execution count", function()
+test("renders jupynvim-style cell, language, and execution labels", function()
 	local state = open_fixture("01_markdown_code.ipynb")
 	state:goto_cell(3)
 	render.render(state)
-	local headers = {}
+	local headers, footers = {}, {}
 	for _, mark in ipairs(details(state, state.render_ns)) do
 		local item = mark[4]
 		if item.virt_lines_above and item.virt_lines then
 			table.insert(headers, item.virt_lines[1][1][1])
+		elseif item.virt_lines then
+			table.insert(footers, item.virt_lines[1][1][1])
 		end
 	end
-	assert(find_line(headers, "[1] Code · cell 3/4 · result-code"))
+	assert(find_line(headers, "#3"))
+	assert(find_line(footers, "[1] ✓"))
+	assert(find_line(footers, "Python"))
 	close_fixture(state)
 end)
 

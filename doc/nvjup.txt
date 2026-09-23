@@ -89,29 +89,36 @@ the jumplist.
 ==============================================================================
 4. CELL OPERATIONS                                            *nvjup-cells*
 
-<LocalLeader>jo         Insert code cell below.
-<LocalLeader>jO         Insert code cell above.
-<LocalLeader>jy         Duplicate cell and clear copied execution state.
-<LocalLeader>jd         Delete current cell.
-<LocalLeader>jk         Move current cell up.
-<LocalLeader>jj         Move current cell down.
-<LocalLeader>js         Split current cell at cursor.
-<LocalLeader>jm         Merge current cell with the next one.
-<LocalLeader>jt         Cycle code, Markdown, and raw cell types.
-<LocalLeader>jz         Collapse or expand cell source.
-<LocalLeader>jx         Collapse or expand cell output.
-<LocalLeader>jc         Clear cell output.
-<LocalLeader>jC         Clear all notebook outputs.
-<LocalLeader>jl         Open notebook outline.
-<LocalLeader>jr         Run current cell.
-<LocalLeader>jn         Run current cell and advance.
-<LocalLeader>ju         Run code cells above the current cell.
-<LocalLeader>jb         Run code cells below the current cell.
-<LocalLeader>ja         Run all code cells.
-<LocalLeader>ji         Interrupt kernel.
-<LocalLeader>jR         Restart kernel.
+<Leader>na              Insert code cell above.
+<Leader>nb              Insert code cell below.
+<Leader>nyy             Duplicate cell and clear copied execution state.
+<Leader>nd              Delete current cell.
+<Leader>nk              Move current cell up.
+<Leader>nj              Move current cell down.
+<Leader>nq              Split current cell at cursor.
+<Leader>nM              Merge current cell with the next one.
+<Leader>nt              Cycle code, Markdown, and raw cell types.
+<Leader>nm              Convert current cell to Markdown.
+<Leader>ny              Convert current cell to code.
+<Leader>nz              Collapse or expand cell source.
+<Leader>no              Collapse or expand cell output.
+<Leader>nc              Clear cell output.
+<Leader>nC              Clear all notebook outputs.
+<Leader>nl              Open notebook outline.
+<Leader>nL              Refresh notebook display.
+<C-CR>                  Run current cell (Normal and Insert modes).
+<S-CR>                  Run current cell and advance (Normal and Insert modes).
+<Leader>nr              Run current cell and advance.
+<Leader>nA              Run code cells above the current cell.
+<Leader>nB              Run code cells below the current cell.
+<Leader>nR              Run all code cells.
+<Leader>ns              Start kernel.
+<Leader>nS              Stop kernel.
+<Leader>ni              Interrupt kernel.
+<Leader>nx              Restart kernel.
 
-All mappings are buffer-local and configurable.
+These defaults follow jupynvim where an equivalent nvjup action exists. All
+mappings are buffer-local and configurable.
 
 ==============================================================================
 5. LANGUAGE TOOLING                                        *nvjup-language*
@@ -169,9 +176,11 @@ The sidecar routes stream, execute_result, display_data, update_display_data,
 clear_output, error, and input_request messages. Normal stdin uses vim.ui.input;
 password input uses inputsecret(). Interrupt and restart are explicit actions.
 
-Header states are [ ] not executed, […] queued, [▶] running, [?] waiting for
-input, [!] failed, [×] cancelled, and [*] stale. Completed cells show their
-numeric execution count.
+Cell frames follow jupynvim's labels: the top-right badge is `#N`, while the
+bottom border shows the execution count/status and language, for example
+`[12] ✓ 0.3s` and `Python`. Runtime duration is measured for executions in the
+current session. Other states are queued, running, waiting for input, failed,
+cancelled, and stale.
 
 ==============================================================================
 7. COMMANDS                                                 *nvjup-commands*

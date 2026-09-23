@@ -1,8 +1,8 @@
 local config = require("nvjup.config")
 local features = require("nvjup.features")
+local language = require("nvjup.language")
 local notebook = require("nvjup.notebook")
 local output = require("nvjup.output")
-local util = require("nvjup.util")
 
 local M = {}
 
@@ -60,49 +60,85 @@ local function window_width(buf)
 	return width
 end
 
-local function cell_type_label(cell)
+local language_labels = {
+	cpp = "C++",
+	javascript = "JavaScript",
+	python = "Python",
+	r = "R",
+	rust = "Rust",
+	typescript = "TypeScript",
+}
+
+local function cell_label(state, cell)
 	if cell.cell_type == "markdown" then
-		return "Markdown", "NvJupMarkdown"
+		return "Markdown"
 	end
 	if cell.cell_type == "raw" then
-		return "Raw", "NvJupRaw"
+		return "Raw"
 	end
-	return "Code", "NvJupCode"
+	local name = language.for_cell(state, cell)
+	return language_labels[name] or (name:sub(1, 1):upper() .. name:sub(2))
+end
+
+local function aligned_border(left, right, width)
+	local padding = width - vim.fn.strwidth(left) - vim.fn.strwidth(right)
+	return left .. string.rep("─", math.max(0, padding)) .. right
+end
+
+local function format_duration(ns)
+	if not ns then
+		return nil
+	end
+	local seconds = ns / 1e9
+	if seconds < 10 then
+		return string.format("%.1fs", seconds)
+	end
+	if seconds < 60 then
+		return string.format("%.0fs", seconds)
+	end
+	return string.format("%dm %ds", math.floor(seconds / 60), math.floor(seconds % 60))
 end
 
 local function execution_label(cell)
-	if cell.cell_type ~= "code" then
-		return " "
-	end
+	local count = cell.execution_count ~= nil and cell.execution_count ~= vim.NIL and tostring(cell.execution_count)
+		or " "
+	local duration = format_duration(cell.execution_duration_ns)
 	if cell.stale or cell.execution_status == "stale" then
-		return "*"
+		return string.format("[%s] * stale", count)
 	end
-	local labels = {
-		queued = "…",
-		sent = "…",
-		running = "▶",
-		waiting_input = "?",
-		failed = "!",
-		cancelled = "×",
+	local states = {
+		queued = "… queued",
+		sent = "… sent",
+		running = "● running",
+		waiting_input = "? input",
+		failed = "✗",
+		cancelled = "× cancelled",
+		completed = "✓",
 	}
-	if labels[cell.execution_status] then
-		return labels[cell.execution_status]
+	local status = states[cell.execution_status]
+	if not status and cell.execution_count ~= nil and cell.execution_count ~= vim.NIL then
+		status = "✓"
 	end
-	if cell.execution_count ~= nil and cell.execution_count ~= vim.NIL then
-		return tostring(cell.execution_count)
+	if not status then
+		return "[ ]"
 	end
-	return " "
+	return string.format("[%s] %s%s", count, status, duration and (" " .. duration) or "")
 end
 
-local function header_text(cell, index, count, width, active)
-	local label = cell_type_label(cell)
-	local body =
-		string.format("╭─ [%s] %s · cell %d/%d · %s ", execution_label(cell), label, index, count, cell.id)
-	return util.fit_border(body, width, "─"), active and "NvJupHeaderActive" or "NvJupHeader"
+local function header_text(cell, index, width, active)
+	local left = cell.execution_status == "running" and "╭─ (running) " or "╭"
+	local right = string.format("─ #%d ─╮", index)
+	return aligned_border(left, right, width), active and "NvJupHeaderActive" or "NvJupHeader"
 end
 
-local function output_virtual_lines(cell, width)
-	local result = {}
+local function footer_text(state, cell, width)
+	local status = cell.cell_type == "code" and ("─ " .. execution_label(cell) .. " ") or ""
+	local label = "─ " .. cell_label(state, cell) .. " ─╯"
+	return aligned_border("╰" .. status, label, width)
+end
+
+local function output_virtual_lines(state, cell, width)
+	local result = { { { footer_text(state, cell, width), "NvJupBorder" } } }
 	local lines, kinds = {}, {}
 	if config.options.render.outputs then
 		lines, kinds = output.render(cell)
@@ -112,22 +148,15 @@ local function output_virtual_lines(cell, width)
 				and cell.execution_count ~= vim.NIL
 				and tostring(cell.execution_count)
 			or " "
-		local suffix = cell.output_collapsed and string.format("· %d lines collapsed ", #lines) or ""
-		table.insert(result, {
-			{
-				util.fit_border(string.format("├─ Out[%s] %s", execution, suffix), width, "─"),
-				"NvJupOutputHeader",
-			},
-		})
+		local suffix = cell.output_collapsed and string.format(" · %d lines collapsed", #lines) or ""
+		table.insert(result, { { string.format("  Out[%s]%s", execution, suffix), "NvJupOutputHeader" } })
 		if not cell.output_collapsed then
 			for index, line in ipairs(lines) do
-				local prefix = "│ "
 				local clipped = vim.fn.strcharpart(line, 0, math.max(1, width - 3))
-				table.insert(result, { { prefix .. clipped, kind_highlight[kinds[index]] or "NvJupOutput" } })
+				table.insert(result, { { "  " .. clipped, kind_highlight[kinds[index]] or "NvJupOutput" } })
 			end
 		end
 	end
-	table.insert(result, { { util.fit_border("╰", width, "─"), "NvJupBorder" } })
 	return result
 end
 
@@ -188,7 +217,7 @@ function M.render(state)
 
 	for index, cell in ipairs(state.cells) do
 		local active = index == active_index
-		local header, header_highlight = header_text(cell, index, #state.cells, width, active)
+		local header, header_highlight = header_text(cell, index, width, active)
 		vim.api.nvim_buf_set_extmark(state.buf, state.render_ns, cell.range.start_row, 0, {
 			virt_lines = { { { header, header_highlight } } },
 			virt_lines_above = true,
@@ -237,7 +266,7 @@ function M.render(state)
 		end
 
 		vim.api.nvim_buf_set_extmark(state.buf, state.render_ns, cell.range.end_row, 0, {
-			virt_lines = output_virtual_lines(cell, width),
+			virt_lines = output_virtual_lines(state, cell, width),
 			priority = 100,
 		})
 	end

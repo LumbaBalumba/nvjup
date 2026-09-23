@@ -136,6 +136,7 @@ local function clear_execution(cell)
 		cell.raw.execution_count = vim.NIL
 		cell.saved_code_state = nil
 		cell.execution_status = "not_executed"
+		cell.execution_duration_ns = nil
 		cell.stale = false
 		cell.last_executed_source = nil
 		cell.display_ids = {}
@@ -184,6 +185,7 @@ local function apply_cell_type(cell, cell_type)
 		cell.outputs = {}
 		cell.execution_count = nil
 		cell.execution_status = "not_executed"
+		cell.execution_duration_ns = nil
 		cell.stale = false
 		cell.last_executed_source = nil
 	end
