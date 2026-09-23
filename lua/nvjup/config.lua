@@ -7,6 +7,15 @@ M.defaults = {
 		max_output_lines = 12,
 		markdown = true,
 		right_border = true,
+		images = {
+			enabled = true,
+			backend = "auto", -- auto, kitty, chafa, or text
+			max_width = 64,
+			max_height = 24,
+			max_bytes = 10 * 1024 * 1024,
+			max_pixels = 16 * 1024 * 1024,
+			conversion_timeout_ms = 10000,
+		},
 	},
 	treesitter = {
 		enabled = true,
@@ -73,6 +82,7 @@ M.defaults = {
 		to_code = "<leader>ny",
 		toggle_source = "<leader>nz",
 		toggle_output = "<leader>no",
+		open_output = "<leader>np",
 		clear_output = "<leader>nc",
 		clear_all_outputs = "<leader>nC",
 		outline = "<leader>nl",

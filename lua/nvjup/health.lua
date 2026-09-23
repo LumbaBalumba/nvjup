@@ -1,4 +1,5 @@
 local config = require("nvjup.config")
+local image = require("nvjup.image")
 local rpc = require("nvjup.rpc")
 
 local M = {}
@@ -61,16 +62,24 @@ function M.check()
 		end
 	end
 
-	local term = vim.env.TERM or ""
-	local term_program = vim.env.TERM_PROGRAM or ""
-	if term:find("kitty", 1, true) or term_program:lower():find("kitty", 1, true) then
-		vim.health.ok("Kitty terminal detected")
+	vim.health.start("nvjup rich output")
+	local capabilities = image.capabilities()
+	if capabilities.kitty then
+		vim.health.ok("Kitty-compatible graphics terminal detected; Unicode-placeholder images are enabled")
+	elseif capabilities.chafa then
+		vim.health.ok("Kitty graphics unavailable; chafa image fallback is enabled")
 	else
-		vim.health.info("Kitty was not detected; text/extmark rendering remains available")
+		vim.health.info("Kitty graphics and chafa are unavailable; image outputs use text fallbacks")
 	end
+	if capabilities.imagemagick then
+		vim.health.ok("ImageMagick is available for JPEG, SVG, and PDF rasterization")
+	else
+		vim.health.warn("ImageMagick is unavailable; native Kitty rendering is limited to PNG")
+	end
+	vim.health.info("selected image backend: " .. capabilities.backend)
 
-	vim.health.info("Stage 3 provides notebook editing, LSP, Jupyter kernel lifecycle, and cell execution")
-	vim.health.info("Terminal image and interactive browser renderers are scheduled for later stages")
+	vim.health.info("Stage 4 provides static rich MIME rendering, terminal images, and a full-output pager")
+	vim.health.info("Interactive Plotly/Bokeh rendering remains scheduled for Stages 5 and 6")
 end
 
 return M

@@ -1,5 +1,6 @@
 local config = require("nvjup.config")
 local features = require("nvjup.features")
+local image = require("nvjup.image")
 local language = require("nvjup.language")
 local notebook = require("nvjup.notebook")
 local output = require("nvjup.output")
@@ -12,7 +13,7 @@ local kind_highlight = {
 	error = "NvJupError",
 	image = "NvJupImage",
 	interactive = "NvJupInteractive",
-	markdown = "NvJupOutput",
+	markdown = "NvJupMarkdown",
 	html = "NvJupOutput",
 	latex = "NvJupOutput",
 	text = "NvJupOutput",
@@ -139,25 +140,38 @@ end
 
 local function output_virtual_lines(state, cell, width)
 	local result = { { { footer_text(state, cell, width), "NvJupBorder" } } }
-	local lines, kinds = {}, {}
+	local segments = {}
 	if config.options.render.outputs then
-		lines, kinds = output.render(cell)
+		segments = output.segments(cell, { include_images = false })
 	end
-	if #lines > 0 then
+	local image_lines, seen_images, images_by_output = image.render(state, cell, width)
+	local text_line_count = 0
+	for _, segment in pairs(segments) do
+		text_line_count = text_line_count + #segment.lines
+	end
+	if text_line_count > 0 or #image_lines > 0 or (cell.output_collapsed and #(cell.outputs or {}) > 0) then
 		local execution = cell.execution_count ~= nil
 				and cell.execution_count ~= vim.NIL
 				and tostring(cell.execution_count)
 			or " "
-		local suffix = cell.output_collapsed and string.format(" · %d lines collapsed", #lines) or ""
+		local suffix = cell.output_collapsed and string.format(" · %d lines collapsed", text_line_count) or ""
 		table.insert(result, { { string.format("  Out[%s]%s", execution, suffix), "NvJupOutputHeader" } })
 		if not cell.output_collapsed then
-			for index, line in ipairs(lines) do
-				local clipped = vim.fn.strcharpart(line, 0, math.max(1, width - 3))
-				table.insert(result, { { "  " .. clipped, kind_highlight[kinds[index]] or "NvJupOutput" } })
+			for output_index = 1, #(cell.outputs or {}) do
+				local segment = segments[output_index]
+				if segment then
+					for index, line in ipairs(segment.lines) do
+						local clipped = vim.fn.strcharpart(line, 0, math.max(1, width - 3))
+						table.insert(result, {
+							{ "  " .. clipped, kind_highlight[segment.kinds[index]] or "NvJupOutput" },
+						})
+					end
+				end
+				vim.list_extend(result, images_by_output[output_index] or {})
 			end
 		end
 	end
-	return result
+	return result, seen_images
 end
 
 local function render_markdown_line(state, cell, row, line)
@@ -214,6 +228,7 @@ function M.render(state)
 	end
 	local active_index = cursor_row and state:cell_index_at(cursor_row) or nil
 	local buffer_lines = vim.api.nvim_buf_get_lines(state.buf, 0, -1, false)
+	local seen_images = {}
 
 	for index, cell in ipairs(state.cells) do
 		local active = index == active_index
@@ -265,11 +280,16 @@ function M.render(state)
 			render_markdown_line(state, cell, row, line)
 		end
 
+		local output_lines, cell_images = output_virtual_lines(state, cell, width)
+		for key in pairs(cell_images) do
+			seen_images[key] = true
+		end
 		vim.api.nvim_buf_set_extmark(state.buf, state.render_ns, cell.range.end_row, 0, {
-			virt_lines = output_virtual_lines(state, cell, width),
+			virt_lines = output_lines,
 			priority = 100,
 		})
 	end
+	image.finish_render(state, seen_images)
 
 	for _, win in ipairs(vim.fn.win_findbuf(state.buf)) do
 		M.configure_window(win)

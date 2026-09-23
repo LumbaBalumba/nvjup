@@ -2,7 +2,7 @@
 
 `nvjup` is a Neovim-native editor for Jupyter notebooks.
 
-The repository now contains the **Stage 3 notebook editor, language tooling, and kernel execution foundation**:
+The repository now contains the **Stage 4 notebook editor, language tooling, kernel execution, and rich static output foundation**:
 
 - `.ipynb` opens as code, Markdown, and raw cells rather than JSON;
 - jupynvim-inspired cell borders, headers, execution counts, and output sections;
@@ -11,7 +11,10 @@ The repository now contains the **Stage 3 notebook editor, language tooling, and
 - insert, delete, move, split, merge, and type conversion;
 - notebook outline;
 - load/save with preservation of metadata, attachments, outputs, and unknown MIME bundles;
-- text, stream, error, rich-image, Plotly, and Bokeh output previews;
+- text, stream, error, Markdown, sanitized HTML, terminal tables, and rich-image outputs;
+- viewport-safe PNG rendering through Kitty Unicode placeholders, with JPEG/SVG/PDF rasterization and chafa/text fallbacks;
+- a full-output float/split/tab pager that bypasses inline truncation;
+- explicit Plotly and Bokeh capability placeholders pending the interactive renderer;
 - undo-aware structural representation;
 - one versioned LSP shadow document per code language;
 - cross-cell diagnostics, completion, hover, signature help, navigation, references, symbols, semantic tokens, rename, and safe code actions;
@@ -25,7 +28,7 @@ The repository now contains the **Stage 3 notebook editor, language tooling, and
 - interrupt, restart, restart-and-run-all, execution counts, stale-result tracking, and output persistence;
 - independent Neovim test configuration and Docker validation.
 
-Real terminal image placement and interactive Plotly/Bokeh belong to later stages. Rich outputs that do not yet have a Stage 4 renderer are represented by text or explicit capability placeholders.
+Interactive Plotly/Bokeh belongs to Stages 5 and 6. Active HTML/JavaScript remains blocked; Stage 4 only renders a safe static subset and rasterized images.
 
 The complete roadmap is in [`docs/nvjup-plan.md`](docs/nvjup-plan.md). Normative contracts are indexed in [`docs/spec/README.md`](docs/spec/README.md).
 
@@ -36,7 +39,10 @@ The complete roadmap is in [`docs/nvjup-plan.md`](docs/nvjup-plan.md). Normative
 - an LSP server for every language that should receive language features;
 - Python 3.11 or newer with `jupyter_client` for kernel execution;
 - an installed kernelspec, such as the one provided by `ipykernel`;
-- [`uv`](https://docs.astral.sh/uv/) for the development and test environment.
+- [`uv`](https://docs.astral.sh/uv/) for the development and test environment;
+- Kitty or Ghostty for native terminal images (optional; chafa/text fallback otherwise);
+- ImageMagick for JPEG/SVG/PDF rasterization (optional but recommended);
+- chafa for a terminal-symbol image fallback outside Kitty (optional).
 
 The editor and LSP proxy remain pure Lua. Kernel transport runs in a separate Python sidecar and does not depend on `pynvim` or `python3_host_prog`. Python notebooks use `pyright-langserver` and `ruff server` automatically when those executables are available. Missing parsers and servers degrade gracefully.
 
@@ -76,6 +82,7 @@ The launcher redirects config, data, state, and cache into `.test-runtime/`.
 | `<leader>nm` / `<leader>ny` | convert to Markdown / code |
 | `<leader>nz` | collapse/expand cell source |
 | `<leader>no` | collapse/expand cell output |
+| `<leader>np` | open full output in a floating pager |
 | `<leader>nc` / `<leader>nC` | clear current / all outputs |
 | `<leader>nl` / `<leader>nL` | notebook outline / refresh display |
 | `<C-CR>` | run current cell (Normal and Insert modes) |
@@ -121,6 +128,7 @@ Commands:
 :NvJupCellType [code|markdown|raw]
 :NvJupCellToggleSource
 :NvJupCellToggleOutput
+:NvJupOutputOpen [float|split|vsplit|tab]
 :NvJupCellClearOutput
 :NvJupClearAllOutputs
 :NvJupOutline
@@ -182,6 +190,34 @@ For Python notebooks, nvjup first looks for `.venv/bin/python` or `venv/bin/pyth
 
 Batch commands snapshot cell IDs, source, and revisions before execution and dispatch one cell at a time. Editing a cell while its snapshot is running preserves the returned output but marks it stale (`[*]`). Outputs and execution counts are written back into nbformat on `:write`.
 
+## Rich static output configuration
+
+```lua
+require("nvjup").setup({
+  render = {
+    outputs = true,
+    max_output_lines = 12,
+    images = {
+      enabled = true,
+      backend = "auto", -- auto, kitty, chafa, or text
+      max_width = 64,
+      max_height = 24,
+      max_bytes = 10 * 1024 * 1024,
+      max_pixels = 16 * 1024 * 1024,
+      conversion_timeout_ms = 10000,
+    },
+  },
+})
+```
+
+`auto` selects Kitty Unicode placeholders when a compatible terminal UI is attached, then chafa, then a bounded textual fallback. PNG is sent directly. JPEG, sanitized SVG, and the first PDF page are rasterized through ImageMagick. Image IDs are cached by output content and deleted when output changes, is collapsed/cleared, or the notebook buffer closes. Unicode placeholders are part of extmark virtual lines, so images naturally follow scrolling, resizing, folds, and hidden windows without Kitty remote control.
+
+HTML is never executed. Stage 4 strips active elements and renders ordinary text or `<table>` content in the terminal. SVG with scripts, event handlers, external references, entities, or embedded objects is rejected before rasterization. Image byte, pixel, conversion-time, memory, and disk limits are configurable.
+
+Use `<leader>np` or `:NvJupOutputOpen` to inspect complete output without `max_output_lines` truncation. The command also accepts `split`, `vsplit`, or `tab`.
+
+See [`docs/stage4.md`](docs/stage4.md) for lifecycle, fallback, and security details.
+
 ## Language tooling configuration
 
 ```lua
@@ -226,6 +262,7 @@ This runs:
 - Stage 2 source-map and Tree-sitter tests;
 - a real Neovim LSP client against a deterministic protocol test server;
 - Stage 3 queue, lifecycle, output-routing, stdin, and stale-result tests;
+- Stage 4 HTML/table, MIME selection, SVG security, Kitty protocol, conversion, cleanup, fallback, and pager tests;
 - real `ipykernel` execution, interruption, restart, and sequential batch tests.
 
 To validate the installed Pyright and Ruff servers on the host:
@@ -247,4 +284,10 @@ docker compose build
 docker compose run --rm test
 ```
 
-The container validates contracts and headless rendering semantics. Pixel-level Kitty Graphics Protocol tests require a real Kitty host and will be introduced with terminal image placement.
+The container includes ImageMagick and chafa and validates conversion, fallback, Kitty protocol encoding, lifecycle cleanup, and headless rendering semantics. Actual terminal pixels still require a real Kitty/Ghostty host; run `:checkhealth nvjup` and then:
+
+```bash
+./scripts/test-kitty-images
+```
+
+The host-only script opens `03_rich_outputs.ipynb` under the isolated configuration for visual PNG/SVG/table verification.

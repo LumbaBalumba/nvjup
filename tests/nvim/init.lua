@@ -47,7 +47,7 @@ vim.api.nvim_create_user_command("NvJupTestInfo", function()
 		"data: " .. vim.fn.stdpath("data"),
 		"state: " .. vim.fn.stdpath("state"),
 		"cache: " .. vim.fn.stdpath("cache"),
-		"stage: 2 (shadow-document LSP and projected Tree-sitter highlighting)",
+		"stage: 4 (kernel execution and rich static output rendering)",
 	}
 	vim.notify(table.concat(lines, "\n"), vim.log.levels.INFO, { title = "nvjup" })
 end, {})

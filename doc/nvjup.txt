@@ -9,8 +9,9 @@ CONTENTS                                                        *nvjup-contents*
 4. Cell operations                                   |nvjup-cells|
 5. Language tooling                                  |nvjup-language|
 6. Kernel execution                                  |nvjup-execution|
-7. Commands                                          |nvjup-commands|
-8. Current limitations                               |nvjup-limitations|
+7. Rich static outputs                               |nvjup-rich-output|
+8. Commands                                          |nvjup-commands|
+9. Current limitations                               |nvjup-limitations|
 
 ==============================================================================
 1. INTRODUCTION                                  *nvjup-introduction*
@@ -39,6 +40,15 @@ Options include:
       max_output_lines = 12,
       markdown = true,
       right_border = true,
+      images = {
+        enabled = true,
+        backend = "auto", -- auto, kitty, chafa, or text
+        max_width = 64,
+        max_height = 24,
+        max_bytes = 10 * 1024 * 1024,
+        max_pixels = 16 * 1024 * 1024,
+        conversion_timeout_ms = 10000,
+      },
     },
     treesitter = {
       enabled = true,
@@ -102,6 +112,7 @@ the jumplist.
 <Leader>ny              Convert current cell to code.
 <Leader>nz              Collapse or expand cell source.
 <Leader>no              Collapse or expand cell output.
+<Leader>np              Open complete cell output in a floating pager.
 <Leader>nc              Clear cell output.
 <Leader>nC              Clear all notebook outputs.
 <Leader>nl              Open notebook outline.
@@ -186,7 +197,28 @@ current session. Other states are queued, running, waiting for input, failed,
 cancelled, and stale.
 
 ==============================================================================
-7. COMMANDS                                                 *nvjup-commands*
+7. RICH STATIC OUTPUTS                                 *nvjup-rich-output*
+
+Stage 4 renders streams, errors, Markdown, sanitized HTML, terminal tables,
+and static images. PNG uses Kitty Unicode placeholders. JPEG, sanitized SVG,
+and the first PDF page are rasterized through ImageMagick. Without a compatible
+Kitty/Ghostty UI, auto mode uses chafa and then a bounded text fallback.
+
+Image placeholders are anchored to extmark virtual lines, so they follow
+scrolling, resizing, folds, and hidden windows without Kitty remote control.
+Cached terminal images are deleted when output changes, collapses, clears, or
+the notebook closes.
+
+HTML is never executed. SVG containing scripts, event handlers, external
+references, entities, embedded objects, or CSS URLs is rejected. Configurable
+byte, pixel, conversion-time, memory, disk, and output-size bounds apply.
+
+<Leader>np or :NvJupOutputOpen opens the current cell's untruncated output.
+Optional modes are split, vsplit, and tab. See docs/stage4.md for protocol and
+security details. :checkhealth nvjup reports the selected backend.
+
+==============================================================================
+8. COMMANDS                                                 *nvjup-commands*
 
 :NvJupWrite             Save the notebook.
 :NvJupRefresh           Synchronize model and redraw extmarks.
@@ -203,6 +235,7 @@ cancelled, and stale.
 :NvJupCellType          Set or cycle cell type.
 :NvJupCellToggleSource  Collapse or expand current cell source.
 :NvJupCellToggleOutput  Collapse or expand current cell output.
+:NvJupOutputOpen        Open full output; optional float/split/vsplit/tab mode.
 :NvJupCellClearOutput   Clear output and execution count.
 :NvJupClearAllOutputs   Clear every output and execution count.
 :NvJupOutline           Open cell outline through vim.ui.select().
@@ -232,12 +265,13 @@ cancelled, and stale.
 :NvJupLspStatus         Show shadow documents and attached clients.
 
 ==============================================================================
-8. CURRENT LIMITATIONS                                  *nvjup-limitations*
+9. CURRENT LIMITATIONS                                  *nvjup-limitations*
 
-Stage 3 executes cells and persists standard nbformat outputs, but rich static
-images still use capability placeholders. Kitty image placement and interactive
-Plotly/Bokeh are scheduled for later stages. Remote Jupyter Server attachment
-and kernel-backed completion are also later work. Completion uses nvim-cmp when
-available and Neovim's built-in completion UI as a fallback.
+Interactive Plotly/Bokeh and arbitrary HTML/JavaScript are not enabled; they
+require the sandboxed renderer and trust model from Stages 5 and 6. PDF display
+uses only the first page. Animated images are currently static. Actual Kitty
+pixels require a compatible attached terminal UI. Remote Jupyter Server
+attachment and kernel-backed completion are also later work. Completion uses
+nvim-cmp when available and Neovim's built-in completion UI as a fallback.
 
 vim:tw=78:ts=8:noet:ft=help:norl:

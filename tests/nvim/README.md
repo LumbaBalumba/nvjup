@@ -23,7 +23,8 @@ Useful commands:
 - `:NvJupRefresh` — rebuild extmark rendering after manual marker repair;
 - `:NvJupLspStatus` — inspect shadow documents and attached language clients;
 - `:NvJupKernelStatus` — inspect kernel generation, queue, and active execution;
-- `:NvJupRunCurrent` / `:NvJupRunAll` — execute code cells through the sidecar.
+- `:NvJupRunCurrent` / `:NvJupRunAll` — execute code cells through the sidecar;
+- `:NvJupOutputOpen [float|split|vsplit|tab]` — inspect complete untruncated output.
 
-Run Stage 1, Stage 2, Stage 3, deterministic LSP, and real-kernel integration suites through `./scripts/test`.
+Run Stage 1, Stage 2, Stage 3, Stage 4 rich-output, deterministic LSP, and real-kernel integration suites through `./scripts/test`.
 Run the installed Pyright/Ruff smoke test through `./scripts/test-real-lsp` and the isolated real `ipykernel` profile through `./scripts/test-real-kernel`.

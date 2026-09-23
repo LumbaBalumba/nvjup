@@ -45,3 +45,18 @@ Tests must prove:
 7. the independent Neovim config starts headlessly without reading the user config.
 
 Visual Kitty behavior is outside Stage 0 because no renderer exists yet. Docker validates contracts and headless startup; real Kitty E2E begins with the static renderer stage.
+
+## Stage 4 acceptance criteria
+
+Stage 4 is complete when:
+
+1. Markdown, sanitized HTML, and bounded HTML tables render without executing active content;
+2. PNG uses Kitty Unicode placeholders in a compatible attached terminal;
+3. JPEG, safe SVG, and the first PDF page rasterize with resource and timeout limits;
+4. unsafe SVG and oversized image payloads produce visible diagnostics;
+5. chafa and text fallbacks work without Kitty;
+6. placements follow viewport redraw and are deleted on replacement, collapse, clear, and buffer close;
+7. a float/split/tab pager exposes untruncated output;
+8. MIME bundles and metadata still round-trip unchanged;
+9. headless tests validate protocol encoding, placeholder structure, conversion, security, ordering, fallback, and cleanup;
+10. a host-only isolated visual test is available for real Kitty/Ghostty pixels.

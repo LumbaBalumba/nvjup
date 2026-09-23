@@ -125,6 +125,11 @@ function M.toggle_output()
 	return refresh(nb:toggle_output(index))
 end
 
+function M.open_output(mode)
+	local cell = state():current_cell()
+	return require("nvjup.output").open(cell, mode)
+end
+
 function M.toggle_source()
 	local nb = state()
 	assert(nb:sync_from_buffer())

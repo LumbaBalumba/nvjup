@@ -906,6 +906,9 @@ LSP должен быть реализован до kernel execution, чтобы
 
 ### Этап 4 — rich static outputs
 
+Статус: реализован. Детали протокола, fallback и security limits описаны в
+[`docs/stage4.md`](stage4.md).
+
 - Markdown;
 - HTML subset;
 - tables;

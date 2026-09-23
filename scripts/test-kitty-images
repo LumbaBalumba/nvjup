@@ -1,0 +1,21 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+root="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")/.." && pwd)"
+fixture="${root}/tests/fixtures/notebooks/03_rich_outputs.ipynb"
+
+if [[ -z "${KITTY_WINDOW_ID:-}" && -z "${GHOSTTY_RESOURCES_DIR:-}" ]]; then
+	if ! command -v kitty >/dev/null 2>&1; then
+		printf 'A Kitty/Ghostty terminal is required for the visual image test.\n' >&2
+		exit 1
+	fi
+	kitty --detach --hold --title "nvjup Stage 4 image test" \
+		"${root}/scripts/test-nvim" "${fixture}"
+	printf 'Opened an isolated Kitty window. Inspect the PNG/SVG/table outputs and close it when done.\n'
+	exit 0
+fi
+
+printf 'Opening the Stage 4 rich-output fixture with the isolated nvjup config.\n'
+printf 'Expected: native PNG, rasterized SVG, and a Unicode terminal table.\n'
+printf 'Use :checkhealth nvjup and :NvJupOutputOpen. Quit with :qa!.\n'
+exec "${root}/scripts/test-nvim" "${fixture}"

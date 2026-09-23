@@ -1,8 +1,10 @@
 local config = require("nvjup.config")
 local features = require("nvjup.features")
+local image = require("nvjup.image")
 local kernel = require("nvjup.kernel")
 local lsp = require("nvjup.lsp")
 local notebook = require("nvjup.notebook")
+local output = require("nvjup.output")
 local render = require("nvjup.render")
 local shadow = require("nvjup.shadow")
 local treesitter = require("nvjup.treesitter")
@@ -61,6 +63,14 @@ local function define_buffer_commands(buf)
 	})
 	command("NvJupCellToggleSource", actions.toggle_source)
 	command("NvJupCellToggleOutput", actions.toggle_output)
+	command("NvJupOutputOpen", function(args)
+		actions.open_output(args.args ~= "" and args.args or "float")
+	end, {
+		nargs = "?",
+		complete = function()
+			return { "float", "split", "vsplit", "tab" }
+		end,
+	})
 	command("NvJupCellClearOutput", actions.clear_output)
 	command("NvJupClearAllOutputs", actions.clear_all_outputs)
 	command("NvJupOutline", actions.outline)
@@ -188,7 +198,9 @@ local function attach_buffer(state)
 		buffer = buf,
 		once = true,
 		callback = function()
-			kernel.detach(notebook.get(buf))
+			local current = notebook.get(buf)
+			kernel.detach(current)
+			image.detach(current)
 			if package.loaded["nvjup.cmp"] then
 				require("nvjup.cmp").detach(buf)
 			end
@@ -252,9 +264,11 @@ function M.setup(options)
 end
 
 M.actions = actions
+M.image = image
 M.kernel = kernel
 M.lsp = lsp
 M.notebook = notebook
+M.output = output
 M.render = render
 M.shadow = shadow
 M.treesitter = treesitter
