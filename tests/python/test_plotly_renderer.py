@@ -94,7 +94,7 @@ def test_plotly_screenshot_and_pointer_round_trip() -> None:
             assert frame["png"].startswith("iVBOR")
             assert frame["open_latency_ms"] >= 0
             plot_size = await renderer.figures["pytest-plot"].page.evaluate(
-                "() => { const box=document.querySelector('#plot').getBoundingClientRect(); return [box.width,box.height]; }"
+                "() => { const box=document.querySelector('#plot .svg-container').getBoundingClientRect(); return [box.width,box.height]; }"
             )
             assert plot_size == [480, 320]
 
