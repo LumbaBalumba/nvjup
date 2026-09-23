@@ -938,6 +938,9 @@ LSP должен быть реализован до kernel execution, чтобы
 
 ### Этап 6 — production interactive renderer
 
+Статус: реализован. Trust model, sandbox, push/pull frame pipeline, recovery,
+performance measurements и ограничения описаны в [`docs/stage6.md`](stage6.md).
+
 - Bokeh standalone;
 - resize;
 - keyboard events;

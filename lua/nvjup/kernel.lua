@@ -3,6 +3,7 @@ local lsp = require("nvjup.lsp")
 local notebook = require("nvjup.notebook")
 local render = require("nvjup.render")
 local rpc = require("nvjup.rpc")
+local trust = require("nvjup.trust")
 
 local M = {}
 local sessions = {}
@@ -33,6 +34,7 @@ local function refresh(state)
 end
 
 local function mark_outputs_changed(state, cell)
+	trust.invalidate(state)
 	cell.raw.outputs = cell.outputs
 	cell.raw.execution_count = cell.execution_count == nil and vim.NIL or cell.execution_count
 	vim.bo[state.buf].modified = true

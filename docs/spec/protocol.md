@@ -72,12 +72,18 @@ Execution:
 
 Renderer:
 
-- `renderer.start`;
-- `renderer.render`;
+- `renderer.hello`;
+- `renderer.open`;
+- `renderer.event`;
 - `renderer.resize`;
-- `renderer.input`;
-- `renderer.dispose`;
+- `renderer.close`;
+- `renderer.status`;
 - `renderer.shutdown`.
+
+`renderer.open` selects a bounded `plotly` or `bokeh` backend and may negotiate
+push screencast frames. `renderer.event` acknowledges queued pointer/keyboard
+input; the resulting frame can arrive independently. `plotly.*` request aliases
+remain accepted for Stage 5 compatibility but are not emitted by current Lua.
 
 ## Core event types
 
@@ -92,6 +98,7 @@ Renderer:
 - `execution.stdin_request`;
 - `renderer.state`;
 - `renderer.frame`;
+- `renderer.warning`;
 - `renderer.error`;
 - `log`.
 

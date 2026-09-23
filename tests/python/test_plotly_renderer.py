@@ -31,6 +31,40 @@ def test_renderer_reports_only_local_chromium() -> None:
     assert PlotlyRenderer.chromium_path() == chromium()
 
 
+def test_bokeh_parser_rejects_arbitrary_notebook_javascript() -> None:
+    renderer = PlotlyRenderer()
+    with pytest.raises(ValueError, match="docs_json"):
+        renderer._bokeh_payload({"script": "alert(document.cookie)"})
+    with pytest.raises(ValueError, match="executable model"):
+        renderer._bokeh_payload(
+            {
+                "docs_json": {
+                    "doc": {
+                        "roots": [
+                            {
+                                "type": "object",
+                                "name": "CustomJS",
+                                "attributes": {"code": "alert(1)"},
+                            }
+                        ]
+                    }
+                },
+                "render_items": [],
+            }
+        )
+    docs, items = renderer._bokeh_payload(
+        {
+            "item": {
+                "target_id": '"><script>alert(1)</script>',
+                "root_id": "root",
+                "doc": {"version": "3.8.0", "roots": []},
+            }
+        }
+    )
+    assert docs
+    assert items[0]["roots"]["root"] == "nvjup-bokeh-0-0"
+
+
 def test_plotly_screenshot_and_pointer_round_trip() -> None:
     if not chromium():
         pytest.skip("Chromium is unavailable")
@@ -43,6 +77,7 @@ def test_plotly_screenshot_and_pointer_round_trip() -> None:
                     "figure_id": "pytest-plot",
                     "width": 480,
                     "height": 320,
+                    "screencast": False,
                     "figure": {
                         "data": [{"type": "scatter", "x": [1, 2, 3], "y": [1, 4, 2]}],
                         "layout": {"title": {"text": "nvjup stage 5"}},
@@ -88,6 +123,88 @@ def test_plotly_screenshot_and_pointer_round_trip() -> None:
                 }
             )
             assert panned["png"].startswith("iVBOR")
+        finally:
+            await renderer.shutdown()
+
+    asyncio.run(exercise())
+
+
+def test_push_frames_bokeh_resize_keyboard_and_multiple_figures() -> None:
+    if not chromium():
+        pytest.skip("Chromium is unavailable")
+
+    async def exercise() -> None:
+        from bokeh.embed import components
+        from bokeh.plotting import figure as bokeh_figure
+
+        pushed: asyncio.Queue[dict[str, object]] = asyncio.Queue()
+        renderer = PlotlyRenderer(pushed.put_nowait)
+        try:
+            plotly = await renderer.open(
+                {
+                    "figure_id": "push-plot",
+                    "width": 600,
+                    "height": 360,
+                    "interactive_width": 450,
+                    "interactive_height": 270,
+                    "figure": {
+                        "data": [{"type": "scatter", "x": [1, 2], "y": [2, 1]}],
+                        "layout": {
+                            "images": [
+                                {
+                                    "source": "https://example.invalid/blocked.png",
+                                    "xref": "paper",
+                                    "yref": "paper",
+                                }
+                            ]
+                        },
+                    },
+                }
+            )
+            assert plotly["push_frames"] is True
+            while not pushed.empty():
+                pushed.get_nowait()
+            accepted = await renderer.event(
+                {"figure_id": "push-plot", "event": "move", "x": 300, "y": 180}
+            )
+            assert accepted["accepted"] is True
+            pushed_frame = await asyncio.wait_for(pushed.get(), timeout=2)
+            assert str(pushed_frame["png"]).startswith("iVBOR")
+            assert pushed_frame["source_width"] == 600
+            assert pushed_frame["quality"] in {"interactive", "high"}
+
+            keyed = await renderer.event(
+                {"figure_id": "push-plot", "event": "key", "key": "ArrowRight"}
+            )
+            assert keyed["accepted"] is True
+            resized = await renderer.resize(
+                {"figure_id": "push-plot", "width": 720, "height": 432}
+            )
+            assert resized["width"] == 720
+            assert resized["height"] == 432
+
+            bokeh_plot = bokeh_figure(width=480, height=320)
+            bokeh_plot.line([1, 2, 3], [3, 1, 4])
+            bokeh_script, _ = components(bokeh_plot)
+            bokeh = await renderer.open(
+                {
+                    "figure_id": "bokeh-plot",
+                    "backend": "bokeh",
+                    "width": 480,
+                    "height": 320,
+                    "screencast": False,
+                    "figure": {"script": bokeh_script},
+                }
+            )
+            assert bokeh["backend"] == "bokeh"
+            assert bokeh["png"].startswith("iVBOR")
+            network_result = await renderer.figures["push-plot"].page.evaluate(
+                "async () => { try { await fetch('https://example.invalid/probe'); return 'allowed'; } catch (_) { return 'blocked'; } }"
+            )
+            assert network_result == "blocked"
+            health = await renderer.health()
+            assert len(health["figures"]) == 2
+            assert health["network"] == "blocked"
         finally:
             await renderer.shutdown()
 

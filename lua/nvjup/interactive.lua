@@ -1,14 +1,20 @@
 local config = require("nvjup.config")
 local image = require("nvjup.image")
 local rpc = require("nvjup.rpc")
+local trust = require("nvjup.trust")
 
 local M = {}
 local client
 local cache = {}
 local focus
 local client_factory = rpc.new
+local shutting_down = false
+local restart_attempts = 0
+local last_renderer_status = {}
 
 local PLOTLY_MIME = "application/vnd.plotly.v1+json"
+local BOKEH_EXEC_MIME = "application/vnd.bokehjs_exec.v0+json"
+local BOKEH_LOAD_MIME = "application/vnd.bokehjs_load.v0+json"
 
 local function options()
 	return config.options.interactive or {}
@@ -26,16 +32,14 @@ local function renderer_command()
 	return { sidecar[1], vim.fs.joinpath(rpc.plugin_root(), "python", "nvjup_plotly_renderer_main.py") }
 end
 
-local function get_client()
-	if not client then
-		client = client_factory({
-			command = renderer_command(),
-			on_exit = function()
-				client = nil
-			end,
-		})
+local function refresh(state)
+	if state and state.buf and vim.api.nvim_buf_is_valid(state.buf) then
+		vim.schedule(function()
+			if vim.api.nvim_buf_is_valid(state.buf) then
+				require("nvjup.render").render(state)
+			end
+		end)
 	end
-	return client
 end
 
 local function key(state, cell, output_index)
@@ -46,22 +50,43 @@ local function figure_id(state, cell, output_index)
 	return string.format("nvjup-%d-%s-%d", state.buf, cell.id:gsub("[^%w_-]", "_"), output_index)
 end
 
-local function figure_hash(figure)
-	local ok, encoded = pcall(vim.json.encode, figure)
+local function figure_hash(backend, figure)
+	local ok, encoded = pcall(vim.json.encode, { backend = backend, figure = figure })
 	if not ok then
 		return nil, encoded
 	end
 	return vim.fn.sha256(encoded), encoded
 end
 
-local function refresh(state)
-	if state and vim.api.nvim_buf_is_valid(state.buf) then
-		vim.schedule(function()
-			if vim.api.nvim_buf_is_valid(state.buf) then
-				require("nvjup.render").render(state)
-			end
-		end)
+local function interactive_payload(item)
+	local data = type(item.data) == "table" and item.data or {}
+	if type(data[PLOTLY_MIME]) == "table" then
+		return "plotly", data[PLOTLY_MIME]
 	end
+	if data[BOKEH_EXEC_MIME] ~= nil then
+		local marker = data[BOKEH_EXEC_MIME]
+		if type(marker) == "table" and next(marker) then
+			return "bokeh", marker
+		end
+		if type(data["application/javascript"]) == "string" then
+			return "bokeh", { script = data["application/javascript"] }
+		end
+	end
+	return nil
+end
+
+local function blocked_copy(item, status)
+	local copy = vim.deepcopy(item)
+	copy.data = type(copy.data) == "table" and copy.data or {}
+	copy.data[PLOTLY_MIME] = nil
+	copy.data[BOKEH_EXEC_MIME] = nil
+	copy.data[BOKEH_LOAD_MIME] = nil
+	copy.data["application/javascript"] = nil
+	copy.data["text/plain"] = string.format(
+		"[nvjup interactive output blocked: notebook trust is %s; use :NvJupTrustInteractive after reviewing the notebook]",
+		status
+	)
+	return copy
 end
 
 local function update_focus(entry)
@@ -69,7 +94,7 @@ local function update_focus(entry)
 		return
 	end
 	local cell = {
-		id = "plotly-focus-" .. entry.figure_id,
+		id = "interactive-focus-" .. entry.figure_id,
 		outputs = {
 			{
 				output_type = "display_data",
@@ -93,42 +118,139 @@ local function update_focus(entry)
 	image.finish_render(state, seen)
 	vim.api.nvim_buf_set_lines(focus.buf, 0, -1, false, {
 		string.format(
-			"Plotly focus · click/drag/hover/wheel · q close · frame %.1f ms",
-			entry.frame_latency_ms or 0
+			"%s focus · pointer/keys · q close · %.1f ms · %s/%s",
+			entry.backend == "bokeh" and "Bokeh" or "Plotly",
+			entry.frame_latency_ms or 0,
+			entry.frame_source or "pull",
+			entry.quality or "high"
 		),
 	})
 end
 
 local function store_frame(state, entry, payload)
+	if type(payload) ~= "table" or type(payload.png) ~= "string" then
+		return false
+	end
+	local sequence = tonumber(payload.frame_sequence) or 0
+	if sequence > 0 and entry.frame_sequence and sequence <= entry.frame_sequence then
+		return false
+	end
 	entry.pending = false
+	entry.opened = true
 	entry.png = payload.png
 	entry.width = payload.width
 	entry.height = payload.height
+	entry.source_width = payload.source_width or payload.width
+	entry.source_height = payload.source_height or payload.height
 	entry.frame_latency_ms = payload.frame_latency_ms
+	entry.input_latency_ms = payload.input_latency_ms or entry.input_latency_ms
 	entry.open_latency_ms = payload.open_latency_ms or entry.open_latency_ms
+	entry.frame_sequence = sequence > 0 and sequence or entry.frame_sequence
+	entry.frame_source = payload.frame_source or entry.frame_source
+	entry.quality = payload.quality or entry.quality
+	entry.push_frames = payload.push_frames == true or entry.push_frames == true
 	entry.error = nil
+	entry.notified = nil
 	refresh(state)
 	update_focus(entry)
+	return true
 end
 
-local function request_open(state, cell, output_index, figure, entry)
+local function entry_for_figure(id)
+	for _, entry in pairs(cache) do
+		if entry.figure_id == id then
+			return entry
+		end
+	end
+end
+
+local request_open
+local function replay_after_crash()
+	if shutting_down or restart_attempts >= (options().restart_attempts or 2) then
+		return
+	end
+	restart_attempts = restart_attempts + 1
+	vim.defer_fn(function()
+		if shutting_down then
+			return
+		end
+		for _, entry in pairs(cache) do
+			if entry.state and entry.figure and trust.allows_interactive(entry.state) then
+				request_open(entry.state, entry)
+			end
+		end
+	end, options().restart_delay_ms or 150)
+end
+
+local function on_renderer_event(message)
+	if message.type == "renderer.frame" then
+		local payload = message.payload or {}
+		local entry = entry_for_figure(payload.figure_id)
+		if entry then
+			store_frame(entry.state, entry, payload)
+		end
+	elseif message.type == "renderer.warning" then
+		vim.notify("nvjup renderer: " .. tostring((message.payload or {}).message), vim.log.levels.WARN)
+	end
+end
+
+local function get_client()
+	if client then
+		return client
+	end
+	local created
+	created = client_factory({
+		command = renderer_command(),
+		on_event = on_renderer_event,
+		on_exit = function()
+			if client == created then
+				client = nil
+			end
+			for _, entry in pairs(cache) do
+				entry.pending = false
+				entry.opened = false
+				entry.error = "renderer process exited; recovery scheduled"
+			end
+			replay_after_crash()
+		end,
+	})
+	client = created
+	return client
+end
+
+request_open = function(state, entry)
 	entry.pending = true
-	get_client():request("plotly.open", {
+	entry.error = nil
+	get_client():request("renderer.open", {
 		figure_id = entry.figure_id,
-		figure = figure,
+		backend = entry.backend,
+		figure = entry.figure,
 		width = options().width_px or 900,
 		height = options().height_px or 540,
+		interactive_width = options().interactive_width_px or 720,
+		interactive_height = options().interactive_height_px or 432,
+		screencast = options().screencast ~= false,
+		adaptive_resolution = options().adaptive_resolution ~= false,
+		max_figures = options().max_figures or 8,
+		max_fps = options().max_fps or 60,
 	}, {}, function(err, payload)
 		if err then
 			entry.pending = false
+			entry.opened = false
 			entry.error = err.message or tostring(err)
 			if not entry.notified then
 				entry.notified = true
-				vim.notify("nvjup Plotly renderer: " .. entry.error, vim.log.levels.WARN)
+				vim.notify("nvjup interactive renderer: " .. entry.error, vim.log.levels.WARN)
 			end
 			refresh(state)
 			return
 		end
+		local stable_client = client
+		vim.defer_fn(function()
+			if client == stable_client then
+				restart_attempts = 0
+			end
+		end, 5000)
 		store_frame(state, entry, payload)
 	end)
 end
@@ -136,35 +258,45 @@ end
 function M.prepare_cell(state, cell)
 	local copy = vim.deepcopy(cell)
 	local seen = {}
+	local trust_status = trust.status(state)
 	for output_index, item in ipairs(cell.outputs or {}) do
-		local figure = type(item.data) == "table" and item.data[PLOTLY_MIME] or nil
-		if type(figure) == "table" and options().enabled ~= false then
-			local cache_key = key(state, cell, output_index)
-			seen[cache_key] = true
-			local hash, encoded = figure_hash(figure)
-			local entry = cache[cache_key]
-			if not hash then
-				entry = { error = tostring(encoded), figure_id = figure_id(state, cell, output_index) }
-				cache[cache_key] = entry
-			elseif not entry or entry.hash ~= hash then
-				entry = {
-					key = cache_key,
-					hash = hash,
-					figure_id = figure_id(state, cell, output_index),
-					state = state,
-					cell_id = cell.id,
-					output_index = output_index,
-				}
-				cache[cache_key] = entry
-				request_open(state, cell, output_index, figure, entry)
-			end
-			if entry.png then
-				copy.outputs[output_index].data["image/png"] = entry.png
-				copy.outputs[output_index].metadata = vim.tbl_deep_extend(
-					"force",
-					copy.outputs[output_index].metadata or {},
-					{ ["image/png"] = { width = entry.width, height = entry.height } }
-				)
+		local backend, figure = interactive_payload(item)
+		if backend and options().enabled ~= false then
+			if trust_status ~= "trusted_interactive" then
+				copy.outputs[output_index] = blocked_copy(item, trust_status)
+			else
+				local cache_key = key(state, cell, output_index)
+				seen[cache_key] = true
+				local hash, encoded = figure_hash(backend, figure)
+				local entry = cache[cache_key]
+				if not hash then
+					entry = { error = tostring(encoded), figure_id = figure_id(state, cell, output_index) }
+					cache[cache_key] = entry
+				elseif not entry or entry.hash ~= hash then
+					if entry and client and entry.figure_id then
+						client:request("renderer.close", { figure_id = entry.figure_id }, {}, function() end)
+					end
+					entry = {
+						key = cache_key,
+						hash = hash,
+						figure_id = figure_id(state, cell, output_index),
+						state = state,
+						cell_id = cell.id,
+						output_index = output_index,
+						backend = backend,
+						figure = figure,
+					}
+					cache[cache_key] = entry
+					request_open(state, entry)
+				end
+				if entry.png then
+					copy.outputs[output_index].data["image/png"] = entry.png
+					copy.outputs[output_index].metadata = vim.tbl_deep_extend(
+						"force",
+						copy.outputs[output_index].metadata or {},
+						{ ["image/png"] = { width = entry.width, height = entry.height } }
+					)
+				end
 			end
 		end
 	end
@@ -179,7 +311,7 @@ function M.finish_render(state, seen)
 	for cache_key, entry in pairs(cache) do
 		if entry.state == state and not seen[cache_key] then
 			if client and entry.figure_id then
-				client:request("plotly.close", { figure_id = entry.figure_id }, {}, function() end)
+				client:request("renderer.close", { figure_id = entry.figure_id }, {}, function() end)
 			end
 			cache[cache_key] = nil
 		end
@@ -195,8 +327,10 @@ local function pixel_position(mouse, geometry, entry)
 	if column < 0 or row < 0 or column >= geometry.cols or row >= geometry.rows then
 		return nil
 	end
-	local x = geometry.cols > 1 and (column / (geometry.cols - 1)) * (entry.width - 1) or 0
-	local y = geometry.rows > 1 and (row / (geometry.rows - 1)) * (entry.height - 1) or 0
+	local source_width = entry.source_width or entry.width
+	local source_height = entry.source_height or entry.height
+	local x = geometry.cols > 1 and (column / (geometry.cols - 1)) * (source_width - 1) or 0
+	local y = geometry.rows > 1 and (row / (geometry.rows - 1)) * (source_height - 1) or 0
 	return x, y
 end
 
@@ -209,16 +343,19 @@ local function pointer_position()
 end
 
 local dispatch_event
-
 local function queue_event(active, payload)
 	if active.event_pending then
 		local queue = active.event_queue
-		if payload.event == "move" and queue[#queue] and queue[#queue].event == "move" then
+		local last = queue[#queue]
+		if payload.event == "move" and last and last.event == "move" then
 			queue[#queue] = payload
+		elseif payload.event == "wheel" and last and last.event == "wheel" then
+			last.delta_x = (last.delta_x or 0) + (payload.delta_x or 0)
+			last.delta_y = (last.delta_y or 0) + (payload.delta_y or 0)
 		else
-			if #queue >= 32 then
+			if #queue >= 64 then
 				for index, queued in ipairs(queue) do
-					if queued.event == "move" then
+					if queued.event == "move" or queued.event == "wheel" then
 						table.remove(queue, index)
 						break
 					end
@@ -233,10 +370,12 @@ end
 
 function dispatch_event(active, payload)
 	active.event_pending = true
-	get_client():request("plotly.event", payload, {}, function(err, frame)
+	get_client():request("renderer.event", payload, {}, function(err, frame)
 		active.event_pending = false
-		if not err then
+		if not err and frame and frame.png then
 			store_frame(active.entry.state, active.entry, frame)
+		elseif err then
+			active.entry.error = err.message or tostring(err)
 		end
 		local next_event = table.remove(active.event_queue, 1)
 		if next_event then
@@ -269,6 +408,13 @@ local function send_event(event, extra)
 	)
 end
 
+local function send_key(key)
+	if not focus then
+		return
+	end
+	queue_event(focus, { figure_id = focus.entry.figure_id, event = "key", key = key })
+end
+
 local function close_focus()
 	if not focus then
 		return
@@ -294,9 +440,13 @@ function M.open_focus(state, cell)
 	if not cell then
 		return nil
 	end
+	if not trust.allows_interactive(state) then
+		vim.notify("interactive output is blocked; use :NvJupTrustInteractive", vim.log.levels.WARN)
+		return nil
+	end
 	local entry
 	for output_index, item in ipairs(cell.outputs or {}) do
-		if type(item.data) == "table" and type(item.data[PLOTLY_MIME]) == "table" then
+		if interactive_payload(item) then
 			entry = cache[key(state, cell, output_index)]
 			if not entry then
 				M.prepare_cell(state, cell)
@@ -306,17 +456,17 @@ function M.open_focus(state, cell)
 		end
 	end
 	if not entry then
-		vim.notify("current cell has no Plotly output", vim.log.levels.INFO)
+		vim.notify("current cell has no supported interactive output", vim.log.levels.INFO)
 		return nil
 	end
 	if not entry.png then
-		vim.notify("Plotly frame is still rendering", vim.log.levels.INFO)
+		vim.notify("interactive frame is still rendering", vim.log.levels.INFO)
 		return nil
 	end
 	close_focus()
 	local buffer = vim.api.nvim_create_buf(false, true)
-	local width = math.min(vim.o.columns - 4, (options().focus_width or 112))
-	local height = math.min(vim.o.lines - 4, (options().focus_height or 40))
+	local width = math.max(20, math.min(vim.o.columns - 4, (options().focus_width or 112)))
+	local height = math.max(8, math.min(vim.o.lines - 4, (options().focus_height or 40)))
 	local window = vim.api.nvim_open_win(buffer, true, {
 		relative = "editor",
 		row = math.max(0, math.floor((vim.o.lines - height) / 2) - 1),
@@ -325,13 +475,13 @@ function M.open_focus(state, cell)
 		height = height,
 		style = "minimal",
 		border = "rounded",
-		title = " nvjup Plotly ",
+		title = " nvjup interactive ",
 	})
 	focus = {
 		buf = buffer,
 		win = window,
 		entry = entry,
-		namespace = vim.api.nvim_create_namespace("nvjup-plotly-focus-" .. buffer),
+		namespace = vim.api.nvim_create_namespace("nvjup-interactive-focus-" .. buffer),
 		previous_mousemoveevent = vim.o.mousemoveevent,
 		event_queue = {},
 	}
@@ -359,6 +509,23 @@ function M.open_focus(state, cell)
 	vim.keymap.set("n", "<ScrollWheelDown>", function()
 		send_event("wheel", { delta_y = 160 })
 	end, { buffer = buffer, silent = true })
+	for lhs, key_name in pairs({
+		["<Left>"] = "ArrowLeft",
+		["<Right>"] = "ArrowRight",
+		["<Up>"] = "ArrowUp",
+		["<Down>"] = "ArrowDown",
+		["<CR>"] = "Enter",
+		["<Space>"] = "Space",
+		["<Tab>"] = "Tab",
+		["<BS>"] = "Backspace",
+		["+"] = "+",
+		["-"] = "-",
+		["="] = "=",
+	}) do
+		vim.keymap.set("n", lhs, function()
+			send_key(key_name)
+		end, { buffer = buffer, silent = true })
+	end
 	local previous_mousemoveevent = focus.previous_mousemoveevent
 	vim.api.nvim_create_autocmd("BufWipeout", {
 		buffer = buffer,
@@ -374,6 +541,28 @@ function M.open_focus(state, cell)
 	return buffer, window
 end
 
+function M.resize_focus()
+	if not focus or not vim.api.nvim_win_is_valid(focus.win) then
+		return
+	end
+	local width = math.max(20, math.min(vim.o.columns - 4, options().focus_width or 112))
+	local height = math.max(8, math.min(vim.o.lines - 4, options().focus_height or 40))
+	vim.api.nvim_win_set_width(focus.win, width)
+	vim.api.nvim_win_set_height(focus.win, height)
+	local entry = focus.entry
+	get_client():request("renderer.resize", {
+		figure_id = entry.figure_id,
+		width = options().width_px or 900,
+		height = options().height_px or 540,
+		interactive_width = options().interactive_width_px or 720,
+		interactive_height = options().interactive_height_px or 432,
+	}, {}, function(err, frame)
+		if not err then
+			store_frame(entry.state, entry, frame)
+		end
+	end)
+end
+
 function M.detach(state)
 	M.finish_render(state, {})
 	if focus and focus.entry.state == state then
@@ -382,24 +571,83 @@ function M.detach(state)
 end
 
 function M.shutdown()
+	shutting_down = true
 	close_focus()
-	if client then
-		client:request("renderer.shutdown", {}, {}, function()
-			if client then
-				client:kill()
-				client = nil
-			end
+	local active = client
+	client = nil
+	if active then
+		active:request("renderer.shutdown", {}, {}, function()
+			active:kill()
 		end)
 	end
-	cache = {}
+	for cache_key in pairs(cache) do
+		cache[cache_key] = nil
+	end
 end
 
 function M.status()
-	local count = 0
-	for _ in pairs(cache) do
-		count = count + 1
+	local figures = 0
+	local errors = {}
+	for _, entry in pairs(cache) do
+		figures = figures + 1
+		if entry.error then
+			table.insert(errors, { figure_id = entry.figure_id, error = entry.error })
+		end
 	end
-	return { figures = count, running = client ~= nil }
+	return {
+		figures = figures,
+		running = client ~= nil,
+		restart_attempts = restart_attempts,
+		focus = focus and focus.entry.figure_id or nil,
+		renderer = last_renderer_status,
+		errors = errors,
+	}
+end
+
+function M.show_status()
+	if not client then
+		vim.notify(vim.inspect(M.status()), vim.log.levels.INFO, { title = "nvjup interactive" })
+		return
+	end
+	client:request("renderer.status", {}, {}, function(err, payload)
+		if not err then
+			last_renderer_status = payload
+		end
+		vim.notify(vim.inspect(M.status()), err and vim.log.levels.WARN or vim.log.levels.INFO, {
+			title = "nvjup interactive",
+		})
+	end)
+end
+
+function M.trust_interactive(state)
+	state = state or require("nvjup.notebook").get()
+	local ok, err = trust.grant(state)
+	if not ok then
+		vim.notify("nvjup trust: " .. tostring(err), vim.log.levels.ERROR)
+		return nil
+	end
+	vim.notify("trusted interactive content for the current notebook identity", vim.log.levels.INFO)
+	refresh(state)
+	return true
+end
+
+function M.revoke_trust(state)
+	state = state or require("nvjup.notebook").get()
+	local ok, err = trust.revoke(state)
+	if not ok then
+		vim.notify("nvjup trust: " .. tostring(err), vim.log.levels.ERROR)
+		return nil
+	end
+	M.finish_render(state, {})
+	vim.notify("interactive trust revoked", vim.log.levels.INFO)
+	refresh(state)
+	return true
+end
+
+function M.trust_status(state)
+	state = state or require("nvjup.notebook").get()
+	local status, details = trust.status(state)
+	return { status = status, details = details }
 end
 
 function M._set_client_factory(factory)
@@ -407,6 +655,8 @@ function M._set_client_factory(factory)
 		client:kill()
 	end
 	client = nil
+	shutting_down = false
+	restart_attempts = 0
 	client_factory = factory or rpc.new
 end
 
@@ -414,5 +664,7 @@ M._cache = cache
 M._close_focus = close_focus
 M._pixel_position = pixel_position
 M._queue_event = queue_event
+M._on_renderer_event = on_renderer_event
+M._interactive_payload = interactive_payload
 
 return M

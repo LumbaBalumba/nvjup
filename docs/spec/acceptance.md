@@ -60,3 +60,18 @@ Stage 4 is complete when:
 8. MIME bundles and metadata still round-trip unchanged;
 9. headless tests validate protocol encoding, placeholder structure, conversion, security, ordering, fallback, and cleanup;
 10. a host-only isolated visual test is available for real Kitty/Ghostty pixels.
+
+## Stage 6 acceptance criteria
+
+Stage 6 is complete when:
+
+1. Plotly and supported standalone Bokeh MIME render from local assets only;
+2. interactive rendering is blocked until a local content-identity record grants `trusted_interactive`;
+3. code or active-output changes invalidate trust without modifying notebook metadata;
+4. Chromium denies network, file, service-worker, download, frame, object, and worker capabilities;
+5. damage-driven push frames have acknowledged backpressure and a pull-capture fallback;
+6. move/wheel events coalesce while button, release, and keyboard ordering is preserved;
+7. focus mode supports pointer, wheel, bounded keyboard input, and resize;
+8. multiple figures have independent pages and lifecycle cleanup;
+9. renderer crashes replay only still-trusted cached figures with bounded retries;
+10. status exposes frame/input metrics and tests cover trust, sandbox, Bokeh, recovery, cleanup, and performance-sensitive paths.

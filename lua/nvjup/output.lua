@@ -253,7 +253,7 @@ local function render_bundle(data, metadata, options, cell)
 	end
 
 	if data["application/vnd.bokehjs_exec.v0+json"] or data["application/vnd.bokehjs_load.v0+json"] then
-		local lines = { "[Bokeh interactive output · renderer planned for Stage 6]" }
+		local lines = { "[Bokeh interactive output · <leader>nf for focus mode]" }
 		vim.list_extend(lines, split_text(data["text/plain"] or "Bokeh document"))
 		return lines, "interactive"
 	end

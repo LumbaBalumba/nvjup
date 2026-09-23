@@ -1,0 +1,7 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+root="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")/.." && pwd)"
+export PYTHONPATH="${root}/python${PYTHONPATH:+:${PYTHONPATH}}"
+cd "${root}"
+exec uv run --frozen python -m nvjup_plotly_renderer.benchmark "$@"

@@ -85,25 +85,34 @@ function M.check()
 	end
 	vim.health.info("selected image backend: " .. capabilities.backend)
 
-	vim.health.start("nvjup interactive Plotly")
+	vim.health.start("nvjup interactive renderer")
 	local renderer_python = rpc.default_command()[1]
-	local renderer_imports = vim.system({ renderer_python, "-c", "import playwright, plotly" }, { text = true })
+	local renderer_imports = vim.system({ renderer_python, "-c", "import bokeh, playwright, plotly" }, { text = true })
 		:wait(5000)
 	if renderer_imports.code == 0 then
-		vim.health.ok("Playwright and Plotly.js assets are available to " .. renderer_python)
+		vim.health.ok("Playwright, Plotly.js, and BokehJS assets are available to " .. renderer_python)
 	else
-		vim.health.warn("Playwright or Plotly is unavailable; interactive Plotly falls back to MIME text")
+		vim.health.warn("Playwright, Plotly, or Bokeh is unavailable; interactive outputs use safe text fallbacks")
 	end
 	local chromium = vim.env.NVJUP_CHROMIUM
 	if chromium and vim.uv.fs_stat(chromium) then
 		vim.health.ok("Chromium configured by NVJUP_CHROMIUM: " .. chromium)
-	elseif vim.fn.executable("chromium") == 1 or vim.fn.executable("chromium-browser") == 1 then
+	elseif
+		vim.fn.executable("chromium") == 1
+		or vim.fn.executable("chromium-browser") == 1
+		or vim.fn.executable("google-chrome-stable") == 1
+		or vim.fn.executable("google-chrome") == 1
+	then
 		vim.health.ok("system Chromium is available")
 	else
 		vim.health.warn("Chromium was not found; install it or set NVJUP_CHROMIUM")
 	end
-	vim.health.info("Stage 5 provides sandboxed Plotly screenshots and mouse focus mode")
-	vim.health.info("Bokeh and production renderer recovery remain scheduled for Stage 6")
+	vim.health.info("Stage 6 provides trusted Plotly/Bokeh rendering, CDP screencast frames, and crash recovery")
+	if config.options.interactive.require_trust == false then
+		vim.health.warn("interactive.require_trust=false bypasses notebook content-identity trust checks")
+	else
+		vim.health.ok("interactive notebook trust is required")
+	end
 end
 
 return M

@@ -13,14 +13,18 @@ local function test(name, callback)
 	end
 end
 
+config.options.interactive.require_trust = false
+
 local requests = {}
+local client_options
 local png = "iVBORw0KGgoAAAANSUhEUgAAAAQAAAADCAYAAAC09K7GAAAAEklEQVR42mPwKdrwHxkzEBQAANiRHR2gDahVAAAAAElFTkSuQmCC"
 
-interactive._set_client_factory(function()
+interactive._set_client_factory(function(options)
+	client_options = options
 	return {
 		request = function(_, request_type, payload, _, callback)
 			table.insert(requests, { type = request_type, payload = payload })
-			if request_type == "plotly.open" then
+			if request_type == "renderer.open" then
 				callback(nil, {
 					figure_id = payload.figure_id,
 					png = png,
@@ -55,13 +59,48 @@ test("turns Plotly MIME into a cached PNG frame", function()
 		},
 	}
 	local rendered, seen = interactive.prepare_cell(state, cell)
-	assert(requests[1].type == "plotly.open")
+	assert(requests[1].type == "renderer.open")
 	assert(requests[1].payload.width == config.options.interactive.width_px)
 	assert(rendered.outputs[1].data["image/png"] == png)
 	assert(rendered.outputs[1].metadata["image/png"].width == 900)
 	assert(next(seen) ~= nil)
 	assert(cell.outputs[1].data["image/png"] == nil, "original notebook MIME bundle was mutated")
 	interactive.finish_render(state, seen)
+end)
+
+test("accepts pushed renderer frames", function()
+	local entry = interactive._cache["99123:plot-cell:1"]
+	assert(entry)
+	client_options.on_event({
+		type = "renderer.frame",
+		payload = {
+			figure_id = entry.figure_id,
+			png = png,
+			width = 720,
+			height = 432,
+			source_width = 900,
+			source_height = 540,
+			frame_sequence = 2,
+			frame_latency_ms = 16.7,
+			quality = "interactive",
+			frame_source = "screencast",
+		},
+	})
+	assert(entry.png == png)
+	assert(entry.frame_sequence == 2)
+	assert(entry.source_width == 900)
+	assert(entry.quality == "interactive")
+end)
+
+test("recognizes safe Bokeh notebook payloads", function()
+	local backend, payload = interactive._interactive_payload({
+		data = {
+			["application/vnd.bokehjs_exec.v0+json"] = "",
+			["application/javascript"] = "const docs_json = {}; const render_items = [];",
+		},
+	})
+	assert(backend == "bokeh")
+	assert(payload.script:find("docs_json", 1, true))
 end)
 
 test("closes browser figures that disappear from notebook output", function()
@@ -80,7 +119,7 @@ test("closes browser figures that disappear from notebook output", function()
 	local before = #requests
 	interactive.finish_render(state, {})
 	assert(#requests == before + 1)
-	assert(requests[#requests].type == "plotly.close")
+	assert(requests[#requests].type == "renderer.close")
 end)
 
 test("maps mouse cells only inside the rendered figure", function()
@@ -102,7 +141,7 @@ test("queues clicks and releases behind an in-flight hover frame", function()
 	interactive._set_client_factory(function()
 		return {
 			request = function(_, request_type, payload, _, callback)
-				assert(request_type == "plotly.event")
+				assert(request_type == "renderer.event")
 				table.insert(sent, payload.event)
 				table.insert(callbacks, callback)
 			end,

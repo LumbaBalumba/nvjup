@@ -9,6 +9,7 @@ local output = require("nvjup.output")
 local render = require("nvjup.render")
 local shadow = require("nvjup.shadow")
 local treesitter = require("nvjup.treesitter")
+local trust = require("nvjup.trust")
 local actions = require("nvjup.actions")
 local keymaps = require("nvjup.keymaps")
 
@@ -73,8 +74,19 @@ local function define_buffer_commands(buf)
 		end,
 	})
 	command("NvJupPlotFocus", actions.plot_focus)
-	command("NvJupPlotStatus", function()
-		vim.notify(vim.inspect(interactive.status()), vim.log.levels.INFO, { title = "nvjup Plotly" })
+	command("NvJupPlotStatus", interactive.show_status)
+	command("NvJupTrustInteractive", function()
+		interactive.trust_interactive(assert(notebook.get(buf)))
+	end)
+	command("NvJupTrustRevoke", function()
+		interactive.revoke_trust(assert(notebook.get(buf)))
+	end)
+	command("NvJupTrustStatus", function()
+		vim.notify(
+			vim.inspect(interactive.trust_status(assert(notebook.get(buf)))),
+			vim.log.levels.INFO,
+			{ title = "nvjup trust" }
+		)
 	end)
 	command("NvJupCellClearOutput", actions.clear_output)
 	command("NvJupClearAllOutputs", actions.clear_all_outputs)
@@ -268,6 +280,7 @@ function M.setup(options)
 			for _, state in pairs(notebook.all()) do
 				render.render(state)
 			end
+			interactive.resize_focus()
 		end,
 	})
 
@@ -284,5 +297,6 @@ M.output = output
 M.render = render
 M.shadow = shadow
 M.treesitter = treesitter
+M.trust = trust
 
 return M

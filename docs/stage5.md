@@ -60,7 +60,7 @@ Inside focus mode:
 - figure dimensions and JSON-line message size are bounded;
 - stale figures are explicitly closed when outputs disappear.
 
-This is an architectural gate, not the Stage 6 production renderer. Bokeh, keyboard forwarding, crash restart/replay, multiple simultaneously focused figures, trust policy, and deeper performance profiling remain Stage 6 work.
+This document records the Stage 5 architectural gate. Those limitations are addressed by the Stage 6 renderer described in [`stage6.md`](stage6.md); it adds Bokeh, keyboard input, crash replay, content-identity trust, adaptive CDP screencasts, and production profiling.
 
 ## `tqdm.auto` note
 

@@ -223,15 +223,20 @@ security details. :checkhealth nvjup reports the selected backend.
 HTML/HBox/progress model subset and projects its live state as terminal text.
 
 ==============================================================================
-8. INTERACTIVE PLOTLY                                  *nvjup-plotly*
+8. INTERACTIVE OUTPUT                                 *nvjup-plotly*
 
-Stage 5 renders Plotly MIME objects in a dedicated headless Chromium process.
-Plotly.js is loaded locally, HTTP(S) requests are blocked, and screenshots are
-shown through the normal Kitty image path. <Leader>nf or :NvJupPlotFocus opens
-focus mode in a 112x40 default window. Mouse move, button press/release, drag,
-and wheel events provide hover, actions, pan, and zoom without dropping clicks
-behind pending hover frames. Press q or <Esc> to close.
-:NvJupPlotStatus shows renderer state. See docs/stage5.md.
+Stage 6 renders Plotly and safely serialized Bokeh standalone documents in a
+dedicated headless Chromium process. Active output is blocked until
+:NvJupTrustInteractive grants the current content identity; code or active MIME
+changes invalidate it. :NvJupTrustStatus inspects and :NvJupTrustRevoke removes
+the grant. Notebook HTML and arbitrary JavaScript are never executed.
+
+Local assets, strict CSP, denied network requests, adaptive CDP screencast PNG
+frames, pull fallback, bounded event coalescing, crash replay, and cleanup form
+the production renderer. <Leader>nf or :NvJupPlotFocus opens a 112x40 default
+focus window. Mouse, wheel, arrows, Enter, Space, Tab, Backspace, +, -, and =
+are forwarded. Press q or <Esc> to close. :NvJupPlotStatus shows component
+metrics and renderer state. See docs/stage6.md.
 
 ==============================================================================
 9. COMMANDS                                                 *nvjup-commands*
@@ -252,8 +257,11 @@ behind pending hover frames. Press q or <Esc> to close.
 :NvJupCellToggleSource  Collapse or expand current cell source.
 :NvJupCellToggleOutput  Expand or restore the inline output line limit.
 :NvJupOutputOpen        Open full output; optional float/split/vsplit/tab mode.
-:NvJupPlotFocus          Open current Plotly output in interactive focus mode.
-:NvJupPlotStatus         Show interactive renderer state.
+:NvJupPlotFocus          Open current Plotly/Bokeh output in focus mode.
+:NvJupPlotStatus         Show interactive renderer state and timings.
+:NvJupTrustInteractive   Trust current active-content identity locally.
+:NvJupTrustRevoke        Revoke interactive trust for the notebook path.
+:NvJupTrustStatus        Show trust level, identity, and invalidation reason.
 :NvJupCellClearOutput   Clear output and execution count.
 :NvJupClearAllOutputs   Clear every output and execution count.
 :NvJupOutline           Open cell outline through vim.ui.select().
@@ -285,10 +293,9 @@ behind pending hover frames. Press q or <Esc> to close.
 ==============================================================================
 10. CURRENT LIMITATIONS                                 *nvjup-limitations*
 
-Bokeh, arbitrary widgets, and arbitrary HTML/JavaScript are not enabled.
-Plotly is a Stage 5 proof of concept; crash replay, keyboard forwarding, and a
-full trust policy remain Stage 6 work. PDF display uses only the first page.
-Animated images are currently static. Actual Kitty
+Arbitrary widgets, arbitrary HTML/JavaScript, Bokeh server sessions, and Bokeh
+payloads incompatible with the locally installed BokehJS are not enabled. PDF
+display uses only the first page. Animated images are currently static. Actual Kitty
 pixels require a compatible attached terminal UI. Remote Jupyter Server
 attachment and kernel-backed completion are also later work. Completion uses
 nvim-cmp when available and Neovim's built-in completion UI as a fallback.

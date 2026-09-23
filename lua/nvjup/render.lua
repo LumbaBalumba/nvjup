@@ -142,19 +142,19 @@ end
 
 local function output_virtual_lines(state, cell, width)
 	local result = { { { footer_text(state, cell, width), "NvJupBorder" } } }
+	local render_cell, seen_interactive = cell, {}
+	if config.options.render.outputs and not cell.output_collapsed then
+		render_cell, seen_interactive = interactive.prepare_cell(state, cell)
+	end
 	local segments = {}
 	if config.options.render.outputs then
 		local output_options = { include_images = false }
 		if cell.output_expanded then
 			output_options.limit = false
 		end
-		segments = output.segments(cell, output_options)
+		segments = output.segments(render_cell, output_options)
 	end
-	local image_cell, seen_interactive = cell, {}
-	if config.options.render.outputs and not cell.output_collapsed then
-		image_cell, seen_interactive = interactive.prepare_cell(state, cell)
-	end
-	local image_lines, seen_images, images_by_output = image.render(state, image_cell, width)
+	local image_lines, seen_images, images_by_output = image.render(state, render_cell, width)
 	local text_line_count = 0
 	for _, segment in pairs(segments) do
 		text_line_count = text_line_count + #segment.lines
