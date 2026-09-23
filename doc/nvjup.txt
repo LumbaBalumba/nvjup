@@ -232,11 +232,13 @@ changes invalidate it. :NvJupTrustStatus inspects and :NvJupTrustRevoke removes
 the grant. Notebook HTML and arbitrary JavaScript are never executed.
 
 Local assets, strict CSP, denied network requests, adaptive CDP screencast PNG
-frames, pull fallback, bounded event coalescing, crash replay, and cleanup form
-the production renderer. <Leader>nf or :NvJupPlotFocus opens a 112x40 default
-focus window. Mouse, wheel, arrows, Enter, Space, Tab, Backspace, +, -, and =
-are forwarded. Press q or <Esc> to close. :NvJupPlotStatus shows component
-metrics and renderer state. See docs/stage6.md.
+frames, pull fallback, crash replay, and cleanup form the production renderer.
+<Leader>nf or :NvJupPlotFocus exports validated content to a mode-0600 temporary
+file and opens Awrit in a separate Kitty OS window. Awrit paints raw browser
+frames through shared memory and Kitty animation composition without screenshots.
+<Leader>nF or :NvJupPlotFocusTui keeps the old 112x40 TUI focus window. Mouse,
+wheel, and keyboard input are native in Awrit and forwarded in TUI mode.
+:NvJupPlotStatus shows component metrics and renderer state. See docs/stage6.md.
 
 ==============================================================================
 9. COMMANDS                                                 *nvjup-commands*
@@ -257,7 +259,8 @@ metrics and renderer state. See docs/stage6.md.
 :NvJupCellToggleSource  Collapse or expand current cell source.
 :NvJupCellToggleOutput  Expand or restore the inline output line limit.
 :NvJupOutputOpen        Open full output; optional float/split/vsplit/tab mode.
-:NvJupPlotFocus          Open current Plotly/Bokeh output in focus mode.
+:NvJupPlotFocus          Open current Plotly/Bokeh output in external Awrit.
+:NvJupPlotFocusTui       Open screenshot-based TUI focus mode.
 :NvJupPlotStatus         Show interactive renderer state and timings.
 :NvJupTrustInteractive   Trust current active-content identity locally.
 :NvJupTrustRevoke        Revoke interactive trust for the notebook path.

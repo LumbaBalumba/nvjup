@@ -14,6 +14,8 @@ local function test(name, callback)
 end
 
 config.options.interactive.require_trust = false
+assert(config.options.keymaps.plot_focus == "<leader>nf")
+assert(config.options.keymaps.plot_focus_tui == "<leader>nF")
 
 local requests = {}
 local client_options
@@ -33,6 +35,11 @@ interactive._set_client_factory(function(options)
 					frame_latency_ms = 12.5,
 					open_latency_ms = 42.0,
 				})
+			elseif request_type == "renderer.export_external" then
+				callback(
+					nil,
+					{ figure_id = payload.figure_id, path = "/tmp/nvjup.html", url = "file:///tmp/nvjup.html" }
+				)
 			elseif callback then
 				callback(nil, { closed = true })
 			end
@@ -66,6 +73,44 @@ test("turns Plotly MIME into a cached PNG frame", function()
 	assert(next(seen) ~= nil)
 	assert(cell.outputs[1].data["image/png"] == nil, "original notebook MIME bundle was mutated")
 	interactive.finish_render(state, seen)
+end)
+
+test("opens Awrit externally and keeps TUI focus as a separate action", function()
+	local launched
+	local closed = false
+	interactive._set_external_launcher(function(entry, exported, callback)
+		launched = { entry = entry, exported = exported }
+		callback(nil)
+		return {
+			close = function()
+				closed = true
+			end,
+		}
+	end)
+	local state = { buf = 99126 }
+	local cell = {
+		id = "external-plot",
+		outputs = {
+			{
+				output_type = "display_data",
+				data = { ["application/vnd.plotly.v1+json"] = { data = {}, layout = {} } },
+				metadata = {},
+			},
+		},
+	}
+	interactive.prepare_cell(state, cell)
+	assert(interactive.open_external(state, cell))
+	assert(requests[#requests].type == "renderer.export_external")
+	assert(launched.exported.url == "file:///tmp/nvjup.html")
+	assert(interactive.status().external_windows == 1)
+	local focus_buf, focus_win = interactive.open_focus(state, cell)
+	assert(vim.api.nvim_buf_is_valid(focus_buf))
+	assert(vim.api.nvim_win_is_valid(focus_win))
+	assert(closed)
+	assert(interactive.status().external_windows == 0)
+	interactive._close_focus()
+	interactive.finish_render(state, {})
+	interactive._set_external_launcher(nil)
 end)
 
 test("accepts pushed renderer frames", function()

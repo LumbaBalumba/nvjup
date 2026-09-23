@@ -40,7 +40,7 @@ Execute a cell that returns a Plotly figure. The first PNG frame appears asynchr
 :NvJupPlotStatus
 ```
 
-Default mapping: `<leader>nf`. The default focus window is 112 columns by 40 rows (bounded by the current editor), and its image backend can use the full focus dimensions instead of the smaller inline-image limit.
+Stage 6 now assigns the external Awrit window to `<leader>nf`. This original TUI focus remains available through `<leader>nF` or `:NvJupPlotFocusTui`; it is 112 columns by 40 rows by default (bounded by the current editor).
 
 Inside focus mode:
 

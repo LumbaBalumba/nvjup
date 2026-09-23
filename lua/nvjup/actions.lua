@@ -133,6 +133,12 @@ end
 function M.plot_focus()
 	local nb = state()
 	local cell = nb:current_cell()
+	return require("nvjup.interactive").open_external(nb, cell)
+end
+
+function M.plot_focus_tui()
+	local nb = state()
+	local cell = nb:current_cell()
 	return require("nvjup.interactive").open_focus(nb, cell)
 end
 

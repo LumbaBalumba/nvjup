@@ -107,7 +107,32 @@ function M.check()
 	else
 		vim.health.warn("Chromium was not found; install it or set NVJUP_CHROMIUM")
 	end
-	vim.health.info("Stage 6 provides trusted Plotly/Bokeh rendering, CDP screencast frames, and crash recovery")
+	local awrit = config.options.interactive.awrit_command
+	if type(awrit) == "function" then
+		local ok, command = pcall(awrit)
+		awrit = ok and command or nil
+	end
+	awrit = type(awrit) == "table" and awrit[1] or awrit
+	local awrit_path = type(awrit) == "string" and vim.fn.exepath(awrit) or ""
+	if awrit_path == "" and awrit == "awrit" then
+		local candidate = vim.fs.joinpath(vim.fn.expand("~/.local/bin"), "awrit")
+		awrit_path = vim.fn.executable(candidate) == 1 and candidate or ""
+	end
+	if awrit_path ~= "" then
+		vim.health.ok("Awrit is available for zero-screenshot interactive focus: " .. awrit_path)
+	else
+		vim.health.warn(
+			"Awrit is unavailable; <leader>nf needs https://github.com/chase/awrit (TUI fallback: <leader>nF)"
+		)
+	end
+	if vim.env.KITTY_LISTEN_ON and vim.env.KITTY_LISTEN_ON ~= "" then
+		vim.health.ok("Kitty remote control is available for a separate Awrit OS window")
+	else
+		vim.health.warn("KITTY_LISTEN_ON is unset; external Awrit windows require Kitty remote control")
+	end
+	vim.health.info(
+		"Stage 6 provides trusted Plotly/Bokeh rendering, CDP screencast frames, Awrit focus, and crash recovery"
+	)
 	if config.options.interactive.require_trust == false then
 		vim.health.warn("interactive.require_trust=false bypasses notebook content-identity trust checks")
 	else

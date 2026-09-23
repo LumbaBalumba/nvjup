@@ -1,6 +1,6 @@
 # Stage 6: production interactive renderer
 
-Stage 6 promotes the Stage 5 Plotly proof of concept into a content-trusted Plotly/Bokeh renderer with push frames, adaptive quality, keyboard input, resize, recovery, and explicit lifecycle diagnostics.
+Stage 6 promotes the Stage 5 Plotly proof of concept into a content-trusted Plotly/Bokeh renderer with an Awrit-powered external browser surface, push-frame TUI fallback, recovery, and explicit lifecycle diagnostics.
 
 ## Trust workflow
 
@@ -28,7 +28,19 @@ The identity covers cell types and sources, active HTML/JavaScript, Plotly/Bokeh
 
 Bokeh serialization versions must be compatible with the locally installed BokehJS version. Unsupported payloads receive a visible renderer error without changing the original MIME bundle.
 
-## Frame pipeline
+## Awrit external focus
+
+`<leader>nf` / `:NvJupPlotFocus` is the default interaction path. The renderer writes the already validated standalone Plotly/Bokeh document to a mode-`0600` temporary file and Neovim launches `awrit file://…` in a separate Kitty OS window through Kitty remote control.
+
+This follows Awrit's rendering path rather than nvjup's screenshot path: Electron emits offscreen `paint` bitmaps, Awrit places raw RGBA buffers in POSIX shared memory, and Kitty atomically composites animation frames into a persistent placement. Mouse and keyboard events go directly to Electron `webContents`. There is no CDP screenshot, PNG/base64 frame RPC, Neovim redraw, or image-ID replacement in the interaction loop.
+
+Requirements are `awrit`, `kitty`, and a working `KITTY_LISTEN_ON` socket. Configure a non-default executable with `interactive.awrit_command`. `awrit_disable_gpu = true` is the default because Awrit consumes Electron CPU bitmaps and the GPU/Wayland offscreen path can repeatedly lose GBM contexts; set it to `false` only after validating the local Electron stack. Only one external focus window is managed at a time. Removing the output, revoking trust, closing the notebook, or shutting down Neovim closes it and removes the temporary file.
+
+Awrit currently describes itself as unmaintained; installations should pin/audit the chosen revision. nvjup passes it only locally generated, CSP-restricted content and never a notebook-provided URL or script wrapper.
+
+## TUI frame pipeline
+
+`<leader>nF` / `:NvJupPlotFocusTui` retains the previous in-Neovim implementation:
 
 1. The renderer creates one isolated page per visible interactive figure.
 2. The initial frame uses `page.screenshot()` over the exact viewport. This avoids Playwright locator stability waits.
@@ -41,9 +53,9 @@ Mouse input is accepted into a bounded renderer queue immediately. Consecutive m
 
 During interaction, screencast output is bounded to `interactive_width_px × interactive_height_px` (default `720×432`). After 150 ms idle it returns to `width_px × height_px` (default `900×540`). Event coordinates always use the full source viewport.
 
-## Focus input and resize
+## TUI focus input and resize
 
-`<leader>nf` or `:NvJupPlotFocus` opens Plotly or Bokeh focus mode. Supported input:
+`<leader>nF` or `:NvJupPlotFocusTui` opens the fallback Plotly/Bokeh TUI focus mode. Supported input:
 
 - move, click, drag, release;
 - wheel zoom;
@@ -56,11 +68,11 @@ During interaction, screencast output is bounded to `interactive_width_px × int
 
 The Lua cache retains only the validated serialized figure and latest PNG. If the renderer process exits unexpectedly, pending entries transition to an error state and are replayed into a fresh process up to `interactive.restart_attempts` times. Untrusted or invalidated entries are never replayed.
 
-Deleting or replacing output sends `renderer.close`. Buffer teardown disposes all owned pages and Kitty images. `VimLeavePre` requests renderer shutdown. Screencasts, CDP sessions, idle restoration tasks, and input workers are cancelled before a page closes.
+Deleting or replacing output sends `renderer.close`, removes its exported HTML, and closes a managed Awrit window. Buffer teardown disposes all owned pages, external windows, and Kitty images. `VimLeavePre` requests renderer shutdown. Screencasts, CDP sessions, idle restoration tasks, and input workers are cancelled before a page closes.
 
 ## Sandbox
 
-The Chromium context is ephemeral and has no inherited cookies or permissions. Downloads and service workers are disabled. Context routing aborts every request. The page CSP denies network connections, frames, objects, media, workers, forms, and base URLs; only inline bundled scripts/styles and data/blob images are allowed.
+The inline Chromium context is ephemeral and has no inherited cookies or permissions. Downloads and service workers are disabled, and context routing aborts every request. Both inline and Awrit documents use a CSP that denies network connections, frames, objects, media, workers, forms, and base URLs; only inline bundled scripts/styles and data/blob images are allowed. Exported files contain renderer-generated HTML only, have mode `0600`, and are deleted with their figure lifecycle.
 
 Figure payloads, protocol messages, viewport dimensions, frame cadence, queues, and renderer operations are bounded. The renderer has no Neovim RPC or shell capability.
 
@@ -95,6 +107,8 @@ Hardware GPU flags are not forced. On the profiling host ANGLE OpenGL did not im
 require("nvjup").setup({
   interactive = {
     enabled = true,
+    awrit_command = { "awrit" },
+    awrit_disable_gpu = true,
     width_px = 900,
     height_px = 540,
     interactive_width_px = 720,
@@ -122,6 +136,7 @@ require("nvjup").setup({
 - crash replay;
 - Plotly pull and push frames;
 - Bokeh standalone rendering from local assets;
+- CSP-restricted external export lifecycle and Awrit launcher routing;
 - multiple figures, resize, pointer and keyboard input;
 - CSP/network denial;
 - frame sequencing, queue behavior, static image regressions, and existing notebook/kernel/LSP behavior.

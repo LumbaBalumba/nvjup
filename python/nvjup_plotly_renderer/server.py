@@ -11,6 +11,7 @@ import re
 import shutil
 import struct
 import sys
+import tempfile
 import time
 import uuid
 from collections import deque
@@ -58,6 +59,7 @@ class Figure:
     page: Any
     cdp: Any
     backend: str
+    payload: dict[str, Any]
     width: int
     height: int
     push_requested: bool
@@ -100,6 +102,7 @@ class PlotlyRenderer:
         self.browser: Any = None
         self.context: Any = None
         self.figures: dict[str, Figure] = {}
+        self.external_files: dict[str, str] = {}
         self.plotly_js: str | None = None
         self.bokeh_js: str | None = None
         self.frame_callback = frame_callback
@@ -297,7 +300,9 @@ class PlotlyRenderer:
     def _inline_script(source: str) -> str:
         return re.sub(r"</script", r"<\\/script", source, flags=re.IGNORECASE)
 
-    def _html(self, backend: str, payload: dict[str, Any]) -> str:
+    def _html(
+        self, backend: str, payload: dict[str, Any], *, external: bool = False
+    ) -> str:
         csp = (
             "default-src 'none'; script-src 'unsafe-inline'; script-src-attr 'none'; style-src 'unsafe-inline'; "
             "img-src data: blob:; font-src data:; connect-src 'none'; media-src 'none'; "
@@ -316,8 +321,13 @@ class PlotlyRenderer:
                 + self._inline_script(self._plotly_source())
                 + "</script><script>"
                 + f"const figure={encoded};"
-                + "const config=Object.assign({responsive:false,scrollZoom:true,displaylogo:false},figure.config||{});"
+                + f"const config=Object.assign({{responsive:{str(external).lower()},scrollZoom:true,displaylogo:false}},figure.config||{{}});"
                 + "Plotly.newPlot('plot',figure.data||[],figure.layout||{},config);"
+                + (
+                    "window.addEventListener('resize',()=>Plotly.Plots.resize(document.querySelector('#plot')));"
+                    if external
+                    else ""
+                )
                 + "</script>"
             )
         elif backend == "bokeh":
@@ -345,6 +355,11 @@ class PlotlyRenderer:
                 + "</script><script>"
                 + f"const docs_json={docs};const render_items={items};"
                 + "Bokeh.embed.embed_items(docs_json,render_items);"
+                + (
+                    "window.addEventListener('resize',()=>{for(const view of Object.values(Bokeh.index)){if(view.resize_layout)view.resize_layout();}});"
+                    if external
+                    else ""
+                )
                 + "</script>"
             )
         else:
@@ -565,6 +580,7 @@ class PlotlyRenderer:
             page=page,
             cdp=cdp,
             backend=backend,
+            payload=figure_data,
             width=width,
             height=height,
             push_requested=payload.get("screencast", True) is not False,
@@ -603,6 +619,46 @@ class PlotlyRenderer:
                 await cdp.detach()
             await page.close()
             raise
+
+    async def export_external(self, payload: dict[str, Any]) -> dict[str, Any]:
+        figure_id = str(payload.get("figure_id", ""))
+        figure = self.figures.get(figure_id)
+        if not figure:
+            raise KeyError(f"unknown figure: {figure_id}")
+        for previous in self.external_files.values():
+            with contextlib.suppress(OSError):
+                os.remove(previous)
+        self.external_files.clear()
+        html = self._html(figure.backend, figure.payload, external=True)
+        descriptor, path = tempfile.mkstemp(prefix="nvjup-awrit-", suffix=".html")
+        try:
+            os.fchmod(descriptor, 0o600)
+            with os.fdopen(descriptor, "w", encoding="utf-8") as output:
+                output.write(html)
+        except Exception:
+            with contextlib.suppress(OSError):
+                os.close(descriptor)
+            with contextlib.suppress(OSError):
+                os.remove(path)
+            raise
+        self.external_files[figure_id] = path
+        return {
+            "figure_id": figure_id,
+            "path": path,
+            "url": "file://" + path,
+            "backend": figure.backend,
+        }
+
+    async def release_external(self, figure_id: str = "") -> None:
+        if figure_id:
+            path = self.external_files.pop(figure_id, None)
+            paths = [path] if path else []
+        else:
+            paths = list(self.external_files.values())
+            self.external_files.clear()
+        for path in paths:
+            with contextlib.suppress(OSError):
+                os.remove(path)
 
     @staticmethod
     def _validate_event(payload: dict[str, Any]) -> str:
@@ -867,6 +923,7 @@ class PlotlyRenderer:
             "network": "blocked",
             "blocked_requests": self.blocked_requests,
             "frames_emitted": self.frames_emitted,
+            "external_exports": list(self.external_files),
             "figures": [
                 {
                     "figure_id": figure.figure_id,
@@ -886,6 +943,10 @@ class PlotlyRenderer:
         }
 
     async def close(self, figure_id: str) -> None:
+        external_path = self.external_files.pop(figure_id, None)
+        if external_path:
+            with contextlib.suppress(OSError):
+                os.remove(external_path)
         figure = self.figures.pop(figure_id, None)
         if not figure:
             return
@@ -906,6 +967,10 @@ class PlotlyRenderer:
     async def shutdown(self) -> None:
         for figure_id in list(self.figures):
             await self.close(figure_id)
+        for path in self.external_files.values():
+            with contextlib.suppress(OSError):
+                os.remove(path)
+        self.external_files.clear()
         if self.context:
             await self.context.close()
         if self.browser:
@@ -942,6 +1007,11 @@ class Server:
                 if request_type == "plotly.open":
                     payload = {**payload, "backend": "plotly"}
                 result = await self.renderer.open(payload)
+            elif request_type == "renderer.export_external":
+                result = await self.renderer.export_external(payload)
+            elif request_type == "renderer.release_external":
+                await self.renderer.release_external(str(payload.get("figure_id", "")))
+                result = {"released": True}
             elif request_type in {"renderer.event", "plotly.event"}:
                 result = await self.renderer.event(payload)
             elif request_type in {"renderer.resize", "plotly.resize"}:

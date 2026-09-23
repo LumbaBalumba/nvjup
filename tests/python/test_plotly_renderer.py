@@ -90,6 +90,20 @@ def test_plotly_screenshot_and_pointer_round_trip() -> None:
             assert frame["png"].startswith("iVBOR")
             assert frame["open_latency_ms"] >= 0
 
+            exported = await renderer.export_external({"figure_id": "pytest-plot"})
+            exported_path = Path(exported["path"])
+            assert exported["url"] == exported_path.as_uri()
+            assert exported_path.stat().st_mode & 0o777 == 0o600
+            exported_html = exported_path.read_text(encoding="utf-8")
+            assert "Content-Security-Policy" in exported_html
+            assert "connect-src 'none'" in exported_html
+            assert "const figure=" in exported_html
+            assert "responsive:true" in exported_html
+            await renderer.release_external("pytest-plot")
+            assert not exported_path.exists()
+            exported = await renderer.export_external({"figure_id": "pytest-plot"})
+            exported_path = Path(exported["path"])
+
             hovered = await renderer.event(
                 {"figure_id": "pytest-plot", "event": "move", "x": 240, "y": 160}
             )
@@ -123,6 +137,8 @@ def test_plotly_screenshot_and_pointer_round_trip() -> None:
                 }
             )
             assert panned["png"].startswith("iVBOR")
+            await renderer.close("pytest-plot")
+            assert not exported_path.exists()
         finally:
             await renderer.shutdown()
 

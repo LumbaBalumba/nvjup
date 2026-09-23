@@ -74,6 +74,8 @@ Renderer:
 
 - `renderer.hello`;
 - `renderer.open`;
+- `renderer.export_external`;
+- `renderer.release_external`;
 - `renderer.event`;
 - `renderer.resize`;
 - `renderer.close`;
@@ -81,7 +83,9 @@ Renderer:
 - `renderer.shutdown`.
 
 `renderer.open` selects a bounded `plotly` or `bokeh` backend and may negotiate
-push screencast frames. `renderer.event` acknowledges queued pointer/keyboard
+push screencast frames. `renderer.export_external` writes only the validated,
+CSP-restricted standalone document to a private temporary file for Awrit;
+`renderer.release_external` removes that export. `renderer.event` acknowledges queued pointer/keyboard
 input; the resulting frame can arrive independently. `plotly.*` request aliases
 remain accepted for Stage 5 compatibility but are not emitted by current Lua.
 

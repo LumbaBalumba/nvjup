@@ -74,6 +74,7 @@ local function define_buffer_commands(buf)
 		end,
 	})
 	command("NvJupPlotFocus", actions.plot_focus)
+	command("NvJupPlotFocusTui", actions.plot_focus_tui)
 	command("NvJupPlotStatus", interactive.show_status)
 	command("NvJupTrustInteractive", function()
 		interactive.trust_interactive(assert(notebook.get(buf)))

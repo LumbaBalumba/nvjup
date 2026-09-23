@@ -7,7 +7,10 @@ local M = {}
 local client
 local cache = {}
 local focus
+local external_windows = {}
+local external_generation = 0
 local client_factory = rpc.new
+local external_launcher
 local shutting_down = false
 local restart_attempts = 0
 local last_renderer_status = {}
@@ -18,6 +21,20 @@ local BOKEH_LOAD_MIME = "application/vnd.bokehjs_load.v0+json"
 
 local function options()
 	return config.options.interactive or {}
+end
+
+local function awrit_command()
+	local configured = options().awrit_command
+	if type(configured) == "function" then
+		configured = configured()
+	end
+	if type(configured) == "table" and #configured > 0 then
+		return vim.deepcopy(configured)
+	end
+	if type(configured) == "string" and configured ~= "" then
+		return { configured }
+	end
+	return { "awrit" }
 end
 
 local function renderer_command()
@@ -194,6 +211,104 @@ local function on_renderer_event(message)
 	end
 end
 
+local function kitty_remote_command(arguments)
+	local command = { "kitty", "@" }
+	local socket = vim.env.KITTY_LISTEN_ON
+	if socket and socket ~= "" then
+		vim.list_extend(command, { "--to", socket })
+	end
+	vim.list_extend(command, arguments)
+	return command
+end
+
+local function resolve_awrit(executable)
+	local resolved = vim.fn.exepath(executable)
+	if resolved ~= "" then
+		return resolved
+	end
+	if executable == "awrit" then
+		for _, candidate in ipairs({
+			vim.fs.joinpath(vim.fn.expand("~/.local/bin"), "awrit"),
+			vim.fs.joinpath(vim.fn.expand("~/awrit"), "awrit"),
+		}) do
+			if vim.fn.executable(candidate) == 1 then
+				return candidate
+			end
+		end
+	end
+	return nil
+end
+
+local function default_external_launcher(_, exported, callback)
+	local awrit = awrit_command()
+	local resolved = resolve_awrit(awrit[1])
+	if not resolved then
+		callback(
+			"awrit executable was not found; install https://github.com/chase/awrit or configure interactive.awrit_command"
+		)
+		return nil
+	end
+	awrit[1] = resolved
+	if vim.fn.executable("kitty") ~= 1 or not vim.env.KITTY_LISTEN_ON or vim.env.KITTY_LISTEN_ON == "" then
+		callback("a Kitty remote-control socket is required for the external Awrit window")
+		return nil
+	end
+	local arguments = { "launch", "--type=os-window", "--title=nvjup interactive" }
+	vim.list_extend(arguments, awrit)
+	if options().awrit_disable_gpu ~= false then
+		vim.list_extend(arguments, { "--disable-gpu", "--disable-gpu-compositing" })
+	end
+	table.insert(arguments, exported.url)
+	local command = kitty_remote_command(arguments)
+	local handle = {}
+	handle.process = vim.system(command, { text = true }, function(result)
+		vim.schedule(function()
+			if result.code ~= 0 then
+				callback((result.stderr or "kitty failed to launch Awrit"):gsub("%s+$", ""))
+				return
+			end
+			handle.window_id = (result.stdout or ""):match("(%d+)")
+			callback(nil, handle)
+		end)
+	end)
+	function handle.close()
+		if handle.window_id then
+			vim.system(
+				kitty_remote_command({ "close-window", "--match", "id:" .. handle.window_id }),
+				{},
+				function() end
+			)
+		end
+	end
+	return handle
+end
+
+external_launcher = default_external_launcher
+
+local function close_external(cache_key, release)
+	local handle = external_windows[cache_key]
+	external_windows[cache_key] = nil
+	local entry = cache[cache_key]
+	local had_external = handle ~= nil or (entry and (entry.external or entry.external_pending))
+	if entry then
+		entry.external = false
+		entry.external_pending = false
+	end
+	if handle and handle.close then
+		pcall(handle.close)
+	end
+	if had_external and release ~= false and client and entry and entry.figure_id then
+		client:request("renderer.release_external", { figure_id = entry.figure_id }, {}, function() end)
+	end
+end
+
+local function close_all_external(release)
+	external_generation = external_generation + 1
+	for cache_key in pairs(external_windows) do
+		close_external(cache_key, release)
+	end
+end
+
 local function get_client()
 	if client then
 		return client
@@ -203,6 +318,7 @@ local function get_client()
 		command = renderer_command(),
 		on_event = on_renderer_event,
 		on_exit = function()
+			close_all_external(false)
 			if client == created then
 				client = nil
 			end
@@ -310,6 +426,7 @@ end
 function M.finish_render(state, seen)
 	for cache_key, entry in pairs(cache) do
 		if entry.state == state and not seen[cache_key] then
+			close_external(cache_key)
 			if client and entry.figure_id then
 				client:request("renderer.close", { figure_id = entry.figure_id }, {}, function() end)
 			end
@@ -431,6 +548,86 @@ local function close_focus()
 	end
 end
 
+local function resolve_entry(state, cell)
+	if not trust.allows_interactive(state) then
+		vim.notify("interactive output is blocked; use :NvJupTrustInteractive", vim.log.levels.WARN)
+		return nil
+	end
+	for output_index, item in ipairs(cell.outputs or {}) do
+		if interactive_payload(item) then
+			local entry = cache[key(state, cell, output_index)]
+			if not entry then
+				M.prepare_cell(state, cell)
+				entry = cache[key(state, cell, output_index)]
+			end
+			return entry
+		end
+	end
+	vim.notify("current cell has no supported interactive output", vim.log.levels.INFO)
+	return nil
+end
+
+function M.open_external(state, cell)
+	state = state or require("nvjup.notebook").get()
+	if not state then
+		return nil
+	end
+	cell = cell or state:current_cell()
+	if not cell then
+		return nil
+	end
+	local entry = resolve_entry(state, cell)
+	if not entry then
+		return nil
+	end
+	if not entry.opened then
+		vim.notify("interactive figure is still rendering", vim.log.levels.INFO)
+		return nil
+	end
+	close_all_external()
+	local generation = external_generation
+	entry.external_pending = true
+	get_client():request("renderer.export_external", { figure_id = entry.figure_id }, {}, function(err, exported)
+		if generation ~= external_generation then
+			entry.external_pending = false
+			if client then
+				client:request("renderer.release_external", { figure_id = entry.figure_id }, {}, function() end)
+			end
+			return
+		end
+		if err then
+			entry.external_pending = false
+			entry.error = err.message or tostring(err)
+			vim.notify("nvjup external renderer: " .. entry.error, vim.log.levels.WARN)
+			return
+		end
+		local handle
+		handle = external_launcher(entry, exported, function(launch_error)
+			if generation ~= external_generation then
+				if handle and handle.close then
+					pcall(handle.close)
+				end
+				return
+			end
+			entry.external_pending = false
+			if launch_error then
+				external_windows[entry.key] = nil
+				if client then
+					client:request("renderer.release_external", { figure_id = entry.figure_id }, {}, function() end)
+				end
+				entry.error = tostring(launch_error)
+				vim.notify("nvjup external renderer: " .. entry.error, vim.log.levels.WARN)
+				return
+			end
+			entry.external = true
+		end)
+		if handle then
+			external_windows[entry.key] = handle
+		end
+	end)
+	return entry.figure_id
+end
+
 function M.open_focus(state, cell)
 	state = state or require("nvjup.notebook").get()
 	if not state then
@@ -440,25 +637,11 @@ function M.open_focus(state, cell)
 	if not cell then
 		return nil
 	end
-	if not trust.allows_interactive(state) then
-		vim.notify("interactive output is blocked; use :NvJupTrustInteractive", vim.log.levels.WARN)
-		return nil
-	end
-	local entry
-	for output_index, item in ipairs(cell.outputs or {}) do
-		if interactive_payload(item) then
-			entry = cache[key(state, cell, output_index)]
-			if not entry then
-				M.prepare_cell(state, cell)
-				entry = cache[key(state, cell, output_index)]
-			end
-			break
-		end
-	end
+	local entry = resolve_entry(state, cell)
 	if not entry then
-		vim.notify("current cell has no supported interactive output", vim.log.levels.INFO)
 		return nil
 	end
+	close_all_external()
 	if not entry.png then
 		vim.notify("interactive frame is still rendering", vim.log.levels.INFO)
 		return nil
@@ -573,6 +756,7 @@ end
 function M.shutdown()
 	shutting_down = true
 	close_focus()
+	close_all_external()
 	local active = client
 	client = nil
 	if active then
@@ -596,6 +780,7 @@ function M.status()
 	end
 	return {
 		figures = figures,
+		external_windows = vim.tbl_count(external_windows),
 		running = client ~= nil,
 		restart_attempts = restart_attempts,
 		focus = focus and focus.entry.figure_id or nil,
@@ -651,6 +836,7 @@ function M.trust_status(state)
 end
 
 function M._set_client_factory(factory)
+	close_all_external()
 	if client then
 		client:kill()
 	end
@@ -658,6 +844,11 @@ function M._set_client_factory(factory)
 	shutting_down = false
 	restart_attempts = 0
 	client_factory = factory or rpc.new
+end
+
+function M._set_external_launcher(launcher)
+	close_all_external()
+	external_launcher = launcher or default_external_launcher
 end
 
 M._cache = cache

@@ -14,7 +14,7 @@ The repository now contains the **Stage 6 notebook editor, kernel/LSP foundation
 - text, stream, error, Markdown, sanitized HTML, terminal tables, and rich-image outputs;
 - viewport-safe PNG rendering through Kitty Unicode placeholders, with JPEG/SVG/PDF rasterization and chafa/text fallbacks;
 - a full-output float/split/tab pager that bypasses inline truncation;
-- content-trusted, network-blocked headless-Chromium Plotly/Bokeh rendering with adaptive CDP screencast frames, pointer/keyboard input, resize, recovery, and focus mode;
+- content-trusted Plotly/Bokeh rendering with an Awrit-powered, zero-screenshot external focus window plus the legacy CDP/Kitty TUI focus fallback;
 - live terminal rendering for `tqdm.auto` progress widgets through a bounded ipywidgets protocol adapter;
 - undo-aware structural representation;
 - one versioned LSP shadow document per code language;
@@ -45,7 +45,8 @@ The complete roadmap is in [`docs/nvjup-plan.md`](docs/nvjup-plan.md). Normative
 - ImageMagick for JPEG/PDF rasterization and an SVG fallback (optional but recommended);
 - `rsvg-convert` for bounded SVG rasterization (optional; preferred when available);
 - chafa for a terminal-symbol image fallback outside Kitty (optional);
-- Playwright, the Python Plotly and Bokeh packages (for local browser assets), and Chromium for interactive output.
+- Playwright, the Python Plotly and Bokeh packages (for local browser assets), and Chromium for inline interactive previews;
+- [Awrit](https://github.com/chase/awrit), Kitty remote control, and `KITTY_LISTEN_ON` for the default zero-screenshot external focus window (optional; `<leader>nF` keeps the TUI fallback).
 
 The editor and LSP proxy remain pure Lua. Kernel transport runs in a separate Python sidecar and does not depend on `pynvim` or `python3_host_prog`. Python notebooks use `pyright-langserver` and `ruff server` automatically when those executables are available. Missing parsers and servers degrade gracefully.
 
@@ -86,7 +87,8 @@ The launcher redirects config, data, state, and cache into `.test-runtime/`.
 | `<leader>nz` | collapse/expand cell source |
 | `<leader>no` | expand/collapse truncated inline output |
 | `<leader>np` | open full output in a floating pager |
-| `<leader>nf` | open the current Plotly/Bokeh output in interactive focus mode |
+| `<leader>nf` | open the current Plotly/Bokeh output in a separate Awrit/Kitty OS window |
+| `<leader>nF` | open the legacy screenshot-based TUI focus window |
 | `<leader>nc` / `<leader>nC` | clear current / all outputs |
 | `<leader>nl` / `<leader>nL` | notebook outline / refresh display |
 | `<C-CR>` | run current cell (Normal and Insert modes) |
@@ -134,6 +136,7 @@ Commands:
 :NvJupCellToggleOutput
 :NvJupOutputOpen [float|split|vsplit|tab]
 :NvJupPlotFocus
+:NvJupPlotFocusTui
 :NvJupPlotStatus
 :NvJupTrustInteractive
 :NvJupTrustRevoke
@@ -233,13 +236,17 @@ See [`docs/stage4.md`](docs/stage4.md) for lifecycle, fallback, and security det
 
 Plotly MIME output and safely extracted Bokeh standalone document JSON are rendered by a dedicated Playwright/Chromium process with locally installed assets and blocked outbound requests. Interactive content is blocked until `:NvJupTrustInteractive` records the current notebook content identity locally; code or active-output changes invalidate that grant. Use `:NvJupTrustStatus` to inspect it and `:NvJupTrustRevoke` to revoke it.
 
-The renderer pushes damage-driven PNG frames through CDP screencast, coalesces high-rate moves, preserves button/key events, lowers resolution during interaction, and restores the full-quality frame after idle. Pull screenshots remain as a fallback. Use `<leader>nf` or `:NvJupPlotFocus`; pointer, wheel, arrow, Enter, Space, Tab, `+`, `-`, and `=` input is forwarded. Press `q` or `<Esc>` to leave focus mode.
+`<leader>nf` / `:NvJupPlotFocus` exports the already validated standalone document to a mode-`0600` temporary HTML file and opens it with Awrit in a separate Kitty OS window. Awrit uses Electron offscreen paint events, raw shared-memory buffers, and Kitty animation-frame composition, so browser input is native and interaction does not wait for screenshot capture, PNG/base64 transport, Neovim redraws, or image replacement.
+
+`<leader>nF` / `:NvJupPlotFocusTui` preserves the previous in-Neovim focus mode. That fallback pushes damage-driven PNG frames through CDP screencast, coalesces high-rate moves, and forwards pointer/keyboard input. Exported HTML keeps the same local assets, renderer-owned Bokeh targets, strict CSP, content trust, and network denial policy. Closing/replacing output, revoking trust, or closing the notebook closes the managed Awrit window and removes the temporary file.
 
 ```lua
 require("nvjup").setup({
   interactive = {
     enabled = true,
     command = false, -- optional renderer command override
+    awrit_command = { "awrit" },
+    awrit_disable_gpu = true, -- stable Electron CPU offscreen paint path
     width_px = 900,
     height_px = 540,
     interactive_width_px = 720,

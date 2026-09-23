@@ -71,7 +71,8 @@ Stage 6 is complete when:
 4. Chromium denies network, file, service-worker, download, frame, object, and worker capabilities;
 5. damage-driven push frames have acknowledged backpressure and a pull-capture fallback;
 6. move/wheel events coalesce while button, release, and keyboard ordering is preserved;
-7. focus mode supports pointer, wheel, bounded keyboard input, and resize;
-8. multiple figures have independent pages and lifecycle cleanup;
-9. renderer crashes replay only still-trusted cached figures with bounded retries;
-10. status exposes frame/input metrics and tests cover trust, sandbox, Bokeh, recovery, cleanup, and performance-sensitive paths.
+7. default focus exports only validated CSP-restricted content to an Awrit/Kitty OS window, keeping browser interaction outside the screenshot pipeline;
+8. the legacy TUI focus supports pointer, wheel, bounded keyboard input, and resize;
+9. multiple figures have independent pages and lifecycle cleanup;
+10. renderer crashes replay only still-trusted cached figures with bounded retries;
+11. status exposes frame/input metrics and tests cover trust, sandbox, Bokeh, external export, recovery, cleanup, and performance-sensitive paths.
