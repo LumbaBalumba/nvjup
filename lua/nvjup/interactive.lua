@@ -272,13 +272,16 @@ local function default_external_launcher(_, exported, callback)
 		end)
 	end)
 	function handle.close()
-		if handle.window_id then
-			vim.system(
-				kitty_remote_command({ "close-window", "--match", "id:" .. handle.window_id }),
-				{},
-				function() end
-			)
+		if not handle.window_id then
+			return
 		end
+		local window_id = handle.window_id
+		handle.window_id = nil
+		vim.system(kitty_remote_command({ "signal-child", "--match", "id:" .. window_id, "SIGTERM" }), {}, function()
+			vim.defer_fn(function()
+				vim.system(kitty_remote_command({ "close-window", "--match", "id:" .. window_id }), {}, function() end)
+			end, 250)
+		end)
 	end
 	return handle
 end
