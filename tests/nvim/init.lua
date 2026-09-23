@@ -28,32 +28,33 @@ vim.g.loaded_ruby_provider = 0
 vim.g.loaded_perl_provider = 0
 vim.g.loaded_node_provider = 0
 
-vim.filetype.add {
-  extension = {
-    ipynb = "json",
-  },
-}
+vim.filetype.add({
+	extension = {
+		ipynb = "json",
+	},
+})
 
 vim.api.nvim_create_user_command("NvJupTestInfo", function()
-  local lines = {
-    "nvjup isolated test configuration is active",
-    "project: " .. root,
-    "config: " .. config_path,
-    "data: " .. vim.fn.stdpath "data",
-    "state: " .. vim.fn.stdpath "state",
-    "cache: " .. vim.fn.stdpath "cache",
-    "stage: 0 (specification and fixtures; notebook UI starts at Stage 1)",
-  }
-  vim.notify(table.concat(lines, "\n"), vim.log.levels.INFO, { title = "nvjup" })
+	local lines = {
+		"nvjup isolated test configuration is active",
+		"project: " .. root,
+		"config: " .. config_path,
+		"data: " .. vim.fn.stdpath("data"),
+		"state: " .. vim.fn.stdpath("state"),
+		"cache: " .. vim.fn.stdpath("cache"),
+		"stage: 0 (specification and fixtures; notebook UI starts at Stage 1)",
+	}
+	vim.notify(table.concat(lines, "\n"), vim.log.levels.INFO, { title = "nvjup" })
 end, {})
 
 vim.api.nvim_create_user_command("NvJupOpenFixture", function(opts)
-  local name = opts.args ~= "" and opts.args or "01_markdown_code.ipynb"
-  vim.cmd.edit(vim.fs.joinpath(root, "tests", "fixtures", "notebooks", name))
+	local name = opts.args ~= "" and opts.args or "01_markdown_code.ipynb"
+	vim.cmd.edit(vim.fs.joinpath(root, "tests", "fixtures", "notebooks", name))
 end, {
-  nargs = "?",
-  complete = function()
-    local fixtures = vim.fn.globpath(vim.fs.joinpath(root, "tests", "fixtures", "notebooks"), "*.ipynb", false, true)
-    return vim.tbl_map(vim.fs.basename, fixtures)
-  end,
+	nargs = "?",
+	complete = function()
+		local fixtures =
+			vim.fn.globpath(vim.fs.joinpath(root, "tests", "fixtures", "notebooks"), "*.ipynb", false, true)
+		return vim.tbl_map(vim.fs.basename, fixtures)
+	end,
 })

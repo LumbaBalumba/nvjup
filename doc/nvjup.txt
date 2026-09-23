@@ -1,0 +1,109 @@
+*nvjup.txt* *nvjup*           Neovim Jupyter notebook editor
+
+==============================================================================
+CONTENTS                                                        *nvjup-contents*
+
+1. Introduction                                      |nvjup-introduction|
+2. Setup                                             |nvjup-setup|
+3. Navigation                                        |nvjup-navigation|
+4. Cell operations                                   |nvjup-cells|
+5. Commands                                          |nvjup-commands|
+6. Current limitations                               |nvjup-limitations|
+
+==============================================================================
+1. INTRODUCTION                                  *nvjup-introduction*
+
+nvjup opens nbformat 4 *.ipynb files as editable notebook cells. Cell headers,
+borders, execution counts, and saved outputs are rendered using extmarks and
+virtual lines. Structural marker lines remain in the buffer for reliable undo
+and saving, but are concealed in normal use.
+
+==============================================================================
+2. SETUP                                                   *nvjup-setup*
+
+With a plugin manager, call:
+
+>lua
+  require("nvjup").setup({})
+<
+
+Options include:
+
+>lua
+  require("nvjup").setup({
+    border_width = 88,
+    render = {
+      outputs = true,
+      max_output_lines = 12,
+      markdown = true,
+      right_border = true,
+    },
+    keymaps = {
+      next_cell = "]c",
+      previous_cell = "[c",
+      -- Set any action to false to disable its mapping.
+    },
+  })
+<
+
+==============================================================================
+3. NAVIGATION                                           *nvjup-navigation*
+
+]c                      Next cell.
+[c                      Previous cell.
+]C                      Next code cell.
+[C                      Previous code cell.
+ic                      Inner-cell text object.
+ac                      Around-cell text object, including its marker.
+
+Counts are accepted by cell motions. Navigation adds the previous location to
+the jumplist.
+
+==============================================================================
+4. CELL OPERATIONS                                            *nvjup-cells*
+
+<LocalLeader>jo         Insert code cell below.
+<LocalLeader>jO         Insert code cell above.
+<LocalLeader>jy         Duplicate cell and clear copied execution state.
+<LocalLeader>jd         Delete current cell.
+<LocalLeader>jk         Move current cell up.
+<LocalLeader>jj         Move current cell down.
+<LocalLeader>js         Split current cell at cursor.
+<LocalLeader>jm         Merge current cell with the next one.
+<LocalLeader>jt         Cycle code, Markdown, and raw cell types.
+<LocalLeader>jz         Collapse or expand cell source.
+<LocalLeader>jx         Collapse or expand cell output.
+<LocalLeader>jc         Clear cell output.
+<LocalLeader>jl         Open notebook outline.
+
+All mappings are buffer-local and configurable.
+
+==============================================================================
+5. COMMANDS                                                 *nvjup-commands*
+
+:NvJupWrite             Save the notebook.
+:NvJupRefresh           Synchronize model and redraw extmarks.
+:NvJupCellNext          Move to next cell.
+:NvJupCellPrevious      Move to previous cell.
+:NvJupCellInsertAbove   Insert a cell; optional type argument.
+:NvJupCellInsertBelow   Insert a cell; optional type argument.
+:NvJupCellDuplicate     Duplicate current cell with cleared execution state.
+:NvJupCellDelete        Delete current cell.
+:NvJupCellMoveUp        Move current cell up.
+:NvJupCellMoveDown      Move current cell down.
+:NvJupCellSplit         Split current cell at cursor.
+:NvJupCellMergeBelow    Merge current cell with the next cell.
+:NvJupCellType          Set or cycle cell type.
+:NvJupCellToggleSource  Collapse or expand current cell source.
+:NvJupCellToggleOutput  Collapse or expand current cell output.
+:NvJupCellClearOutput   Clear output and execution count.
+:NvJupOutline           Open cell outline through vim.ui.select().
+
+==============================================================================
+6. CURRENT LIMITATIONS                                  *nvjup-limitations*
+
+Stage 1 does not execute cells. Saved outputs are rendered as terminal text and
+capability placeholders. Kitty image placement, interactive Plotly/Bokeh,
+Jupyter kernels, and LSP shadow documents are scheduled for later stages.
+
+vim:tw=78:ts=8:noet:ft=help:norl:
