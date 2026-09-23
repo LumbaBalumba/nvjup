@@ -1,12 +1,15 @@
 [project]
 name = "nvjup-spec-tests"
 version = "0.0.0"
-description = "Executable Stage 0 contracts and fixtures for nvjup"
+description = "Neovim-native Jupyter notebook editor test and sidecar environment"
 requires-python = ">=3.11"
-dependencies = []
+dependencies = [
+  "jupyter-client>=8.6,<9",
+]
 
 [dependency-groups]
 test = [
+  "ipykernel>=6.29,<8",
   "jsonschema>=4.23,<5",
   "nbformat>=5.10,<6",
   "pytest>=8,<10",

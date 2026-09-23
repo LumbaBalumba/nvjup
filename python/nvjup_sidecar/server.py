@@ -1,0 +1,677 @@
+from __future__ import annotations
+
+import asyncio
+import contextlib
+import inspect
+import json
+import os
+import sys
+import traceback
+import uuid
+from dataclasses import dataclass, field
+from typing import Any
+
+from jupyter_client import AsyncKernelManager
+from jupyter_client.kernelspec import KernelSpecManager
+
+PROTOCOL = "nvjup/1"
+VERSION = "0.3.0"
+
+
+@dataclass
+class Execution:
+    execution_id: str
+    cell_id: str
+    revision: int
+    code: str
+    allow_stdin: bool = True
+    stop_on_error: bool = True
+    cancelled: bool = False
+    terminal: bool = False
+    stream_index: int = 0
+    saw_error: bool = False
+
+
+@dataclass
+class KernelSession:
+    server: "SidecarServer"
+    notebook_id: str
+    kernel_name: str
+    manager: AsyncKernelManager
+    client: Any
+    generation: int = 1
+    state: str = "starting"
+    queue: asyncio.Queue[Execution] = field(default_factory=asyncio.Queue)
+    executions: dict[str, Execution] = field(default_factory=dict)
+    stdin_waiters: dict[str, asyncio.Future[str]] = field(default_factory=dict)
+    active: Execution | None = None
+    worker_task: asyncio.Task[None] | None = None
+    monitor_task: asyncio.Task[None] | None = None
+    closing: bool = False
+
+    def start_tasks(self) -> None:
+        self.worker_task = asyncio.create_task(self._worker())
+        self.monitor_task = asyncio.create_task(self._monitor())
+
+    def emit_state(self, state: str, **payload: Any) -> None:
+        self.state = state
+        self.server.event(
+            "kernel.state",
+            notebook_id=self.notebook_id,
+            payload={"state": state, "generation": self.generation, **payload},
+        )
+
+    def execution_event(
+        self, kind: str, execution: Execution, payload: dict[str, Any]
+    ) -> None:
+        self.server.event(
+            kind,
+            notebook_id=self.notebook_id,
+            cell_id=execution.cell_id,
+            revision=execution.revision,
+            payload={"execution_id": execution.execution_id, **payload},
+        )
+
+    async def enqueue(self, execution: Execution) -> None:
+        self.executions[execution.execution_id] = execution
+        await self.queue.put(execution)
+        self.execution_event("execution.state", execution, {"state": "queued"})
+
+    async def cancel(self, execution_id: str) -> bool:
+        execution = self.executions.get(execution_id)
+        if execution is None or execution.terminal:
+            return False
+        execution.cancelled = True
+        waiter = self.stdin_waiters.pop(execution_id, None)
+        if waiter and not waiter.done():
+            waiter.set_result("")
+        if self.active is execution:
+            await self.manager.interrupt_kernel()
+        else:
+            execution.terminal = True
+            self.execution_event("execution.state", execution, {"state": "cancelled"})
+        return True
+
+    async def reply_stdin(self, execution_id: str, value: str) -> bool:
+        waiter = self.stdin_waiters.pop(execution_id, None)
+        if waiter is None or waiter.done():
+            return False
+        waiter.set_result(value)
+        return True
+
+    async def restart(self) -> None:
+        self.emit_state("restarting")
+        await self._cancel_work("kernel restarted")
+        await self.manager.restart_kernel(now=True)
+        await self.client.wait_for_ready(timeout=30)
+        self.generation += 1
+        self.queue = asyncio.Queue()
+        self.closing = False
+        self.worker_task = asyncio.create_task(self._worker())
+        if self.monitor_task is None or self.monitor_task.done():
+            self.monitor_task = asyncio.create_task(self._monitor())
+        self.emit_state("idle")
+
+    async def shutdown(self, now: bool = False) -> None:
+        if self.closing:
+            return
+        self.closing = True
+        self.emit_state("shutting_down")
+        await self._cancel_work("kernel shut down")
+        if self.monitor_task:
+            self.monitor_task.cancel()
+        with contextlib.suppress(Exception):
+            self.client.stop_channels()
+        with contextlib.suppress(Exception):
+            await self.manager.shutdown_kernel(now=now)
+        self.state = "stopped"
+        self.server.event(
+            "kernel.state",
+            notebook_id=self.notebook_id,
+            payload={"state": "stopped", "generation": self.generation},
+        )
+
+    async def _cancel_work(self, reason: str) -> None:
+        for execution in self.executions.values():
+            if not execution.terminal:
+                execution.cancelled = True
+                execution.terminal = True
+                self.execution_event(
+                    "execution.state",
+                    execution,
+                    {"state": "cancelled", "reason": reason},
+                )
+        for waiter in self.stdin_waiters.values():
+            if not waiter.done():
+                waiter.set_result("")
+        self.stdin_waiters.clear()
+        if self.worker_task:
+            self.worker_task.cancel()
+            with contextlib.suppress(asyncio.CancelledError):
+                await self.worker_task
+        self.active = None
+
+    def _mark_dead(self, reason: str, failed: Execution | None = None) -> None:
+        if self.state == "dead":
+            return
+        self.state = "dead"
+        self.server.event(
+            "kernel.dead",
+            notebook_id=self.notebook_id,
+            payload={"generation": self.generation, "reason": reason},
+        )
+        for execution in self.executions.values():
+            if execution.terminal:
+                continue
+            execution.terminal = True
+            state = "failed" if execution is failed else "cancelled"
+            self.execution_event(
+                "execution.state", execution, {"state": state, "reason": reason}
+            )
+        for waiter in self.stdin_waiters.values():
+            if not waiter.done():
+                waiter.set_result("")
+        self.stdin_waiters.clear()
+
+    async def _monitor(self) -> None:
+        try:
+            while not self.closing:
+                await asyncio.sleep(1)
+                if self.state in {
+                    "starting",
+                    "restarting",
+                    "shutting_down",
+                    "stopped",
+                    "dead",
+                }:
+                    continue
+                if not await self.manager.is_alive():
+                    self._mark_dead("kernel process exited", self.active)
+                    if self.worker_task:
+                        self.worker_task.cancel()
+                    return
+        except asyncio.CancelledError:
+            return
+        except Exception as exc:  # pragma: no cover - defensive monitor path
+            self.server.log("error", f"kernel monitor failed: {exc}")
+
+    async def _worker(self) -> None:
+        try:
+            while not self.closing:
+                execution = await self.queue.get()
+                if execution.cancelled or execution.terminal:
+                    self.queue.task_done()
+                    continue
+                self.active = execution
+                self.emit_state("busy", execution_id=execution.execution_id)
+                await self._execute(execution)
+                self.active = None
+                self.queue.task_done()
+                if not self.closing and self.state != "dead":
+                    self.emit_state("idle")
+        except asyncio.CancelledError:
+            return
+
+    async def _execute(self, execution: Execution) -> None:
+        self.execution_event("execution.state", execution, {"state": "sent"})
+
+        def output_hook(message: dict[str, Any]) -> None:
+            self._route_output(execution, message)
+
+        async def stdin_hook(message: dict[str, Any]) -> None:
+            content = message.get("content", {})
+            loop = asyncio.get_running_loop()
+            waiter: asyncio.Future[str] = loop.create_future()
+            self.stdin_waiters[execution.execution_id] = waiter
+            self.execution_event(
+                "execution.stdin_request",
+                execution,
+                {
+                    "prompt": str(content.get("prompt", "")),
+                    "password": bool(content.get("password", False)),
+                },
+            )
+            self.execution_event(
+                "execution.state", execution, {"state": "waiting_input"}
+            )
+            value = await waiter
+            self.client.input(value)
+            self.execution_event("execution.state", execution, {"state": "running"})
+
+        try:
+            reply = await self.client.execute_interactive(
+                execution.code,
+                allow_stdin=execution.allow_stdin,
+                stop_on_error=execution.stop_on_error,
+                output_hook=output_hook,
+                stdin_hook=stdin_hook,
+                timeout=None,
+            )
+            content = reply.get("content", {})
+            if execution.cancelled:
+                state = "cancelled"
+            elif execution.saw_error or content.get("status") == "error":
+                state = "failed"
+            else:
+                state = "completed"
+            execution.terminal = True
+            self.execution_event(
+                "execution.state",
+                execution,
+                {
+                    "state": state,
+                    "execution_count": content.get("execution_count"),
+                },
+            )
+        except asyncio.CancelledError:
+            if not execution.terminal:
+                execution.terminal = True
+                self.execution_event(
+                    "execution.state", execution, {"state": "cancelled"}
+                )
+            raise
+        except Exception as exc:
+            if not await self.manager.is_alive():
+                self._mark_dead(str(exc), execution)
+            else:
+                execution.terminal = True
+                self.execution_event(
+                    "execution.error",
+                    execution,
+                    {
+                        "ename": type(exc).__name__,
+                        "evalue": str(exc),
+                        "traceback": [],
+                        "transport": True,
+                    },
+                )
+                self.execution_event("execution.state", execution, {"state": "failed"})
+        finally:
+            self.stdin_waiters.pop(execution.execution_id, None)
+
+    def _route_output(self, execution: Execution, message: dict[str, Any]) -> None:
+        message_type = message.get("msg_type") or message.get("header", {}).get(
+            "msg_type"
+        )
+        content = message.get("content", {})
+        if message_type == "status" and content.get("execution_state") == "busy":
+            self.execution_event("execution.state", execution, {"state": "running"})
+            return
+        if message_type == "execute_input":
+            self.execution_event(
+                "execution.state",
+                execution,
+                {"state": "running", "execution_count": content.get("execution_count")},
+            )
+            return
+        if message_type == "stream":
+            execution.stream_index += 1
+            self.execution_event(
+                "execution.stream",
+                execution,
+                {
+                    "index": execution.stream_index,
+                    "name": content.get("name", "stdout"),
+                    "text": content.get("text", ""),
+                },
+            )
+            return
+        if message_type in {"display_data", "execute_result"}:
+            execution.stream_index += 1
+            self.execution_event(
+                "execution.display",
+                execution,
+                {
+                    "index": execution.stream_index,
+                    "output_type": message_type,
+                    "data": content.get("data", {}),
+                    "metadata": content.get("metadata", {}),
+                    "transient": content.get("transient", {}),
+                    "execution_count": content.get("execution_count"),
+                },
+            )
+            return
+        if message_type == "update_display_data":
+            execution.stream_index += 1
+            self.execution_event(
+                "execution.display_update",
+                execution,
+                {
+                    "index": execution.stream_index,
+                    "data": content.get("data", {}),
+                    "metadata": content.get("metadata", {}),
+                    "transient": content.get("transient", {}),
+                },
+            )
+            return
+        if message_type == "clear_output":
+            self.execution_event(
+                "execution.clear_output",
+                execution,
+                {"wait": bool(content.get("wait", False))},
+            )
+            return
+        if message_type == "error":
+            execution.saw_error = True
+            self.execution_event(
+                "execution.error",
+                execution,
+                {
+                    "ename": content.get("ename", "Error"),
+                    "evalue": content.get("evalue", ""),
+                    "traceback": content.get("traceback", []),
+                },
+            )
+
+
+class SidecarServer:
+    def __init__(self) -> None:
+        self.sequence = 0
+        self.running = True
+        self.sessions: dict[str, KernelSession] = {}
+
+    def send(self, message: dict[str, Any]) -> None:
+        self.sequence += 1
+        message = {"protocol": PROTOCOL, "seq": self.sequence, **message}
+        sys.stdout.write(json.dumps(message, ensure_ascii=False, default=str) + "\n")
+        sys.stdout.flush()
+
+    def event(
+        self,
+        event_type: str,
+        *,
+        payload: dict[str, Any],
+        notebook_id: str | None = None,
+        cell_id: str | None = None,
+        revision: int | None = None,
+    ) -> None:
+        message: dict[str, Any] = {
+            "kind": "event",
+            "type": event_type,
+            "payload": payload,
+        }
+        if notebook_id:
+            message["notebook_id"] = notebook_id
+        if cell_id:
+            message["cell_id"] = cell_id
+        if revision is not None:
+            message["revision"] = revision
+        self.send(message)
+
+    def log(self, level: str, message: str) -> None:
+        self.event("log", payload={"level": level, "message": message})
+
+    def response(
+        self,
+        request: dict[str, Any],
+        payload: dict[str, Any] | None = None,
+        error: dict[str, Any] | None = None,
+    ) -> None:
+        message: dict[str, Any] = {
+            "kind": "response",
+            "type": request.get("type", "sidecar.invalid"),
+            "id": request.get("id", "missing-id"),
+            "payload": payload or {},
+        }
+        for field_name in ("notebook_id", "cell_id", "revision"):
+            if field_name in request:
+                message[field_name] = request[field_name]
+        if error:
+            message["error"] = error
+        self.send(message)
+
+    async def run(self) -> None:
+        while self.running:
+            line = await asyncio.to_thread(sys.stdin.readline)
+            if not line:
+                break
+            try:
+                message = json.loads(line)
+                self._validate_request(message)
+            except Exception as exc:
+                self.send(
+                    {
+                        "kind": "event",
+                        "type": "log",
+                        "payload": {
+                            "level": "error",
+                            "message": f"invalid request: {exc}",
+                        },
+                    }
+                )
+                continue
+            await self._dispatch(message)
+        await self.close()
+
+    @staticmethod
+    def _validate_request(message: dict[str, Any]) -> None:
+        if message.get("protocol") != PROTOCOL:
+            raise ValueError("unsupported protocol")
+        if message.get("kind") != "request":
+            raise ValueError("expected request")
+        if not isinstance(message.get("id"), str) or not message["id"]:
+            raise ValueError("request id is required")
+        if not isinstance(message.get("type"), str):
+            raise ValueError("request type is required")
+        if not isinstance(message.get("payload"), dict):
+            raise ValueError("request payload must be an object")
+
+    async def _dispatch(self, request: dict[str, Any]) -> None:
+        try:
+            handler_name = "_handle_" + request["type"].replace(".", "_")
+            handler = getattr(self, handler_name, None)
+            if handler is None:
+                self.response(
+                    request,
+                    error={
+                        "code": "unsupported_message",
+                        "message": f"unsupported request type {request['type']}",
+                        "retryable": False,
+                    },
+                )
+                return
+            payload = handler(request)
+            if inspect.isawaitable(payload):
+                payload = await payload
+            if payload is not None:
+                self.response(request, payload)
+        except Exception as exc:
+            details: dict[str, Any] = {}
+            if os.environ.get("NVJUP_DEBUG"):
+                details["traceback"] = traceback.format_exc()
+            self.response(
+                request,
+                error={
+                    "code": self._error_code(request["type"]),
+                    "message": str(exc) or type(exc).__name__,
+                    "retryable": request["type"] in {"kernel.start", "kernel.restart"},
+                    "details": details,
+                },
+            )
+
+    @staticmethod
+    def _error_code(request_type: str) -> str:
+        return request_type.replace(".", "_") + "_failed"
+
+    def _session(self, request: dict[str, Any]) -> KernelSession:
+        notebook_id = request.get("notebook_id")
+        if not notebook_id or notebook_id not in self.sessions:
+            raise ValueError("notebook has no live kernel")
+        return self.sessions[notebook_id]
+
+    def _handle_sidecar_hello(self, request: dict[str, Any]) -> dict[str, Any]:
+        return {
+            "version": VERSION,
+            "protocols": [PROTOCOL],
+            "capabilities": {
+                "requests": [
+                    "kernel.list",
+                    "kernel.start",
+                    "kernel.interrupt",
+                    "kernel.restart",
+                    "kernel.shutdown",
+                    "execution.enqueue",
+                    "execution.cancel",
+                    "execution.stdin_reply",
+                ],
+                "events": [
+                    "kernel.state",
+                    "kernel.dead",
+                    "execution.state",
+                    "execution.stream",
+                    "execution.display",
+                    "execution.display_update",
+                    "execution.clear_output",
+                    "execution.error",
+                    "execution.stdin_request",
+                ],
+            },
+        }
+
+    def _handle_sidecar_ping(self, request: dict[str, Any]) -> dict[str, Any]:
+        return {"pong": True}
+
+    async def _handle_sidecar_shutdown(self, request: dict[str, Any]) -> dict[str, Any]:
+        self.running = False
+        await self.close()
+        return {"stopped": True}
+
+    def _handle_kernel_list(self, request: dict[str, Any]) -> dict[str, Any]:
+        specs = KernelSpecManager().get_all_specs()
+        return {
+            "kernels": [
+                {
+                    "name": name,
+                    "display_name": value.get("spec", {}).get("display_name", name),
+                    "language": value.get("spec", {}).get("language", ""),
+                    "resource_dir": value.get("resource_dir", ""),
+                }
+                for name, value in sorted(specs.items())
+            ]
+        }
+
+    async def _handle_kernel_start(self, request: dict[str, Any]) -> dict[str, Any]:
+        notebook_id = request.get("notebook_id")
+        if not notebook_id:
+            raise ValueError("notebook_id is required")
+        existing = self.sessions.get(notebook_id)
+        if existing and existing.state not in {"stopped", "dead"}:
+            return {
+                "state": existing.state,
+                "kernel_name": existing.kernel_name,
+                "generation": existing.generation,
+            }
+        if existing:
+            with contextlib.suppress(Exception):
+                await existing.shutdown(now=True)
+            self.sessions.pop(notebook_id, None)
+        kernel_name = str(request["payload"].get("kernel_name") or "python3")
+        manager = AsyncKernelManager(kernel_name=kernel_name)
+        self.event(
+            "kernel.state",
+            notebook_id=notebook_id,
+            payload={"state": "starting", "generation": 1},
+        )
+        await manager.start_kernel(cwd=request["payload"].get("cwd"))
+        client = manager.client()
+        client.start_channels()
+        try:
+            await client.wait_for_ready(
+                timeout=float(request["payload"].get("timeout", 30))
+            )
+        except Exception:
+            client.stop_channels()
+            await manager.shutdown_kernel(now=True)
+            raise
+        session = KernelSession(
+            self, notebook_id, kernel_name, manager, client, state="idle"
+        )
+        self.sessions[notebook_id] = session
+        session.start_tasks()
+        session.emit_state("idle")
+        return {"state": "idle", "kernel_name": kernel_name, "generation": 1}
+
+    async def _handle_kernel_interrupt(self, request: dict[str, Any]) -> dict[str, Any]:
+        session = self._session(request)
+        session.emit_state("interrupting")
+        if session.active:
+            waiter = session.stdin_waiters.pop(session.active.execution_id, None)
+            if waiter and not waiter.done():
+                waiter.set_result("")
+        await session.manager.interrupt_kernel()
+        return {"state": "interrupting", "generation": session.generation}
+
+    async def _handle_kernel_restart(self, request: dict[str, Any]) -> dict[str, Any]:
+        session = self._session(request)
+        await session.restart()
+        return {"state": "idle", "generation": session.generation}
+
+    async def _handle_kernel_shutdown(self, request: dict[str, Any]) -> dict[str, Any]:
+        session = self._session(request)
+        await session.shutdown(now=bool(request["payload"].get("now", False)))
+        self.sessions.pop(session.notebook_id, None)
+        return {"state": "stopped"}
+
+    async def _handle_execution_enqueue(
+        self, request: dict[str, Any]
+    ) -> dict[str, Any]:
+        session = self._session(request)
+        if session.state in {"dead", "stopped", "shutting_down", "restarting"}:
+            raise ValueError(f"kernel cannot execute while {session.state}")
+        payload = request["payload"]
+        execution_id = str(payload.get("execution_id") or uuid.uuid4())
+        if execution_id in session.executions:
+            raise ValueError("duplicate execution_id")
+        execution = Execution(
+            execution_id=execution_id,
+            cell_id=str(request.get("cell_id") or payload.get("cell_id") or ""),
+            revision=int(request.get("revision", payload.get("revision", 0))),
+            code=str(payload.get("code", "")),
+            allow_stdin=bool(payload.get("allow_stdin", True)),
+            stop_on_error=bool(payload.get("stop_on_error", True)),
+        )
+        if not execution.cell_id:
+            raise ValueError("cell_id is required")
+        await session.enqueue(execution)
+        return {"execution_id": execution_id, "state": "queued"}
+
+    async def _handle_execution_cancel(self, request: dict[str, Any]) -> dict[str, Any]:
+        session = self._session(request)
+        execution_id = str(request["payload"].get("execution_id", ""))
+        return {
+            "execution_id": execution_id,
+            "cancelled": await session.cancel(execution_id),
+        }
+
+    async def _handle_execution_stdin_reply(
+        self, request: dict[str, Any]
+    ) -> dict[str, Any]:
+        session = self._session(request)
+        execution_id = str(request["payload"].get("execution_id", ""))
+        accepted = await session.reply_stdin(
+            execution_id, str(request["payload"].get("value", ""))
+        )
+        return {"execution_id": execution_id, "accepted": accepted}
+
+    async def close(self) -> None:
+        sessions = list(self.sessions.values())
+        self.sessions.clear()
+        for session in sessions:
+            with contextlib.suppress(Exception):
+                await session.shutdown(now=True)
+
+
+async def async_main() -> None:
+    server = SidecarServer()
+    await server.run()
+
+
+def main() -> None:
+    try:
+        asyncio.run(async_main())
+    except KeyboardInterrupt:
+        pass
+
+
+if __name__ == "__main__":
+    main()

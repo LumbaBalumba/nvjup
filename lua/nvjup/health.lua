@@ -1,3 +1,6 @@
+local config = require("nvjup.config")
+local rpc = require("nvjup.rpc")
+
 local M = {}
 
 function M.check()
@@ -40,6 +43,24 @@ function M.check()
 		vim.health.info("ruff was not found; Ruff LSP integration is optional")
 	end
 
+	vim.health.start("nvjup Jupyter sidecar")
+	local command = rpc.default_command()
+	if config.options.sidecar.command then
+		vim.health.ok("custom sidecar command is configured: " .. table.concat(command, " "))
+	else
+		local result = vim.system({ command[1], "-c", "import jupyter_client" }, { text = true }):wait(5000)
+		if result.code == 0 then
+			vim.health.ok("jupyter_client is available to " .. command[1])
+		else
+			vim.health.error("jupyter_client is unavailable to " .. command[1] .. "; configure sidecar.python")
+		end
+		if vim.uv.fs_stat(command[2]) then
+			vim.health.ok("sidecar entry point is available")
+		else
+			vim.health.error("sidecar entry point is missing: " .. tostring(command[2]))
+		end
+	end
+
 	local term = vim.env.TERM or ""
 	local term_program = vim.env.TERM_PROGRAM or ""
 	if term:find("kitty", 1, true) or term_program:lower():find("kitty", 1, true) then
@@ -48,8 +69,8 @@ function M.check()
 		vim.health.info("Kitty was not detected; text/extmark rendering remains available")
 	end
 
-	vim.health.info("Stage 2 provides notebook editing, projected Tree-sitter highlighting, and shadow-document LSP")
-	vim.health.info("Kernel execution and terminal image backends are not active yet")
+	vim.health.info("Stage 3 provides notebook editing, LSP, Jupyter kernel lifecycle, and cell execution")
+	vim.health.info("Terminal image and interactive browser renderers are scheduled for later stages")
 end
 
 return M

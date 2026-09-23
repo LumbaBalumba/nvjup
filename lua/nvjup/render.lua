@@ -70,13 +70,34 @@ local function cell_type_label(cell)
 	return "Code", "NvJupCode"
 end
 
+local function execution_label(cell)
+	if cell.cell_type ~= "code" then
+		return " "
+	end
+	if cell.stale or cell.execution_status == "stale" then
+		return "*"
+	end
+	local labels = {
+		queued = "…",
+		sent = "…",
+		running = "▶",
+		waiting_input = "?",
+		failed = "!",
+		cancelled = "×",
+	}
+	if labels[cell.execution_status] then
+		return labels[cell.execution_status]
+	end
+	if cell.execution_count ~= nil and cell.execution_count ~= vim.NIL then
+		return tostring(cell.execution_count)
+	end
+	return " "
+end
+
 local function header_text(cell, index, count, width, active)
 	local label = cell_type_label(cell)
-	local execution = " "
-	if cell.cell_type == "code" and cell.execution_count ~= nil and cell.execution_count ~= vim.NIL then
-		execution = tostring(cell.execution_count)
-	end
-	local body = string.format("╭─ [%s] %s · cell %d/%d · %s ", execution, label, index, count, cell.id)
+	local body =
+		string.format("╭─ [%s] %s · cell %d/%d · %s ", execution_label(cell), label, index, count, cell.id)
 	return util.fit_border(body, width, "─"), active and "NvJupHeaderActive" or "NvJupHeader"
 end
 

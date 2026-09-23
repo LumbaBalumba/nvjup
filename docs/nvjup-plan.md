@@ -889,6 +889,8 @@ LSP должен быть реализован до kernel execution, чтобы
 
 ### Этап 3 — kernel execution
 
+Статус: реализован. Детали и команды описаны в [`stage3.md`](stage3.md).
+
 - Python sidecar;
 - kernel lifecycle;
 - current/above/below/all;

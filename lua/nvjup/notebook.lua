@@ -46,21 +46,42 @@ local function existing_ids(state)
 	return ids
 end
 
+local function initial_execution_status(outputs, execution_count)
+	for _, item in ipairs(outputs or {}) do
+		if item.output_type == "error" then
+			return "failed"
+		end
+	end
+	if execution_count ~= nil and execution_count ~= vim.NIL then
+		return "completed"
+	end
+	return "not_executed"
+end
+
 local function wrap_cell(state, raw)
 	raw = vim.deepcopy(raw)
 	local had_id = type(raw.id) == "string" and raw.id ~= ""
 	local id = had_id and raw.id or util.new_cell_id(existing_ids(state))
 	local cell_type = vim.tbl_contains({ "code", "markdown", "raw" }, raw.cell_type) and raw.cell_type or "raw"
+	local source = util.source_to_string(raw.source)
+	local outputs = raw.outputs or {}
 	local cell = {
 		id = id,
 		had_id = had_id,
 		is_new = false,
 		cell_type = cell_type,
-		source = util.source_to_string(raw.source),
-		outputs = raw.outputs or {},
+		source = source,
+		outputs = outputs,
 		execution_count = raw.execution_count,
 		raw = raw,
 		range = {},
+		revision = 0,
+		execution_status = initial_execution_status(outputs, raw.execution_count),
+		stale = false,
+		last_executed_source = (#outputs > 0 or (raw.execution_count ~= nil and raw.execution_count ~= vim.NIL))
+				and source
+			or nil,
+		display_ids = {},
 	}
 	state.cell_store[id] = cell
 	return cell
@@ -98,6 +119,10 @@ local function create_cell(state, cell_type, source)
 		execution_count = nil,
 		raw = raw,
 		range = {},
+		revision = 0,
+		execution_status = "not_executed",
+		stale = false,
+		display_ids = {},
 	}
 	state.cell_store[id] = cell
 	return cell
@@ -110,7 +135,29 @@ local function clear_execution(cell)
 		cell.raw.outputs = {}
 		cell.raw.execution_count = vim.NIL
 		cell.saved_code_state = nil
+		cell.execution_status = "not_executed"
+		cell.stale = false
+		cell.last_executed_source = nil
+		cell.display_ids = {}
 	end
+end
+
+local function update_source(cell, source)
+	if source == cell.source then
+		return false
+	end
+	cell.source = source
+	cell.revision = (cell.revision or 0) + 1
+	if cell.cell_type == "code" then
+		local has_result = cell.last_executed_source ~= nil
+			or cell.execution_status == "running"
+			or cell.execution_status == "waiting_input"
+			or cell.execution_status == "queued"
+		if has_result and source ~= cell.last_executed_source then
+			cell.stale = true
+		end
+	end
+	return true
 end
 
 local function apply_cell_type(cell, cell_type)
@@ -127,9 +174,18 @@ local function apply_cell_type(cell, cell_type)
 		local saved = cell.saved_code_state
 		cell.outputs = saved and vim.deepcopy(saved.outputs) or cell.raw.outputs or {}
 		cell.execution_count = saved and saved.execution_count or cell.raw.execution_count
+		cell.execution_status = initial_execution_status(cell.outputs, cell.execution_count)
+		cell.last_executed_source = (
+			#cell.outputs > 0 or (cell.execution_count ~= nil and cell.execution_count ~= vim.NIL)
+		)
+				and cell.source
+			or nil
 	else
 		cell.outputs = {}
 		cell.execution_count = nil
+		cell.execution_status = "not_executed"
+		cell.stale = false
+		cell.last_executed_source = nil
 	end
 	cell.cell_type = cell_type
 end
@@ -237,12 +293,16 @@ function Notebook:sync_from_buffer()
 				execution_count = nil,
 				raw = raw,
 				range = {},
+				revision = 0,
+				execution_status = "not_executed",
+				stale = false,
+				display_ids = {},
 			}
 			self.cell_store[entry.id] = cell
 		end
 
 		apply_cell_type(cell, entry.cell_type)
-		cell.source = util.lines_to_source(entry.lines)
+		update_source(cell, util.lines_to_source(entry.lines))
 		local next_marker = parsed[index + 1] and parsed[index + 1].marker_row or #lines
 		cell.range = {
 			marker_row = entry.marker_row,
@@ -270,6 +330,19 @@ end
 function Notebook:current_cell()
 	local index = self:cell_index_at()
 	return self.cells[index], index
+end
+
+function Notebook:cell_by_id(id)
+	local cell = self.cell_store[id]
+	if not cell then
+		return nil
+	end
+	for index, candidate in ipairs(self.cells) do
+		if candidate == cell then
+			return cell, index
+		end
+	end
+	return nil
 end
 
 function Notebook:goto_cell(index)
@@ -329,7 +402,7 @@ function Notebook:delete_cell(index)
 	assert(self:sync_from_buffer())
 	if #self.cells == 1 then
 		local cell = self.cells[1]
-		cell.source = ""
+		update_source(cell, "")
 		clear_execution(cell)
 		self:replace_buffer({ restore_cursor = false })
 		vim.bo[self.buf].modified = true
@@ -387,7 +460,7 @@ function Notebook:split_cell(index, row, column)
 		table.insert(after, lines[line_index])
 	end
 
-	cell.source = util.lines_to_source(before)
+	update_source(cell, util.lines_to_source(before))
 	clear_execution(cell)
 	local new_cell = create_cell(self, cell.cell_type, util.lines_to_source(after))
 	table.insert(self.cells, index + 1, new_cell)
@@ -406,6 +479,16 @@ function Notebook:clear_output(index)
 	return true
 end
 
+function Notebook:clear_all_outputs()
+	assert(self:sync_from_buffer())
+	for _, cell in ipairs(self.cells) do
+		clear_execution(cell)
+		cell.output_collapsed = false
+	end
+	vim.bo[self.buf].modified = true
+	return true
+end
+
 function Notebook:toggle_output(index)
 	local cell = assert(self.cells[index], "invalid cell index")
 	cell.output_collapsed = not cell.output_collapsed
@@ -420,7 +503,7 @@ function Notebook:merge_below(index)
 	local cell = self.cells[index]
 	local below = self.cells[index + 1]
 	local separator = (cell.source == "" or below.source == "") and "" or "\n"
-	cell.source = cell.source .. separator .. below.source
+	update_source(cell, cell.source .. separator .. below.source)
 	clear_execution(cell)
 	table.remove(self.cells, index + 1)
 	self:replace_buffer({ restore_cursor = false })
@@ -440,6 +523,19 @@ function Notebook:outline_items()
 		end
 		local count = cell.execution_count ~= nil and cell.execution_count ~= vim.NIL and tostring(cell.execution_count)
 			or " "
+		if cell.stale or cell.execution_status == "stale" then
+			count = "*"
+		elseif cell.execution_status == "queued" or cell.execution_status == "sent" then
+			count = "…"
+		elseif cell.execution_status == "running" then
+			count = "▶"
+		elseif cell.execution_status == "waiting_input" then
+			count = "?"
+		elseif cell.execution_status == "failed" then
+			count = "!"
+		elseif cell.execution_status == "cancelled" then
+			count = "×"
+		end
 		table.insert(items, {
 			index = index,
 			cell = cell,

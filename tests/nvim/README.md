@@ -21,7 +21,9 @@ Useful commands:
 - `:NvJupOpenFixture [name]` — open a generated notebook fixture;
 - `:NvJupOutline` — select a notebook cell;
 - `:NvJupRefresh` — rebuild extmark rendering after manual marker repair;
-- `:NvJupLspStatus` — inspect shadow documents and attached language clients.
+- `:NvJupLspStatus` — inspect shadow documents and attached language clients;
+- `:NvJupKernelStatus` — inspect kernel generation, queue, and active execution;
+- `:NvJupRunCurrent` / `:NvJupRunAll` — execute code cells through the sidecar.
 
-Run Stage 1, Stage 2, and deterministic LSP integration suites through `./scripts/test`.
-Run the installed Pyright/Ruff smoke test through `./scripts/test-real-lsp`.
+Run Stage 1, Stage 2, Stage 3, deterministic LSP, and real-kernel integration suites through `./scripts/test`.
+Run the installed Pyright/Ruff smoke test through `./scripts/test-real-lsp` and the isolated real `ipykernel` profile through `./scripts/test-real-kernel`.

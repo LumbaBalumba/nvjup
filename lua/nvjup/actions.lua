@@ -108,8 +108,15 @@ end
 
 function M.clear_output()
 	local nb = state()
-	local _, index = nb:current_cell()
+	local cell, index = nb:current_cell()
+	require("nvjup.kernel").forget_displays(nb, cell.id)
 	return refresh(nb:clear_output(index))
+end
+
+function M.clear_all_outputs()
+	local nb = state()
+	require("nvjup.kernel").forget_displays(nb)
+	return refresh(nb:clear_all_outputs())
 end
 
 function M.toggle_output()

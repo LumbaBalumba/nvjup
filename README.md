@@ -2,7 +2,7 @@
 
 `nvjup` is a Neovim-native editor for Jupyter notebooks.
 
-The repository now contains the **Stage 2 notebook editor and language tooling foundation**:
+The repository now contains the **Stage 3 notebook editor, language tooling, and kernel execution foundation**:
 
 - `.ipynb` opens as code, Markdown, and raw cells rather than JSON;
 - jupynvim-inspired cell borders, headers, execution counts, and output sections;
@@ -19,9 +19,13 @@ The repository now contains the **Stage 2 notebook editor and language tooling f
 - automatic project-local `.venv`/`venv` selection for Pyright;
 - IPython magic preprocessing and UTF-8/UTF-16/UTF-32 source maps;
 - projected Tree-sitter highlighting for code and Markdown cells, including mixed-language notebooks;
+- an isolated Python `jupyter_client` sidecar with owned kernel lifecycle;
+- current/advance/above/below/all/range execution through an immutable sequential queue;
+- streaming stdout/stderr, execute results, display updates, deferred clears, errors, and stdin;
+- interrupt, restart, restart-and-run-all, execution counts, stale-result tracking, and output persistence;
 - independent Neovim test configuration and Docker validation.
 
-Kernel execution, real terminal image placement, and interactive Plotly/Bokeh belong to later stages. Existing rich outputs are currently represented by text or explicit capability placeholders.
+Real terminal image placement and interactive Plotly/Bokeh belong to later stages. Rich outputs that do not yet have a Stage 4 renderer are represented by text or explicit capability placeholders.
 
 The complete roadmap is in [`docs/nvjup-plan.md`](docs/nvjup-plan.md). Normative contracts are indexed in [`docs/spec/README.md`](docs/spec/README.md).
 
@@ -30,9 +34,11 @@ The complete roadmap is in [`docs/nvjup-plan.md`](docs/nvjup-plan.md). Normative
 - Neovim 0.11 or newer;
 - a Tree-sitter parser for every language that should be highlighted;
 - an LSP server for every language that should receive language features;
-- Python 3.11 or newer and [`uv`](https://docs.astral.sh/uv/) for tests.
+- Python 3.11 or newer with `jupyter_client` for kernel execution;
+- an installed kernelspec, such as the one provided by `ipykernel`;
+- [`uv`](https://docs.astral.sh/uv/) for the development and test environment.
 
-The editor and LSP proxy are pure Lua and have no runtime Python dependency. Python notebooks use `pyright-langserver` and `ruff server` automatically when those executables are available. Missing parsers and servers degrade gracefully.
+The editor and LSP proxy remain pure Lua. Kernel transport runs in a separate Python sidecar and does not depend on `pynvim` or `python3_host_prog`. Python notebooks use `pyright-langserver` and `ruff server` automatically when those executables are available. Missing parsers and servers degrade gracefully.
 
 ## Test with the isolated configuration
 
@@ -70,8 +76,14 @@ The launcher redirects config, data, state, and cache into `.test-runtime/`.
 | `<localleader>jt` | cycle code → Markdown → raw |
 | `<localleader>jz` | collapse/expand cell source |
 | `<localleader>jx` | collapse/expand cell output |
-| `<localleader>jc` | clear cell output |
+| `<localleader>jc` / `<localleader>jC` | clear current / all outputs |
 | `<localleader>jl` | notebook outline |
+| `<localleader>jr` | run current cell |
+| `<localleader>jn` | run current cell and advance |
+| `<localleader>ju` / `<localleader>jb` | run code cells above / below |
+| `<localleader>ja` | run all code cells |
+| `<localleader>ji` | interrupt kernel |
+| `<localleader>jR` | restart kernel |
 
 Language actions intentionally mirror the normal-code mappings from the target Neovim configuration:
 
@@ -109,7 +121,19 @@ Commands:
 :NvJupCellToggleSource
 :NvJupCellToggleOutput
 :NvJupCellClearOutput
+:NvJupClearAllOutputs
 :NvJupOutline
+:NvJupRunCurrent
+:NvJupRunAndAdvance
+:NvJupRunAbove
+:NvJupRunBelow
+:NvJupRunAll
+:[range]NvJupRunRange
+:NvJupKernelInterrupt
+:NvJupKernelRestart
+:NvJupKernelRestartRunAll
+:NvJupKernelShutdown
+:NvJupKernelStatus
 :NvJupLspDefinition
 :NvJupLspDeclaration
 :NvJupLspImplementation
@@ -124,6 +148,32 @@ Commands:
 :NvJupLspSemanticTokens
 :NvJupLspStatus
 ```
+
+## Kernel execution configuration
+
+```lua
+require("nvjup").setup({
+  sidecar = {
+    -- Python that has jupyter_client installed. false auto-detects one.
+    python = false,
+    -- A complete custom command can be supplied instead.
+    command = false,
+  },
+  kernel = {
+    default_name = "python3",
+    start_timeout_seconds = 30,
+    shutdown_on_close = true,
+  },
+  execution = {
+    allow_stdin = true,
+    clear_before_run = true,
+    repeat_policy = "queue", -- queue, cancel, or replace
+    stop_on_error = true,
+  },
+})
+```
+
+The notebook kernelspec metadata takes precedence over `kernel.default_name`. Batch commands snapshot cell IDs, source, and revisions before execution and dispatch one cell at a time. Editing a cell while its snapshot is running preserves the returned output but marks it stale (`[*]`). Outputs and execution counts are written back into nbformat on `:write`.
 
 ## Language tooling configuration
 
@@ -167,7 +217,9 @@ This runs:
 - Python contract/fixture tests;
 - Stage 1 headless notebook editor tests;
 - Stage 2 source-map and Tree-sitter tests;
-- a real Neovim LSP client against a deterministic protocol test server.
+- a real Neovim LSP client against a deterministic protocol test server;
+- Stage 3 queue, lifecycle, output-routing, stdin, and stale-result tests;
+- real `ipykernel` execution, interruption, restart, and sequential batch tests.
 
 To validate the installed Pyright and Ruff servers on the host:
 
@@ -175,7 +227,11 @@ To validate the installed Pyright and Ruff servers on the host:
 ./scripts/test-real-lsp
 ```
 
-That test verifies a real cross-cell Pyright definition jump.
+That test verifies a real cross-cell Pyright definition jump. To run only the real kernel integration profile:
+
+```bash
+./scripts/test-real-kernel
+```
 
 ## Docker
 

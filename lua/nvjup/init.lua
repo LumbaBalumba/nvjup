@@ -1,5 +1,6 @@
 local config = require("nvjup.config")
 local features = require("nvjup.features")
+local kernel = require("nvjup.kernel")
 local lsp = require("nvjup.lsp")
 local notebook = require("nvjup.notebook")
 local render = require("nvjup.render")
@@ -61,7 +62,29 @@ local function define_buffer_commands(buf)
 	command("NvJupCellToggleSource", actions.toggle_source)
 	command("NvJupCellToggleOutput", actions.toggle_output)
 	command("NvJupCellClearOutput", actions.clear_output)
+	command("NvJupClearAllOutputs", actions.clear_all_outputs)
 	command("NvJupOutline", actions.outline)
+	command("NvJupRunCurrent", kernel.run_current)
+	command("NvJupRunAndAdvance", kernel.run_and_advance)
+	command("NvJupRunAbove", kernel.run_above)
+	command("NvJupRunBelow", kernel.run_below)
+	command("NvJupRunAll", kernel.run_all)
+	command("NvJupRunRange", function(args)
+		kernel.run_range(args.line1, args.line2)
+	end, { range = true })
+	command("NvJupKernelInterrupt", kernel.interrupt)
+	command("NvJupKernelRestart", kernel.restart)
+	command("NvJupKernelRestartRunAll", kernel.restart_and_run_all)
+	command("NvJupKernelShutdown", function()
+		kernel.shutdown(assert(notebook.get(buf)))
+	end)
+	command("NvJupKernelStatus", function()
+		vim.notify(
+			vim.inspect(kernel.status(assert(notebook.get(buf)))),
+			vim.log.levels.INFO,
+			{ title = "nvjup kernel" }
+		)
+	end)
 	command("NvJupLspDefinition", lsp.definition)
 	command("NvJupLspDeclaration", lsp.declaration)
 	command("NvJupLspImplementation", lsp.implementation)
@@ -165,6 +188,7 @@ local function attach_buffer(state)
 		buffer = buf,
 		once = true,
 		callback = function()
+			kernel.detach(notebook.get(buf))
 			if package.loaded["nvjup.cmp"] then
 				require("nvjup.cmp").detach(buf)
 			end
@@ -228,6 +252,7 @@ function M.setup(options)
 end
 
 M.actions = actions
+M.kernel = kernel
 M.lsp = lsp
 M.notebook = notebook
 M.render = render

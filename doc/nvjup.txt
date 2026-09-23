@@ -8,8 +8,9 @@ CONTENTS                                                        *nvjup-contents*
 3. Navigation                                        |nvjup-navigation|
 4. Cell operations                                   |nvjup-cells|
 5. Language tooling                                  |nvjup-language|
-6. Commands                                          |nvjup-commands|
-7. Current limitations                               |nvjup-limitations|
+6. Kernel execution                                  |nvjup-execution|
+7. Commands                                          |nvjup-commands|
+8. Current limitations                               |nvjup-limitations|
 
 ==============================================================================
 1. INTRODUCTION                                  *nvjup-introduction*
@@ -41,6 +42,19 @@ Options include:
     },
     treesitter = {
       enabled = true,
+    },
+    sidecar = {
+      -- Python containing jupyter_client; false auto-detects one.
+      python = false,
+      command = false,
+    },
+    kernel = {
+      default_name = "python3",
+      shutdown_on_close = true,
+    },
+    execution = {
+      repeat_policy = "queue", -- queue, cancel, or replace
+      stop_on_error = true,
     },
     lsp = {
       auto_start = true,
@@ -84,7 +98,15 @@ the jumplist.
 <LocalLeader>jz         Collapse or expand cell source.
 <LocalLeader>jx         Collapse or expand cell output.
 <LocalLeader>jc         Clear cell output.
+<LocalLeader>jC         Clear all notebook outputs.
 <LocalLeader>jl         Open notebook outline.
+<LocalLeader>jr         Run current cell.
+<LocalLeader>jn         Run current cell and advance.
+<LocalLeader>ju         Run code cells above the current cell.
+<LocalLeader>jb         Run code cells below the current cell.
+<LocalLeader>ja         Run all code cells.
+<LocalLeader>ji         Interrupt kernel.
+<LocalLeader>jR         Restart kernel.
 
 All mappings are buffer-local and configurable.
 
@@ -123,7 +145,27 @@ back from shadow buffers. Edits crossing a cell boundary, synthetic separator,
 or IPython placeholder are rejected.
 
 ==============================================================================
-6. COMMANDS                                                 *nvjup-commands*
+6. KERNEL EXECUTION                                       *nvjup-execution*
+
+Kernel transport runs in a separate Python jupyter_client sidecar. It does not
+use pynvim or python3_host_prog. The sidecar starts lazily on first execution
+and uses the notebook kernelspec name or `kernel.default_name`.
+
+Batch commands snapshot cell IDs, source, and revisions, skip non-code cells,
+and execute sequentially. `execution.stop_on_error` cancels the unsent tail of
+a failed batch. Editing a running snapshot preserves its output but marks it
+stale with [*]. Output changes and execution counts are persisted by :write.
+
+The sidecar routes stream, execute_result, display_data, update_display_data,
+clear_output, error, and input_request messages. Normal stdin uses vim.ui.input;
+password input uses inputsecret(). Interrupt and restart are explicit actions.
+
+Header states are [ ] not executed, […] queued, [▶] running, [?] waiting for
+input, [!] failed, [×] cancelled, and [*] stale. Completed cells show their
+numeric execution count.
+
+==============================================================================
+7. COMMANDS                                                 *nvjup-commands*
 
 :NvJupWrite             Save the notebook.
 :NvJupRefresh           Synchronize model and redraw extmarks.
@@ -141,7 +183,19 @@ or IPython placeholder are rejected.
 :NvJupCellToggleSource  Collapse or expand current cell source.
 :NvJupCellToggleOutput  Collapse or expand current cell output.
 :NvJupCellClearOutput   Clear output and execution count.
+:NvJupClearAllOutputs   Clear every output and execution count.
 :NvJupOutline           Open cell outline through vim.ui.select().
+:NvJupRunCurrent        Run current code cell.
+:NvJupRunAndAdvance     Run current cell and move to the next cell.
+:NvJupRunAbove          Run code cells above the current cell.
+:NvJupRunBelow          Run code cells below the current cell.
+:NvJupRunAll            Run all code cells sequentially.
+:NvJupRunRange          Run code cells intersecting the command range.
+:NvJupKernelInterrupt   Interrupt the active kernel request.
+:NvJupKernelRestart     Restart the owned kernel.
+:NvJupKernelRestartRunAll Restart and run all code cells.
+:NvJupKernelShutdown    Shut down the owned kernel and sidecar.
+:NvJupKernelStatus      Show lifecycle, generation, queue, and active request.
 :NvJupLspDefinition     Go to definition.
 :NvJupLspDeclaration    Go to declaration.
 :NvJupLspImplementation Go to implementation.
@@ -157,11 +211,12 @@ or IPython placeholder are rejected.
 :NvJupLspStatus         Show shadow documents and attached clients.
 
 ==============================================================================
-7. CURRENT LIMITATIONS                                  *nvjup-limitations*
+8. CURRENT LIMITATIONS                                  *nvjup-limitations*
 
-Stage 2 does not execute cells. Saved outputs are rendered as terminal text and
-capability placeholders. Kitty image placement, interactive Plotly/Bokeh, and
-Jupyter kernels are scheduled for later stages. Completion uses nvim-cmp when
+Stage 3 executes cells and persists standard nbformat outputs, but rich static
+images still use capability placeholders. Kitty image placement and interactive
+Plotly/Bokeh are scheduled for later stages. Remote Jupyter Server attachment
+and kernel-backed completion are also later work. Completion uses nvim-cmp when
 available and Neovim's built-in completion UI as a fallback.
 
 vim:tw=78:ts=8:noet:ft=help:norl:

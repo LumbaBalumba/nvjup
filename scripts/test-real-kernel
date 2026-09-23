@@ -1,0 +1,17 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+root="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")/.." && pwd)"
+cd "${root}"
+
+if [[ ! -x "${root}/.venv/bin/python" ]]; then
+	echo "run 'uv sync --all-groups' before the real kernel integration test" >&2
+	exit 2
+fi
+
+if ! "${root}/.venv/bin/python" -c 'import ipykernel, jupyter_client' >/dev/null 2>&1; then
+	echo "ipykernel and jupyter_client are required in ${root}/.venv" >&2
+	exit 2
+fi
+
+./scripts/test-nvim --headless '+luafile tests/nvim/kernel_integration_spec.lua'

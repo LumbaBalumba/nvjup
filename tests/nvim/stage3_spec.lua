@@ -1,0 +1,353 @@
+local config = require("nvjup.config")
+local kernel = require("nvjup.kernel")
+local notebook = require("nvjup.notebook")
+local render = require("nvjup.render")
+local rpc = require("nvjup.rpc")
+
+local root = assert(vim.g.nvjup_project_root)
+local failures = {}
+local passed = 0
+local clients = {}
+
+local function test(name, callback)
+	local ok, err = xpcall(callback, debug.traceback)
+	if ok then
+		passed = passed + 1
+		print("ok - " .. name)
+	else
+		table.insert(failures, name .. "\n" .. err)
+		print("not ok - " .. name)
+	end
+end
+
+local function fixture_path(name)
+	return vim.fs.joinpath(root, "tests", "fixtures", "notebooks", name)
+end
+
+local function open_fixture(name)
+	vim.cmd.edit(vim.fn.fnameescape(fixture_path(name)))
+	local state = assert(notebook.get())
+	assert(state:sync_from_buffer())
+	render.render(state)
+	return state
+end
+
+local function close_fixture(state)
+	if state and vim.api.nvim_buf_is_valid(state.buf) then
+		vim.api.nvim_buf_delete(state.buf, { force = true })
+	end
+end
+
+local function fake_factory(options)
+	local client = {
+		alive = false,
+		requests = {},
+		options = options,
+	}
+	function client:start()
+		self.alive = true
+		return true
+	end
+	function client:request(request_type, payload, context, callback)
+		local request = {
+			type = request_type,
+			payload = vim.deepcopy(payload or {}),
+			context = vim.deepcopy(context or {}),
+			callback = callback,
+		}
+		table.insert(self.requests, request)
+		if request_type == "sidecar.hello" and callback then
+			callback(nil, { protocols = { "nvjup/1" } })
+		elseif request_type == "kernel.start" and callback then
+			callback(nil, { state = "idle", generation = 1 })
+		elseif request_type == "execution.enqueue" and callback then
+			callback(nil, { execution_id = payload.execution_id, state = "queued" })
+		elseif request_type == "kernel.restart" and callback then
+			callback(nil, { state = "idle", generation = 2 })
+		elseif callback then
+			callback(nil, {})
+		end
+		return "fake-request-" .. #self.requests
+	end
+	function client:emit(message_type, payload, request)
+		request = request or self:last("execution.enqueue")
+		self.options.on_event({
+			protocol = "nvjup/1",
+			kind = "event",
+			type = message_type,
+			notebook_id = request and request.context.notebook_id or nil,
+			cell_id = request and request.context.cell_id or nil,
+			revision = request and request.context.revision or nil,
+			payload = vim.deepcopy(payload or {}),
+		})
+	end
+	function client:last(request_type)
+		for index = #self.requests, 1, -1 do
+			if self.requests[index].type == request_type then
+				return self.requests[index]
+			end
+		end
+	end
+	function client:count(request_type)
+		local count = 0
+		for _, request in ipairs(self.requests) do
+			if request.type == request_type then
+				count = count + 1
+			end
+		end
+		return count
+	end
+	function client:shutdown(callback)
+		self.alive = false
+		if callback then
+			callback()
+		end
+	end
+	function client:kill()
+		self.alive = false
+	end
+	table.insert(clients, client)
+	return client
+end
+
+local function setup_fake()
+	clients = {}
+	kernel._set_client_factory(fake_factory)
+	config.options.execution.stop_on_error = true
+	config.options.execution.repeat_policy = "queue"
+	config.options.execution.clear_before_run = true
+	config.options.execution.allow_stdin = true
+end
+
+local function code_cells(state)
+	local result = {}
+	for _, cell in ipairs(state.cells) do
+		if cell.cell_type == "code" then
+			table.insert(result, cell)
+		end
+	end
+	return result
+end
+
+local function terminal(client, request, state_name, execution_count)
+	client:emit("execution.state", {
+		execution_id = request.payload.execution_id,
+		state = state_name,
+		execution_count = execution_count,
+	}, request)
+end
+
+setup_fake()
+
+test("builds the default Python sidecar command from the plugin root", function()
+	local command = rpc.default_command()
+	assert(command[1]:find("python", 1, true))
+	assert(command[2] == vim.fs.joinpath(root, "python", "nvjup_sidecar_main.py"))
+end)
+
+test("executes immutable cell snapshots sequentially and persists outputs", function()
+	setup_fake()
+	local state = open_fixture("09_lsp_mapping.ipynb")
+	local cells = code_cells(state)
+	local _, count = kernel.run_cells(state, { cells[1], cells[2] })
+	assert(count == 2)
+	local client = assert(clients[1])
+	assert(client:count("execution.enqueue") == 1)
+	local first = assert(client:last("execution.enqueue"))
+	assert(first.payload.code == cells[1].source)
+	client:emit("execution.stream", {
+		execution_id = first.payload.execution_id,
+		name = "stdout",
+		text = "first output\n",
+	}, first)
+	client:emit("execution.display", {
+		execution_id = first.payload.execution_id,
+		output_type = "execute_result",
+		data = { ["text/plain"] = "42" },
+		metadata = {},
+		execution_count = 7,
+	}, first)
+	terminal(client, first, "completed", 7)
+	assert(vim.wait(1000, function()
+		return client:count("execution.enqueue") == 2
+	end))
+	local second = assert(client:last("execution.enqueue"))
+	assert(second.context.cell_id == cells[2].id)
+	terminal(client, second, "completed", 8)
+	assert(cells[1].execution_count == 7)
+	assert(cells[1].outputs[1].text == "first output\n")
+	assert(cells[1].outputs[2].data["text/plain"] == "42")
+	local path = vim.fn.tempname() .. ".ipynb"
+	assert(state:save(path))
+	local document = vim.json.decode(assert(io.open(path, "rb")):read("*a"))
+	assert(document.cells[2].execution_count == 7)
+	assert(document.cells[2].outputs[1].text == "first output\n")
+	vim.fs.rm(path, { force = true })
+	close_fixture(state)
+end)
+
+test("routes display updates, deferred clears, errors, and stdin replies", function()
+	setup_fake()
+	local state = open_fixture("09_lsp_mapping.ipynb")
+	local cell = code_cells(state)[1]
+	kernel.run_cells(state, { cell })
+	local client = assert(clients[1])
+	local request = assert(client:last("execution.enqueue"))
+	local execution_id = request.payload.execution_id
+	client:emit("execution.display", {
+		execution_id = execution_id,
+		output_type = "display_data",
+		data = { ["text/plain"] = "before" },
+		metadata = {},
+		transient = { display_id = "slot" },
+	}, request)
+	client:emit("execution.display_update", {
+		execution_id = execution_id,
+		data = { ["text/plain"] = "updated" },
+		metadata = {},
+		transient = { display_id = "slot" },
+	}, request)
+	assert(cell.outputs[1].data["text/plain"] == "updated")
+	client:emit("execution.clear_output", { execution_id = execution_id, wait = true }, request)
+	assert(#cell.outputs == 1)
+	client:emit("execution.stream", {
+		execution_id = execution_id,
+		name = "stderr",
+		text = "replacement\n",
+	}, request)
+	assert(#cell.outputs == 1 and cell.outputs[1].text == "replacement\n")
+
+	local original_input = vim.ui.input
+	vim.ui.input = function(options, callback)
+		assert(options.prompt == "Name: ")
+		callback("nvjup")
+	end
+	client:emit("execution.stdin_request", {
+		execution_id = execution_id,
+		prompt = "Name: ",
+		password = false,
+	}, request)
+	assert(vim.wait(1000, function()
+		return client:last("execution.stdin_reply") ~= nil
+	end))
+	assert(client:last("execution.stdin_reply").payload.value == "nvjup")
+	vim.ui.input = original_input
+
+	client:emit("execution.error", {
+		execution_id = execution_id,
+		ename = "ValueError",
+		evalue = "bad value",
+		traceback = { "trace" },
+	}, request)
+	terminal(client, request, "failed", 3)
+	assert(cell.outputs[#cell.outputs].output_type == "error")
+	assert(cell.execution_status == "failed")
+	close_fixture(state)
+end)
+
+test("updates a display_id created by an earlier cell", function()
+	setup_fake()
+	local state = open_fixture("09_lsp_mapping.ipynb")
+	local cells = code_cells(state)
+	kernel.run_cells(state, { cells[1], cells[2] })
+	local client = assert(clients[1])
+	local first = assert(client:last("execution.enqueue"))
+	client:emit("execution.display", {
+		execution_id = first.payload.execution_id,
+		output_type = "display_data",
+		data = { ["text/plain"] = "before" },
+		metadata = {},
+		transient = { display_id = "shared-slot" },
+	}, first)
+	terminal(client, first, "completed", 1)
+	assert(vim.wait(1000, function()
+		return client:count("execution.enqueue") == 2
+	end))
+	local second = assert(client:last("execution.enqueue"))
+	client:emit("execution.display_update", {
+		execution_id = second.payload.execution_id,
+		data = { ["text/plain"] = "updated later" },
+		metadata = {},
+		transient = { display_id = "shared-slot" },
+	}, second)
+	assert(cells[1].outputs[1].data["text/plain"] == "updated later")
+	assert(cells[1].outputs[1].transient == nil)
+	terminal(client, second, "completed", 2)
+	close_fixture(state)
+end)
+
+test("marks results stale when source changes during execution", function()
+	setup_fake()
+	local state = open_fixture("09_lsp_mapping.ipynb")
+	local cell = code_cells(state)[1]
+	kernel.run_cells(state, { cell })
+	local client = assert(clients[1])
+	local request = assert(client:last("execution.enqueue"))
+	vim.api.nvim_buf_set_lines(state.buf, cell.range.start_row, cell.range.start_row, false, { "# changed" })
+	assert(state:sync_from_buffer())
+	client:emit("execution.stream", {
+		execution_id = request.payload.execution_id,
+		name = "stdout",
+		text = "old revision\n",
+	}, request)
+	terminal(client, request, "completed", 4)
+	assert(cell.stale)
+	assert(cell.execution_status == "stale")
+	assert(cell.outputs[1].text == "old revision\n")
+	close_fixture(state)
+end)
+
+test("stops an immutable batch after an error", function()
+	setup_fake()
+	local state = open_fixture("09_lsp_mapping.ipynb")
+	local cells = code_cells(state)
+	kernel.run_cells(state, cells)
+	local client = assert(clients[1])
+	local first = assert(client:last("execution.enqueue"))
+	terminal(client, first, "failed", 1)
+	vim.wait(100)
+	assert(client:count("execution.enqueue") == 1)
+	assert(cells[2].execution_status == "cancelled")
+	assert(cells[3].execution_status == "cancelled")
+	close_fixture(state)
+end)
+
+test("exposes interrupt, restart, status, commands, and execution mappings", function()
+	setup_fake()
+	local state = open_fixture("09_lsp_mapping.ipynb")
+	kernel.run_cells(state, { code_cells(state)[1] })
+	local client = assert(clients[1])
+	assert(kernel.interrupt())
+	assert(client:last("kernel.interrupt"))
+	kernel.restart()
+	assert(client:last("kernel.restart"))
+	assert(kernel.status(state).generation == 2)
+	for _, command in ipairs({
+		"NvJupRunCurrent",
+		"NvJupRunAndAdvance",
+		"NvJupRunAbove",
+		"NvJupRunBelow",
+		"NvJupRunAll",
+		"NvJupRunRange",
+		"NvJupKernelInterrupt",
+		"NvJupKernelRestart",
+		"NvJupKernelRestartRunAll",
+		"NvJupKernelShutdown",
+	}) do
+		assert(vim.api.nvim_buf_get_commands(state.buf, {})[command], command)
+	end
+	for _, mapping in ipairs({ "<localleader>jr", "<localleader>jn", "<localleader>ja" }) do
+		assert(vim.fn.maparg(mapping, "n", false, true).buffer == 1, mapping)
+	end
+	close_fixture(state)
+end)
+
+kernel._set_client_factory(nil)
+
+if #failures > 0 then
+	print(table.concat(failures, "\n\n"))
+	vim.cmd("cquit " .. math.min(255, #failures))
+else
+	print(string.format("Stage 3 Lua tests: %d passed", passed))
+	vim.cmd("qa!")
+end

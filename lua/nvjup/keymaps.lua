@@ -1,5 +1,6 @@
 local actions = require("nvjup.actions")
 local config = require("nvjup.config")
+local kernel = require("nvjup.kernel")
 local lsp = require("nvjup.lsp")
 
 local M = {}
@@ -39,7 +40,15 @@ function M.attach(buf)
 	map(buf, "n", keys.toggle_source, actions.toggle_source, "Toggle cell source")
 	map(buf, "n", keys.toggle_output, actions.toggle_output, "Toggle cell output")
 	map(buf, "n", keys.clear_output, actions.clear_output, "Clear cell output")
+	map(buf, "n", keys.clear_all_outputs, actions.clear_all_outputs, "Clear all notebook outputs")
 	map(buf, "n", keys.outline, actions.outline, "Notebook outline")
+	map(buf, "n", keys.run_current, kernel.run_current, "Run current notebook cell")
+	map(buf, "n", keys.run_and_advance, kernel.run_and_advance, "Run current cell and advance")
+	map(buf, "n", keys.run_above, kernel.run_above, "Run notebook cells above")
+	map(buf, "n", keys.run_below, kernel.run_below, "Run notebook cells below")
+	map(buf, "n", keys.run_all, kernel.run_all, "Run all notebook cells")
+	map(buf, "n", keys.interrupt, kernel.interrupt, "Interrupt notebook kernel")
+	map(buf, "n", keys.restart, kernel.restart, "Restart notebook kernel")
 
 	-- Mirror the normal-code LSP bindings. These are buffer-local proxies to
 	-- per-language shadow documents rather than clients attached to notebook text.
