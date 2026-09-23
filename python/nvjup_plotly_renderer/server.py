@@ -321,8 +321,9 @@ class PlotlyRenderer:
                 + self._inline_script(self._plotly_source())
                 + "</script><script>"
                 + f"const figure={encoded};"
+                + "const layout=Object.assign({},figure.layout||{});delete layout.width;delete layout.height;layout.autosize=true;"
                 + f"const config=Object.assign({{responsive:{str(external).lower()},scrollZoom:true,displaylogo:false}},figure.config||{{}});"
-                + "Plotly.newPlot('plot',figure.data||[],figure.layout||{},config);"
+                + "Plotly.newPlot('plot',figure.data||[],layout,config);"
                 + (
                     "window.addEventListener('resize',()=>Plotly.Plots.resize(document.querySelector('#plot')));"
                     if external
@@ -344,19 +345,21 @@ class PlotlyRenderer:
                 if isinstance(roots, dict):
                     targets.update(str(target) for target in roots.values())
             containers = "".join(
-                f'<div id="{target}"></div>' for target in sorted(targets)
+                f'<div id="{target}" style="width:100%;height:100%"></div>'
+                for target in sorted(targets)
             )
             if not containers:
-                containers = '<div id="plot"></div>'
+                containers = '<div id="plot" style="width:100%;height:100%"></div>'
             body = (
                 containers
                 + "<script>"
                 + self._inline_script(self._bokeh_source())
                 + "</script><script>"
                 + f"const docs_json={docs};const render_items={items};"
-                + "Bokeh.embed.embed_items(docs_json,render_items);"
+                + "const resize_bokeh=()=>{for(const view of Object.values(Bokeh.index)){if('sizing_mode' in view.model)view.model.sizing_mode='stretch_both';if(view.resize_layout)view.resize_layout();}};"
+                + "Promise.resolve(Bokeh.embed.embed_items(docs_json,render_items)).then(resize_bokeh);"
                 + (
-                    "window.addEventListener('resize',()=>{for(const view of Object.values(Bokeh.index)){if(view.resize_layout)view.resize_layout();}});"
+                    "window.addEventListener('resize',resize_bokeh);"
                     if external
                     else ""
                 )

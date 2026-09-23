@@ -18,6 +18,9 @@ local last_renderer_status = {}
 local PLOTLY_MIME = "application/vnd.plotly.v1+json"
 local BOKEH_EXEC_MIME = "application/vnd.bokehjs_exec.v0+json"
 local BOKEH_LOAD_MIME = "application/vnd.bokehjs_load.v0+json"
+-- Logical render density; the 1:2 ratio matches Kitty's placeholder grid.
+local TUI_CELL_WIDTH_PX = 10
+local TUI_CELL_HEIGHT_PX = 20
 
 local function options()
 	return config.options.interactive or {}
@@ -554,6 +557,38 @@ local function close_focus()
 	end
 end
 
+local function focus_render_dimensions(window)
+	local columns = math.max(8, vim.api.nvim_win_get_width(window) - 6)
+	local rows = math.max(4, vim.api.nvim_win_get_height(window) - 3)
+	local width = columns * TUI_CELL_WIDTH_PX
+	local height = rows * TUI_CELL_HEIGHT_PX
+	local configured_width = options().width_px or 900
+	local configured_height = options().height_px or 540
+	local scale = math.min(
+		(options().interactive_width_px or 720) / configured_width,
+		(options().interactive_height_px or 432) / configured_height
+	)
+	return width, height, math.floor(width * scale + 0.5), math.floor(height * scale + 0.5)
+end
+
+local function resize_focus_renderer(entry)
+	if not focus or focus.entry ~= entry or not vim.api.nvim_win_is_valid(focus.win) then
+		return
+	end
+	local width, height, interactive_width, interactive_height = focus_render_dimensions(focus.win)
+	get_client():request("renderer.resize", {
+		figure_id = entry.figure_id,
+		width = width,
+		height = height,
+		interactive_width = interactive_width,
+		interactive_height = interactive_height,
+	}, {}, function(err, frame)
+		if not err and frame and frame.png then
+			store_frame(entry.state, entry, frame)
+		end
+	end)
+end
+
 local function resolve_entry(state, cell)
 	if not trust.allows_interactive(state) then
 		vim.notify("interactive output is blocked; use :NvJupTrustInteractive", vim.log.levels.WARN)
@@ -727,6 +762,7 @@ function M.open_focus(state, cell)
 		end,
 	})
 	update_focus(entry)
+	resize_focus_renderer(entry)
 	return buffer, window
 end
 
@@ -738,18 +774,7 @@ function M.resize_focus()
 	local height = math.max(8, math.min(vim.o.lines - 4, options().focus_height or 40))
 	vim.api.nvim_win_set_width(focus.win, width)
 	vim.api.nvim_win_set_height(focus.win, height)
-	local entry = focus.entry
-	get_client():request("renderer.resize", {
-		figure_id = entry.figure_id,
-		width = options().width_px or 900,
-		height = options().height_px or 540,
-		interactive_width = options().interactive_width_px or 720,
-		interactive_height = options().interactive_height_px or 432,
-	}, {}, function(err, frame)
-		if not err then
-			store_frame(entry.state, entry, frame)
-		end
-	end)
+	resize_focus_renderer(focus.entry)
 end
 
 function M.detach(state)

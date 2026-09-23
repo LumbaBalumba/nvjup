@@ -236,8 +236,9 @@ frames, pull fallback, crash replay, and cleanup form the production renderer.
 <Leader>nf or :NvJupPlotFocus exports validated content to a mode-0600 temporary
 file and opens Awrit in a separate Kitty OS window. Awrit paints raw browser
 frames through shared memory and Kitty animation composition without screenshots.
-<Leader>nF or :NvJupPlotFocusTui keeps the old 112x40 TUI focus window. Mouse,
-wheel, and keyboard input are native in Awrit and forwarded in TUI mode.
+<Leader>nF or :NvJupPlotFocusTui keeps the 112x40 TUI focus window. Its browser
+viewport and responsive Plotly/Bokeh layout scale to the actual popup grid.
+Mouse, wheel, and keyboard input are native in Awrit and forwarded in TUI mode.
 :NvJupPlotStatus shows component metrics and renderer state. See docs/stage6.md.
 
 ==============================================================================

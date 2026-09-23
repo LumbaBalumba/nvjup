@@ -238,7 +238,7 @@ Plotly MIME output and safely extracted Bokeh standalone document JSON are rende
 
 `<leader>nf` / `:NvJupPlotFocus` exports the already validated standalone document to a mode-`0600` temporary HTML file and opens it with Awrit in a separate Kitty OS window. Awrit uses Electron offscreen paint events, raw shared-memory buffers, and Kitty animation-frame composition, so browser input is native and interaction does not wait for screenshot capture, PNG/base64 transport, Neovim redraws, or image replacement.
 
-`<leader>nF` / `:NvJupPlotFocusTui` preserves the previous in-Neovim focus mode. That fallback pushes damage-driven PNG frames through CDP screencast, coalesces high-rate moves, and forwards pointer/keyboard input. Exported HTML keeps the same local assets, renderer-owned Bokeh targets, strict CSP, content trust, and network denial policy. Closing/replacing output, revoking trust, or closing the notebook closes the managed Awrit window and removes the temporary file.
+`<leader>nF` / `:NvJupPlotFocusTui` preserves the previous in-Neovim focus mode. That fallback sizes the browser viewport and responsive Plotly/Bokeh layout to the actual popup grid, pushes damage-driven PNG frames through CDP screencast, coalesces high-rate moves, and forwards pointer/keyboard input. Exported HTML keeps the same local assets, renderer-owned Bokeh targets, strict CSP, content trust, and network denial policy. Closing/replacing output, revoking trust, or closing the notebook closes the managed Awrit window and removes the temporary file.
 
 ```lua
 require("nvjup").setup({

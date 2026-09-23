@@ -51,7 +51,7 @@ Awrit currently describes itself as unmaintained; installations should pin/audit
 
 Mouse input is accepted into a bounded renderer queue immediately. Consecutive move events are replaced by the newest position and wheel deltas are merged; button press/release and keys preserve ordering. Chromium input uses direct CDP dispatch. This prevents a software-rendered 3D scene from blocking Neovim's event queue.
 
-During interaction, screencast output is bounded to `interactive_width_px × interactive_height_px` (default `720×432`). After 150 ms idle it returns to `width_px × height_px` (default `900×540`). Event coordinates always use the full source viewport.
+Inline frames initially use `width_px × height_px` (default `900×540`). When TUI focus opens, the Chromium viewport is recalculated from the actual popup grid (including its terminal-cell aspect ratio), while the interactive frame keeps the configured quality ratio. Plotly and Bokeh are forced into responsive layouts, so fixed notebook `width`/`height` values cannot leave most of the popup unused. After 150 ms idle the renderer returns to the popup's full-resolution viewport. Event coordinates always use that full source viewport.
 
 ## TUI focus input and resize
 
@@ -62,7 +62,7 @@ During interaction, screencast output is bounded to `interactive_width_px × int
 - arrows, Enter, Space, Tab, Backspace, `+`, `-`, and `=`;
 - `q` or `<Esc>` closes the focus window.
 
-`WinResized` resizes the focus window and sends `renderer.resize`; Plotly receives `Plots.resize`, while Bokeh views receive layout resize requests.
+`WinResized` resizes the focus window, derives a matching browser viewport, and sends `renderer.resize`; Plotly receives `Plots.resize`, while Bokeh views use `stretch_both` and receive layout resize requests.
 
 ## Recovery and cleanup
 

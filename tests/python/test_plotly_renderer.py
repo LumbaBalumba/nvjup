@@ -80,7 +80,11 @@ def test_plotly_screenshot_and_pointer_round_trip() -> None:
                     "screencast": False,
                     "figure": {
                         "data": [{"type": "scatter", "x": [1, 2, 3], "y": [1, 4, 2]}],
-                        "layout": {"title": {"text": "nvjup stage 5"}},
+                        "layout": {
+                            "title": {"text": "nvjup stage 5"},
+                            "width": 240,
+                            "height": 160,
+                        },
                     },
                 }
             )
@@ -89,6 +93,10 @@ def test_plotly_screenshot_and_pointer_round_trip() -> None:
             assert frame["height"] == 320
             assert frame["png"].startswith("iVBOR")
             assert frame["open_latency_ms"] >= 0
+            plot_size = await renderer.figures["pytest-plot"].page.evaluate(
+                "() => { const box=document.querySelector('#plot').getBoundingClientRect(); return [box.width,box.height]; }"
+            )
+            assert plot_size == [480, 320]
 
             exported = await renderer.export_external({"figure_id": "pytest-plot"})
             exported_path = Path(exported["path"])
@@ -98,6 +106,10 @@ def test_plotly_screenshot_and_pointer_round_trip() -> None:
             assert "Content-Security-Policy" in exported_html
             assert "connect-src 'none'" in exported_html
             assert "const figure=" in exported_html
+            assert (
+                "delete layout.width;delete layout.height;layout.autosize=true"
+                in exported_html
+            )
             assert "responsive:true" in exported_html
             await renderer.release_external("pytest-plot")
             assert not exported_path.exists()
@@ -206,14 +218,18 @@ def test_push_frames_bokeh_resize_keyboard_and_multiple_figures() -> None:
                 {
                     "figure_id": "bokeh-plot",
                     "backend": "bokeh",
-                    "width": 480,
-                    "height": 320,
+                    "width": 720,
+                    "height": 432,
                     "screencast": False,
                     "figure": {"script": bokeh_script},
                 }
             )
             assert bokeh["backend"] == "bokeh"
             assert bokeh["png"].startswith("iVBOR")
+            bokeh_size = await renderer.figures["bokeh-plot"].page.evaluate(
+                "() => { const box=Object.values(Bokeh.index)[0].el.getBoundingClientRect(); return [Math.round(box.width),Math.round(box.height)]; }"
+            )
+            assert bokeh_size == [720, 432]
             network_result = await renderer.figures["push-plot"].page.evaluate(
                 "async () => { try { await fetch('https://example.invalid/probe'); return 'allowed'; } catch (_) { return 'blocked'; } }"
             )
