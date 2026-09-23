@@ -3,4 +3,4 @@ if vim.g.loaded_nvjup == 1 then
 end
 vim.g.loaded_nvjup = 1
 
-require("nvjup").setup()
+require("nvjup").setup(vim.g.nvjup_config or {})

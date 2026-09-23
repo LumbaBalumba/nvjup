@@ -868,6 +868,8 @@ Fixtures:
 
 ### Этап 2 — LSP foundation
 
+Статус: реализован вместе с projected Tree-sitter highlighting; детали и ограничения описаны в [`docs/stage2.md`](stage2.md).
+
 - shadow documents;
 - multi-language source maps;
 - diagnostics;

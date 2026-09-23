@@ -1,4 +1,5 @@
 local config = require("nvjup.config")
+local features = require("nvjup.features")
 local notebook = require("nvjup.notebook")
 local output = require("nvjup.output")
 local util = require("nvjup.util")
@@ -223,6 +224,7 @@ function M.render(state)
 	for _, win in ipairs(vim.fn.win_findbuf(state.buf)) do
 		M.configure_window(win)
 	end
+	features.update(state)
 end
 
 function M.render_current_buffer()

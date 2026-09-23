@@ -1,0 +1,12 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+root="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")/.." && pwd)"
+cd "${root}"
+
+if ! command -v pyright-langserver >/dev/null 2>&1; then
+	echo "pyright-langserver is required for the real LSP integration test" >&2
+	exit 2
+fi
+
+./scripts/test-nvim --headless '+luafile tests/nvim/real_lsp_spec.lua'

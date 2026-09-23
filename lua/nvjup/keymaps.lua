@@ -1,5 +1,6 @@
 local actions = require("nvjup.actions")
 local config = require("nvjup.config")
+local lsp = require("nvjup.lsp")
 
 local M = {}
 
@@ -39,6 +40,20 @@ function M.attach(buf)
 	map(buf, "n", keys.toggle_output, actions.toggle_output, "Toggle cell output")
 	map(buf, "n", keys.clear_output, actions.clear_output, "Clear cell output")
 	map(buf, "n", keys.outline, actions.outline, "Notebook outline")
+
+	-- Mirror the normal-code LSP bindings. These are buffer-local proxies to
+	-- per-language shadow documents rather than clients attached to notebook text.
+	map(buf, "n", keys.lsp_definition, lsp.definition, "LSP definition")
+	map(buf, "n", keys.lsp_declaration, lsp.declaration, "LSP declaration")
+	map(buf, "n", keys.lsp_implementation, lsp.implementation, "LSP implementation")
+	map(buf, "n", keys.lsp_type_definition, lsp.type_definition, "LSP type definition")
+	map(buf, "n", keys.lsp_references, lsp.references, "LSP references")
+	map(buf, "n", keys.lsp_hover, lsp.hover, "LSP hover")
+	map(buf, "n", keys.lsp_signature, lsp.signature_help, "LSP signature help")
+	map(buf, "i", keys.lsp_completion, lsp.completion, "LSP completion")
+	map(buf, "n", keys.lsp_rename, lsp.rename, "LSP rename")
+	map(buf, { "n", "x" }, keys.lsp_code_action, lsp.code_action, "LSP code action")
+	map(buf, "n", keys.lsp_symbols, lsp.document_symbols, "LSP document symbols")
 end
 
 return M

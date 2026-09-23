@@ -509,6 +509,9 @@ function M.open(buf, path, document)
 		internal_change = false,
 		render_ns = vim.api.nvim_create_namespace("nvjup-render-" .. buf),
 		marker_ns = vim.api.nvim_create_namespace("nvjup-markers-" .. buf),
+		treesitter_ns = vim.api.nvim_create_namespace("nvjup-treesitter-" .. buf),
+		lsp_diagnostic_ns = vim.api.nvim_create_namespace("nvjup-lsp-diagnostics-" .. buf),
+		lsp_semantic_ns = vim.api.nvim_create_namespace("nvjup-lsp-semantic-" .. buf),
 	}, Notebook)
 
 	document.metadata = document.metadata or {}

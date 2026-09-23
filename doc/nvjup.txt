@@ -7,8 +7,9 @@ CONTENTS                                                        *nvjup-contents*
 2. Setup                                             |nvjup-setup|
 3. Navigation                                        |nvjup-navigation|
 4. Cell operations                                   |nvjup-cells|
-5. Commands                                          |nvjup-commands|
-6. Current limitations                               |nvjup-limitations|
+5. Language tooling                                  |nvjup-language|
+6. Commands                                          |nvjup-commands|
+7. Current limitations                               |nvjup-limitations|
 
 ==============================================================================
 1. INTRODUCTION                                  *nvjup-introduction*
@@ -37,6 +38,13 @@ Options include:
       max_output_lines = 12,
       markdown = true,
       right_border = true,
+    },
+    treesitter = {
+      enabled = true,
+    },
+    lsp = {
+      auto_start = true,
+      -- Python defaults to Pyright and Ruff when installed.
     },
     keymaps = {
       next_cell = "]c",
@@ -79,7 +87,36 @@ the jumplist.
 All mappings are buffer-local and configurable.
 
 ==============================================================================
-5. COMMANDS                                                 *nvjup-commands*
+5. LANGUAGE TOOLING                                        *nvjup-language*
+
+Each code language has one hidden shadow document, allowing language servers
+to see definitions and references across code cells. Markdown and raw cells
+are excluded. IPython magics are replaced by syntax-safe placeholders only in
+the shadow document.
+
+Tree-sitter parses each cell in its own language and projects highlight
+captures into the visible composite buffer. Missing parsers degrade cleanly.
+
+The default LSP mappings mirror ordinary code buffers:
+
+gd                      Definition.
+gD                      Declaration.
+gi                      Implementation.
+<Leader>D               Type definition.
+gr                      References.
+K                       Hover.
+<Leader>ls              Signature help.
+<C-Space>               Completion in Insert mode.
+<Leader>ra              Rename across code cells.
+<Leader>ca              Safe code action.
+<LocalLeader>ls         Document symbols.
+
+Diagnostics, semantic tokens, locations, and safe WorkspaceEdits are mapped
+back from shadow buffers. Edits crossing a cell boundary, synthetic separator,
+or IPython placeholder are rejected.
+
+==============================================================================
+6. COMMANDS                                                 *nvjup-commands*
 
 :NvJupWrite             Save the notebook.
 :NvJupRefresh           Synchronize model and redraw extmarks.
@@ -98,12 +135,27 @@ All mappings are buffer-local and configurable.
 :NvJupCellToggleOutput  Collapse or expand current cell output.
 :NvJupCellClearOutput   Clear output and execution count.
 :NvJupOutline           Open cell outline through vim.ui.select().
+:NvJupLspDefinition     Go to definition.
+:NvJupLspDeclaration    Go to declaration.
+:NvJupLspImplementation Go to implementation.
+:NvJupLspTypeDefinition Go to type definition.
+:NvJupLspReferences     List references.
+:NvJupLspHover          Show hover documentation.
+:NvJupLspSignature      Show signature help.
+:NvJupLspCompletion     Request completion.
+:NvJupLspRename         Rename; optional new-name argument.
+:NvJupLspCodeAction     Select and apply a safe code action.
+:NvJupLspSymbols        List document symbols.
+:NvJupLspSemanticTokens Refresh projected semantic tokens.
+:NvJupLspStatus         Show shadow documents and attached clients.
 
 ==============================================================================
-6. CURRENT LIMITATIONS                                  *nvjup-limitations*
+7. CURRENT LIMITATIONS                                  *nvjup-limitations*
 
-Stage 1 does not execute cells. Saved outputs are rendered as terminal text and
-capability placeholders. Kitty image placement, interactive Plotly/Bokeh,
-Jupyter kernels, and LSP shadow documents are scheduled for later stages.
+Stage 2 does not execute cells. Saved outputs are rendered as terminal text and
+capability placeholders. Kitty image placement, interactive Plotly/Bokeh, and
+Jupyter kernels are scheduled for later stages. Completion currently uses
+Neovim's built-in completion UI and does not apply completion-item additional
+text edits.
 
 vim:tw=78:ts=8:noet:ft=help:norl:

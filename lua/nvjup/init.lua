@@ -1,6 +1,10 @@
 local config = require("nvjup.config")
+local features = require("nvjup.features")
+local lsp = require("nvjup.lsp")
 local notebook = require("nvjup.notebook")
 local render = require("nvjup.render")
+local shadow = require("nvjup.shadow")
+local treesitter = require("nvjup.treesitter")
 local actions = require("nvjup.actions")
 local keymaps = require("nvjup.keymaps")
 
@@ -58,6 +62,25 @@ local function define_buffer_commands(buf)
 	command("NvJupCellToggleOutput", actions.toggle_output)
 	command("NvJupCellClearOutput", actions.clear_output)
 	command("NvJupOutline", actions.outline)
+	command("NvJupLspDefinition", lsp.definition)
+	command("NvJupLspDeclaration", lsp.declaration)
+	command("NvJupLspImplementation", lsp.implementation)
+	command("NvJupLspTypeDefinition", lsp.type_definition)
+	command("NvJupLspReferences", lsp.references)
+	command("NvJupLspHover", lsp.hover)
+	command("NvJupLspSignature", lsp.signature_help)
+	command("NvJupLspCompletion", lsp.completion)
+	command("NvJupLspRename", function(args)
+		lsp.rename(args.args ~= "" and args.args or nil)
+	end, { nargs = "?" })
+	command("NvJupLspCodeAction", lsp.code_action)
+	command("NvJupLspSymbols", lsp.document_symbols)
+	command("NvJupLspSemanticTokens", function()
+		lsp.refresh_semantic_tokens(assert(notebook.get(buf)))
+	end)
+	command("NvJupLspStatus", function()
+		vim.notify(vim.inspect(lsp.status(assert(notebook.get(buf)))), vim.log.levels.INFO, { title = "nvjup LSP" })
+	end)
 end
 
 local function attach_buffer(state)
@@ -67,11 +90,7 @@ local function attach_buffer(state)
 	vim.bo[buf].swapfile = false
 	vim.bo[buf].filetype = "nvjup"
 
-	local language = (((state.document or {}).metadata or {}).language_info or {}).name
-		or (((state.document or {}).metadata or {}).kernelspec or {}).language
-	if language == "python" then
-		vim.bo[buf].syntax = "python"
-	end
+	vim.bo[buf].syntax = ""
 
 	keymaps.attach(buf)
 	define_buffer_commands(buf)
@@ -129,6 +148,7 @@ local function attach_buffer(state)
 		buffer = buf,
 		once = true,
 		callback = function()
+			features.detach(notebook.get(buf))
 			notebook.detach(buf)
 		end,
 	})
@@ -188,7 +208,10 @@ function M.setup(options)
 end
 
 M.actions = actions
+M.lsp = lsp
 M.notebook = notebook
 M.render = render
+M.shadow = shadow
+M.treesitter = treesitter
 
 return M

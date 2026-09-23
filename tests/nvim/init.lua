@@ -7,6 +7,11 @@ local root = vim.env.NVJUP_PROJECT_ROOT or inferred_root
 
 vim.g.nvjup_test_config = 1
 vim.g.nvjup_project_root = root
+vim.g.nvjup_config = {
+	lsp = {
+		auto_start = false,
+	},
+}
 vim.g.mapleader = " "
 vim.g.maplocalleader = ","
 
@@ -42,7 +47,7 @@ vim.api.nvim_create_user_command("NvJupTestInfo", function()
 		"data: " .. vim.fn.stdpath("data"),
 		"state: " .. vim.fn.stdpath("state"),
 		"cache: " .. vim.fn.stdpath("cache"),
-		"stage: 0 (specification and fixtures; notebook UI starts at Stage 1)",
+		"stage: 2 (shadow-document LSP and projected Tree-sitter highlighting)",
 	}
 	vim.notify(table.concat(lines, "\n"), vim.log.levels.INFO, { title = "nvjup" })
 end, {})

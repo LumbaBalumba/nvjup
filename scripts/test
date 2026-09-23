@@ -6,3 +6,5 @@ cd "${root}"
 
 uv run --frozen --group test pytest
 ./scripts/test-nvim --headless '+luafile tests/nvim/stage1_spec.lua'
+./scripts/test-nvim --headless '+luafile tests/nvim/stage2_spec.lua'
+./scripts/test-nvim --headless '+luafile tests/nvim/lsp_integration_spec.lua'

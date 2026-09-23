@@ -6,7 +6,8 @@
 - it prepends only this checkout to `runtimepath`;
 - `scripts/test-nvim` redirects XDG config/data/state/cache directories;
 - language providers are disabled unless a test explicitly enables them;
-- no plugin or parser is downloaded automatically.
+- no plugin, parser, or language server is downloaded automatically;
+- automatic LSP startup is disabled in unit tests and enabled explicitly by integration tests.
 
 Run it interactively:
 
@@ -19,6 +20,8 @@ Useful commands:
 - `:NvJupTestInfo` — show the active config and isolated XDG paths;
 - `:NvJupOpenFixture [name]` — open a generated notebook fixture;
 - `:NvJupOutline` — select a notebook cell;
-- `:NvJupRefresh` — rebuild extmark rendering after manual marker repair.
+- `:NvJupRefresh` — rebuild extmark rendering after manual marker repair;
+- `:NvJupLspStatus` — inspect shadow documents and attached language clients.
 
-Run the headless Stage 1 suite through `./scripts/test`.
+Run Stage 1, Stage 2, and deterministic LSP integration suites through `./scripts/test`.
+Run the installed Pyright/Ruff smoke test through `./scripts/test-real-lsp`.
