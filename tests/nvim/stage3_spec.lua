@@ -145,6 +145,29 @@ test("builds the default Python sidecar command from the plugin root", function(
 	assert(command[2] == vim.fs.joinpath(root, "python", "nvjup_sidecar_main.py"))
 end)
 
+test("prefers the project virtualenv and falls back to system Python", function()
+	local state = open_fixture("00_minimal.ipynb")
+	local python, source = kernel.find_kernel_python(state)
+	assert(python == vim.fs.joinpath(root, ".venv", "bin", "python"))
+	assert(source == "project_venv")
+	close_fixture(state)
+
+	local directory = vim.fn.tempname()
+	assert(vim.fn.mkdir(vim.fs.joinpath(directory, ".venv", "bin"), "p") == 1)
+	local unusable = vim.fs.joinpath(directory, ".venv", "bin", "python")
+	local file = assert(io.open(unusable, "wb"))
+	file:write("#!/bin/sh\nexit 1\n")
+	file:close()
+	assert(vim.uv.fs_chmod(unusable, 493))
+	local fallback, fallback_source = kernel.find_kernel_python({
+		path = vim.fs.joinpath(directory, "notebook.ipynb"),
+		document = { metadata = { language_info = { name = "python" } } },
+	})
+	assert(fallback_source == "system")
+	assert(fallback ~= "" and fallback ~= vim.fs.joinpath(directory, ".venv", "bin", "python"))
+	vim.fs.rm(directory, { recursive = true, force = true })
+end)
+
 test("executes immutable cell snapshots sequentially and persists outputs", function()
 	setup_fake()
 	local state = open_fixture("09_lsp_mapping.ipynb")
@@ -153,6 +176,9 @@ test("executes immutable cell snapshots sequentially and persists outputs", func
 	assert(count == 2)
 	local client = assert(clients[1])
 	assert(client:count("execution.enqueue") == 1)
+	local start = assert(client:last("kernel.start"))
+	assert(start.payload.python_path == vim.fs.joinpath(root, ".venv", "bin", "python"))
+	assert(start.payload.python_source == "project_venv")
 	local first = assert(client:last("execution.enqueue"))
 	assert(first.payload.code == cells[1].source)
 	client:emit("execution.stream", {

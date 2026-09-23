@@ -50,6 +50,9 @@ Options include:
     },
     kernel = {
       default_name = "python3",
+      -- false prefers project .venv/venv, then a system Python.
+      python_path = false,
+      system_python = false,
       shutdown_on_close = true,
     },
     execution = {
@@ -148,8 +151,13 @@ or IPython placeholder are rejected.
 6. KERNEL EXECUTION                                       *nvjup-execution*
 
 Kernel transport runs in a separate Python jupyter_client sidecar. It does not
-use pynvim or python3_host_prog. The sidecar starts lazily on first execution
-and uses the notebook kernelspec name or `kernel.default_name`.
+use pynvim or python3_host_prog. The sidecar starts lazily on first execution.
+
+For Python notebooks, the actual kernel prefers project-root .venv/bin/python
+or venv/bin/python with ipykernel, then falls back to a system Python. This is
+independent of the sidecar interpreter and global python3 kernelspec. Override
+it with `kernel.python_path` or `kernel.system_python`. Non-Python notebooks use
+the notebook kernelspec name or `kernel.default_name`.
 
 Batch commands snapshot cell IDs, source, and revisions, skip non-code cells,
 and execute sequentially. `execution.stop_on_error` cancels the unsent tail of

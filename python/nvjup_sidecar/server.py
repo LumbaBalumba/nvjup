@@ -12,7 +12,7 @@ from dataclasses import dataclass, field
 from typing import Any
 
 from jupyter_client import AsyncKernelManager
-from jupyter_client.kernelspec import KernelSpecManager
+from jupyter_client.kernelspec import KernelSpec, KernelSpecManager
 
 PROTOCOL = "nvjup/1"
 VERSION = "0.3.0"
@@ -39,6 +39,8 @@ class KernelSession:
     kernel_name: str
     manager: AsyncKernelManager
     client: Any
+    python_path: str | None = None
+    python_source: str = "kernelspec"
     generation: int = 1
     state: str = "starting"
     queue: asyncio.Queue[Execution] = field(default_factory=asyncio.Queue)
@@ -58,7 +60,13 @@ class KernelSession:
         self.server.event(
             "kernel.state",
             notebook_id=self.notebook_id,
-            payload={"state": state, "generation": self.generation, **payload},
+            payload={
+                "state": state,
+                "generation": self.generation,
+                "python_path": self.python_path,
+                "python_source": self.python_source,
+                **payload,
+            },
         )
 
     def execution_event(
@@ -550,6 +558,28 @@ class SidecarServer:
             ]
         }
 
+    @staticmethod
+    async def _validate_kernel_python(python_path: str) -> str:
+        resolved = os.path.abspath(os.path.expanduser(python_path))
+        # Do not realpath a virtualenv's Python symlink: CPython uses the
+        # executable location to discover pyvenv.cfg and site-packages.
+        if not os.path.isfile(resolved) or not os.access(resolved, os.X_OK):
+            raise ValueError(f"kernel Python is not executable: {python_path}")
+        process = await asyncio.create_subprocess_exec(
+            resolved,
+            "-c",
+            "import ipykernel,sys; print(sys.executable)",
+            stdout=asyncio.subprocess.PIPE,
+            stderr=asyncio.subprocess.PIPE,
+        )
+        stdout, stderr = await asyncio.wait_for(process.communicate(), timeout=10)
+        if process.returncode != 0:
+            detail = stderr.decode("utf-8", "replace").strip().splitlines()
+            suffix = f": {detail[-1]}" if detail else ""
+            raise ValueError(f"ipykernel is unavailable in {resolved}{suffix}")
+        reported = stdout.decode("utf-8", "replace").strip().splitlines()
+        return os.path.abspath(reported[-1]) if reported else resolved
+
     async def _handle_kernel_start(self, request: dict[str, Any]) -> dict[str, Any]:
         notebook_id = request.get("notebook_id")
         if not notebook_id:
@@ -560,13 +590,31 @@ class SidecarServer:
                 "state": existing.state,
                 "kernel_name": existing.kernel_name,
                 "generation": existing.generation,
+                "python_path": existing.python_path,
+                "python_source": existing.python_source,
             }
         if existing:
             with contextlib.suppress(Exception):
                 await existing.shutdown(now=True)
             self.sessions.pop(notebook_id, None)
         kernel_name = str(request["payload"].get("kernel_name") or "python3")
+        python_path = request["payload"].get("python_path")
+        python_source = str(request["payload"].get("python_source") or "kernelspec")
         manager = AsyncKernelManager(kernel_name=kernel_name)
+        if python_path:
+            python_path = await self._validate_kernel_python(str(python_path))
+            manager._kernel_spec = KernelSpec(
+                argv=[
+                    python_path,
+                    "-m",
+                    "ipykernel_launcher",
+                    "-f",
+                    "{connection_file}",
+                ],
+                display_name=f"Python ({python_path})",
+                language="python",
+                name="nvjup-project-python",
+            )
         self.event(
             "kernel.state",
             notebook_id=notebook_id,
@@ -584,12 +632,25 @@ class SidecarServer:
             await manager.shutdown_kernel(now=True)
             raise
         session = KernelSession(
-            self, notebook_id, kernel_name, manager, client, state="idle"
+            self,
+            notebook_id,
+            kernel_name,
+            manager,
+            client,
+            python_path=python_path,
+            python_source=python_source,
+            state="idle",
         )
         self.sessions[notebook_id] = session
         session.start_tasks()
         session.emit_state("idle")
-        return {"state": "idle", "kernel_name": kernel_name, "generation": 1}
+        return {
+            "state": "idle",
+            "kernel_name": kernel_name,
+            "generation": 1,
+            "python_path": python_path,
+            "python_source": python_source,
+        }
 
     async def _handle_kernel_interrupt(self, request: dict[str, Any]) -> dict[str, Any]:
         session = self._session(request)
@@ -604,7 +665,12 @@ class SidecarServer:
     async def _handle_kernel_restart(self, request: dict[str, Any]) -> dict[str, Any]:
         session = self._session(request)
         await session.restart()
-        return {"state": "idle", "generation": session.generation}
+        return {
+            "state": "idle",
+            "generation": session.generation,
+            "python_path": session.python_path,
+            "python_source": session.python_source,
+        }
 
     async def _handle_kernel_shutdown(self, request: dict[str, Any]) -> dict[str, Any]:
         session = self._session(request)

@@ -24,6 +24,8 @@ The Python sidecar owns:
 
 One sidecar and one owned kernel are created lazily per open notebook. Closing the notebook shuts them down by default.
 
+The sidecar interpreter and kernel interpreter are deliberately separate. For Python notebooks, Lua discovers the project root and prefers `.venv/bin/python` or `venv/bin/python` (plus Windows equivalents) when that interpreter contains `ipykernel`. It otherwise chooses a system Python containing `ipykernel`. The selected absolute executable is sent in `kernel.start`, validated by the sidecar, and installed into an in-memory kernelspec as `<python> -m ipykernel_launcher -f {connection_file}`. This avoids accidentally launching whichever global interpreter owns the `python3` kernelspec.
+
 ## Execution semantics
 
 `run current`, `run and advance`, `run above`, `run below`, `run all`, and `run range` snapshot ordered code-cell IDs, source strings, and revisions. Markdown and raw cells are skipped. Only one snapshot is sent at a time.
@@ -107,6 +109,8 @@ require("nvjup").setup({
   },
   kernel = {
     default_name = "python3",
+    python_path = false,
+    system_python = false,
     start_timeout_seconds = 30,
     shutdown_on_close = true,
   },
@@ -119,7 +123,9 @@ require("nvjup").setup({
 })
 ```
 
-`sidecar.python` must point to a Python installation containing `jupyter_client`. When it is false, nvjup probes the checkout `.venv`, `$VIRTUAL_ENV`, `python3_host_prog`, `python3`, and the system Python and selects the first compatible interpreter. `sidecar.command` replaces the entire launch command. The notebook's `metadata.kernelspec.name` overrides `kernel.default_name`.
+`sidecar.python` must point to a Python installation containing `jupyter_client`. When it is false, nvjup probes the checkout `.venv`, `$VIRTUAL_ENV`, `python3_host_prog`, `python3`, and the system Python and selects the first compatible interpreter. `sidecar.command` replaces the entire launch command.
+
+For Python kernels, `kernel.python_path` is the highest-priority explicit interpreter. Otherwise nvjup chooses a usable project `.venv`/`venv`, then `kernel.system_python`, then a usable system Python. The notebook kernelspec and `kernel.default_name` remain the selection mechanism for non-Python kernels.
 
 ## Validation
 

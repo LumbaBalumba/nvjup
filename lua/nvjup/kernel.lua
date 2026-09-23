@@ -1,4 +1,5 @@
 local config = require("nvjup.config")
+local lsp = require("nvjup.lsp")
 local notebook = require("nvjup.notebook")
 local render = require("nvjup.render")
 local rpc = require("nvjup.rpc")
@@ -378,6 +379,77 @@ local function kernel_name(state)
 	return kernelspec.name or config.options.kernel.default_name or "python3"
 end
 
+local function notebook_language(state)
+	local metadata = state.document.metadata or {}
+	local language_info = metadata.language_info or {}
+	local kernelspec = metadata.kernelspec or {}
+	return tostring(language_info.name or kernelspec.language or "python"):lower()
+end
+
+local function executable_file(path)
+	local stat = path and path ~= "" and vim.uv.fs_stat(path) or nil
+	return stat and stat.type == "file"
+end
+
+local function python_has_ipykernel(path)
+	if not executable_file(path) then
+		return false
+	end
+	local result = vim.system({ path, "-c", "import ipykernel" }, { text = true }):wait(3000)
+	return result.code == 0
+end
+
+local function configured_kernel_python(state)
+	if not notebook_language(state):match("^python") then
+		return nil, "kernelspec"
+	end
+	local options = config.options.kernel or {}
+	local configured = options.python_path
+	if type(configured) == "function" then
+		configured = configured(state.path, state)
+	end
+	if type(configured) == "string" and configured ~= "" then
+		local path = vim.fs.normalize(configured)
+		if not path:match("^/") and not path:match("^%a:[/\\]") then
+			path = vim.fs.joinpath(lsp.project_root(state.path), path)
+		end
+		return path, "configured"
+	end
+
+	local root = lsp.project_root(state.path)
+	for _, relative in ipairs({
+		{ ".venv", "bin", "python" },
+		{ "venv", "bin", "python" },
+		{ ".venv", "Scripts", "python.exe" },
+		{ "venv", "Scripts", "python.exe" },
+	}) do
+		local candidate = vim.fs.joinpath(root, unpack(relative))
+		if python_has_ipykernel(candidate) then
+			return candidate, "project_venv"
+		end
+	end
+
+	local system = options.system_python
+	if type(system) == "function" then
+		system = system(state.path, state)
+	end
+	if type(system) == "string" and system ~= "" then
+		return vim.fs.normalize(system), "configured_system"
+	end
+	local candidates = { vim.fn.exepath("python3"), "/usr/bin/python3", vim.fn.exepath("python") }
+	for _, candidate in ipairs(candidates) do
+		if python_has_ipykernel(candidate) then
+			return candidate, "system"
+		end
+	end
+	for _, candidate in ipairs(candidates) do
+		if executable_file(candidate) then
+			return candidate, "system"
+		end
+	end
+	return "python3", "system"
+end
+
 local function ensure_kernel(session, callback)
 	if session.kernel_state == "idle" or session.kernel_state == "busy" then
 		callback()
@@ -402,8 +474,13 @@ local function ensure_kernel(session, callback)
 			flush_start_waiters(session, hello_err)
 			return
 		end
+		local python_path, python_source = configured_kernel_python(session.state)
+		session.kernel_python = python_path
+		session.kernel_python_source = python_source
 		session.client:request("kernel.start", {
 			kernel_name = kernel_name(session.state),
+			python_path = python_path,
+			python_source = python_source,
 			cwd = session.state.path ~= "" and vim.fs.dirname(session.state.path) or nil,
 			timeout = config.options.kernel.start_timeout_seconds,
 		}, { notebook_id = session.notebook_id }, function(err, payload)
@@ -414,6 +491,8 @@ local function ensure_kernel(session, callback)
 			end
 			session.kernel_state = payload.state or "idle"
 			session.generation = payload.generation or 1
+			session.kernel_python = payload.python_path or session.kernel_python
+			session.kernel_python_source = payload.python_source or session.kernel_python_source
 			flush_start_waiters(session)
 		end)
 	end)
@@ -724,7 +803,17 @@ function M.status(state)
 	state = state or notebook.get()
 	local session = state and sessions[state.buf]
 	if not session then
-		return { state = "stopped", queued = 0 }
+		local python_path, python_source
+		if state then
+			python_path, python_source = configured_kernel_python(state)
+		end
+		return {
+			state = "stopped",
+			queued = 0,
+			kernel_name = state and kernel_name(state) or nil,
+			python_path = python_path,
+			python_source = python_source,
+		}
 	end
 	return {
 		state = session.kernel_state,
@@ -732,6 +821,8 @@ function M.status(state)
 		queued = #session.queue,
 		active = session.active and session.active.execution_id or nil,
 		kernel_name = kernel_name(state),
+		python_path = session.kernel_python,
+		python_source = session.kernel_python_source,
 		notebook_id = session.notebook_id,
 	}
 end
@@ -742,6 +833,7 @@ end
 
 M._sessions = sessions
 M._handle_event = handle_event
+M.find_kernel_python = configured_kernel_python
 M._rebuild_display_ids = rebuild_display_ids
 
 return M

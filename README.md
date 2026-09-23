@@ -161,6 +161,10 @@ require("nvjup").setup({
   },
   kernel = {
     default_name = "python3",
+    -- Optional override. By default, project-root .venv/venv is preferred.
+    python_path = false,
+    -- Optional fallback override when the project has no usable virtualenv.
+    system_python = false,
     start_timeout_seconds = 30,
     shutdown_on_close = true,
   },
@@ -173,7 +177,9 @@ require("nvjup").setup({
 })
 ```
 
-The notebook kernelspec metadata takes precedence over `kernel.default_name`. Batch commands snapshot cell IDs, source, and revisions before execution and dispatch one cell at a time. Editing a cell while its snapshot is running preserves the returned output but marks it stale (`[*]`). Outputs and execution counts are written back into nbformat on `:write`.
+For Python notebooks, nvjup first looks for `.venv/bin/python` or `venv/bin/python` at the project root (and Windows equivalents) and verifies that `ipykernel` is importable. If no usable project environment exists, it falls back to a system Python with `ipykernel`. `kernel.python_path` and `kernel.system_python` provide explicit overrides. The selected executable is sent to the sidecar and used directly as `python -m ipykernel_launcher`; it is therefore independent from the Python that runs the sidecar and from a possibly stale global `python3` kernelspec. Non-Python notebooks continue to use their kernelspec.
+
+Batch commands snapshot cell IDs, source, and revisions before execution and dispatch one cell at a time. Editing a cell while its snapshot is running preserves the returned output but marks it stale (`[*]`). Outputs and execution counts are written back into nbformat on `:write`.
 
 ## Language tooling configuration
 

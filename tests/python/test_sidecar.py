@@ -185,12 +185,27 @@ def test_sidecar_kernel_lifecycle_and_execution_routing(
     started = sidecar.response(
         sidecar.send(
             "kernel.start",
-            {"kernel_name": "python3", "cwd": str(ROOT), "timeout": 30},
+            {
+                "kernel_name": "python3",
+                "python_path": sys.executable,
+                "python_source": "test",
+                "cwd": str(ROOT),
+                "timeout": 30,
+            },
             notebook_id=notebook_id,
         ),
         timeout=40,
     )
     assert started["payload"]["state"] == "idle"
+    assert started["payload"]["python_path"] == str(Path(sys.executable).absolute())
+    assert started["payload"]["python_source"] == "test"
+
+    interpreter_id = "execution-interpreter"
+    enqueue(sidecar, notebook_id, interpreter_id, "import sys; sys.executable")
+    interpreter = sidecar.event("execution.display", interpreter_id)
+    reported_python = interpreter["payload"]["data"]["text/plain"].strip("'\"")
+    assert Path(reported_python).resolve() == Path(sys.executable).resolve()
+    sidecar.event("execution.state", interpreter_id, state="completed")
 
     rich_id = "execution-rich"
     enqueue(

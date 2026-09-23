@@ -20,6 +20,8 @@ M.defaults = {
 	},
 	kernel = {
 		default_name = "python3",
+		python_path = false,
+		system_python = false,
 		start_timeout_seconds = 30,
 		shutdown_on_close = true,
 	},
