@@ -12,4 +12,5 @@ uv run --frozen --group test pytest
 ./scripts/test-nvim --headless '+luafile tests/nvim/stage4_spec.lua'
 ./scripts/test-nvim --headless '+luafile tests/nvim/stage5_spec.lua'
 ./scripts/test-nvim --headless '+luafile tests/nvim/stage6_spec.lua'
+./scripts/test-nvim --headless '+luafile tests/nvim/stage7_spec.lua'
 ./scripts/test-nvim --headless '+luafile tests/nvim/kernel_integration_spec.lua'

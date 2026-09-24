@@ -33,9 +33,12 @@ local function refresh(state)
 	end
 end
 
-local function mark_outputs_changed(state, cell, execution_revision)
+local function mark_outputs_changed(session, cell, execution_revision)
+	local state = session.state
 	trust.invalidate(state)
-	trust.mark_local_execution(cell, execution_revision)
+	if session.transport ~= "remote" then
+		trust.mark_local_execution(cell, execution_revision)
+	end
 	cell.raw.outputs = cell.outputs
 	cell.raw.execution_count = cell.execution_count == nil and vim.NIL or cell.execution_count
 	vim.bo[state.buf].modified = true
@@ -101,6 +104,29 @@ local function append_stream(session, cell, payload)
 	end
 end
 
+local function materialize_widget_images(session, cell)
+	local changed = false
+	for _, output_item in ipairs(cell.outputs or {}) do
+		local view = type(output_item.data) == "table" and output_item.data["application/vnd.jupyter.widget-view+json"]
+		local model_id = type(view) == "table" and view.model_id or nil
+		local model = model_id and session.widget_models[model_id] or nil
+		local model_state = model and model.state or nil
+		if model_state and model_state._model_name == "MPLCanvasModel" and type(model_state._data_url) == "string" then
+			local png = model_state._data_url:match("^data:image/png;base64,(.+)$") or model_state._data_url
+			if png:match("^[A-Za-z0-9+/=]+$") and #png <= 16 * 1024 * 1024 then
+				changed = changed or output_item.data["image/png"] ~= png
+				output_item.data["image/png"] = png
+				local size = model_state._size
+				if type(size) == "table" and tonumber(size[1]) and tonumber(size[2]) then
+					output_item.metadata = output_item.metadata or {}
+					output_item.metadata["image/png"] = { width = tonumber(size[1]), height = tonumber(size[2]) }
+				end
+			end
+		end
+	end
+	return changed
+end
+
 local function append_display(session, cell, payload)
 	apply_pending_clear(session, cell)
 	local item = {
@@ -112,6 +138,7 @@ local function append_display(session, cell, payload)
 		item.execution_count = payload.execution_count
 	end
 	table.insert(cell.outputs, item)
+	materialize_widget_images(session, cell)
 	local display_id = payload.transient and payload.transient.display_id
 	if display_id then
 		session.display_ids[display_id] = session.display_ids[display_id] or {}
@@ -128,7 +155,15 @@ local function update_widget(session, cell, payload)
 	model.state = vim.tbl_deep_extend("force", model.state or {}, payload.state or {})
 	model.closed = payload.action == "close"
 	session.widget_models[model_id] = model
-	cell.widget_models = session.widget_models
+	local image_changed = false
+	for _, notebook_cell in ipairs(session.state.cells) do
+		notebook_cell.widget_models = session.widget_models
+		image_changed = materialize_widget_images(session, notebook_cell) or image_changed
+	end
+	if image_changed then
+		trust.invalidate(session.state)
+		vim.bo[session.state.buf].modified = true
+	end
 	refresh(session.state)
 end
 
@@ -217,7 +252,7 @@ local function finish_execution(session, item, state_name, payload)
 		if state_name == "completed" or state_name == "failed" then
 			cell.last_executed_source = item.source
 		end
-		mark_outputs_changed(session.state, cell, item.revision)
+		mark_outputs_changed(session, cell, item.revision)
 	end
 	if state_name == "failed" and item.stop_on_error then
 		cancel_batch_tail(session, item.batch_id, "stopped after execution error")
@@ -257,6 +292,9 @@ local function handle_event(session, message)
 	if message.type == "kernel.state" then
 		session.kernel_state = payload.state or session.kernel_state
 		session.generation = payload.generation or session.generation
+		session.transport = payload.transport or session.transport
+		session.kernel_python = payload.python_path or session.kernel_python
+		session.kernel_python_source = payload.python_source or session.kernel_python_source
 		refresh(session.state)
 		return
 	end
@@ -306,13 +344,13 @@ local function handle_event(session, message)
 		update_widget(session, cell, payload)
 	elseif message.type == "execution.stream" then
 		append_stream(session, cell, payload)
-		mark_outputs_changed(session.state, cell, item.revision)
+		mark_outputs_changed(session, cell, item.revision)
 	elseif message.type == "execution.display" then
 		append_display(session, cell, payload)
 		if payload.execution_count ~= nil and payload.execution_count ~= vim.NIL then
 			cell.execution_count = payload.execution_count
 		end
-		mark_outputs_changed(session.state, cell, item.revision)
+		mark_outputs_changed(session, cell, item.revision)
 	elseif message.type == "execution.display_update" then
 		local cleared = apply_pending_clear(session, cell)
 		local changed = update_display(session, payload)
@@ -335,12 +373,12 @@ local function handle_event(session, message)
 			remove_display_refs(session, cell.id)
 			cell.outputs = {}
 			cell.clear_output_wait = false
-			mark_outputs_changed(session.state, cell, item.revision)
+			mark_outputs_changed(session, cell, item.revision)
 		end
 	elseif message.type == "execution.error" then
 		append_error(session, cell, payload)
 		cell.execution_status = "failed"
-		mark_outputs_changed(session.state, cell, item.revision)
+		mark_outputs_changed(session, cell, item.revision)
 	elseif message.type == "execution.stdin_request" then
 		cell.execution_status = "waiting_input"
 		refresh(session.state)
@@ -424,7 +462,34 @@ local function python_has_ipykernel(path)
 	return result.code == 0
 end
 
+local function configured_remote(state)
+	local remote = (config.options.kernel or {}).remote
+	if type(remote) == "function" then
+		remote = remote(state.path, state)
+	end
+	if type(remote) ~= "table" or type(remote.url) ~= "string" or remote.url == "" then
+		return nil
+	end
+	local token = remote.token
+	if type(token) == "function" then
+		token = token(state.path, state)
+	end
+	if (type(token) ~= "string" or token == "") and type(remote.token_env) == "string" then
+		token = vim.env[remote.token_env]
+	end
+	return {
+		url = remote.url,
+		token = type(token) == "string" and token or "",
+		verify_ssl = remote.verify_ssl ~= false,
+		origin = type(remote.origin) == "string" and remote.origin or nil,
+		reconnect_attempts = math.max(0, math.min(tonumber(remote.reconnect_attempts) or 2, 5)),
+	}
+end
+
 local function configured_kernel_python(state)
+	if configured_remote(state) then
+		return nil, "remote"
+	end
 	if not notebook_language(state):match("^python") then
 		return nil, "kernelspec"
 	end
@@ -506,6 +571,7 @@ local function ensure_kernel(session, callback)
 			kernel_name = kernel_name(session.state),
 			python_path = python_path,
 			python_source = python_source,
+			remote = configured_remote(session.state),
 			cwd = session.state.path ~= "" and vim.fs.dirname(session.state.path) or nil,
 			timeout = config.options.kernel.start_timeout_seconds,
 		}, { notebook_id = session.notebook_id }, function(err, payload)
@@ -518,6 +584,7 @@ local function ensure_kernel(session, callback)
 			session.generation = payload.generation or 1
 			session.kernel_python = payload.python_path or session.kernel_python
 			session.kernel_python_source = payload.python_source or session.kernel_python_source
+			session.transport = payload.transport or session.transport or "local"
 			flush_start_waiters(session)
 		end)
 	end)
@@ -828,6 +895,103 @@ function M.detach(state)
 	end
 end
 
+local function tool_request(state, request_type, payload, callback, start_kernel)
+	state = state or notebook.get()
+	callback = callback or function() end
+	if not state then
+		callback({ message = "current buffer is not an nvjup notebook" })
+		return false
+	end
+	local session = sessions[state.buf]
+	if not session and not start_kernel then
+		callback(nil, nil)
+		return false
+	end
+	session = session or get_session(state)
+	local function request()
+		if session.active or session.kernel_state == "busy" then
+			callback({ message = "kernel is busy" })
+			return
+		end
+		session.client:request(request_type, payload or {}, {
+			notebook_id = session.notebook_id,
+		}, callback)
+	end
+	if session.kernel_state == "idle" then
+		request()
+	elseif start_kernel then
+		ensure_kernel(session, function(err)
+			if err then
+				callback(err)
+			else
+				request()
+			end
+		end)
+	else
+		callback(nil, nil)
+		return false
+	end
+	return true
+end
+
+local function completion_context(state, row, byte_col)
+	local ok = state:sync_from_buffer()
+	if not ok then
+		return nil
+	end
+	local index = state:cell_index_at(row)
+	local cell = index and state.cells[index] or nil
+	if not cell or cell.cell_type ~= "code" then
+		return nil
+	end
+	local local_row = math.max(0, row - cell.range.start_row)
+	local lines = vim.split(cell.source or "", "\n", { plain = true })
+	if local_row >= #lines then
+		return nil
+	end
+	local byte_cursor = 0
+	for line = 1, local_row do
+		byte_cursor = byte_cursor + #lines[line] + 1
+	end
+	byte_cursor = byte_cursor + math.min(math.max(0, byte_col), #(lines[local_row + 1] or ""))
+	local source = cell.source or ""
+	local cursor = vim.str_utfindex(source, byte_cursor)
+	return source, cursor
+end
+
+function M.complete_at(buf, row, byte_col, callback)
+	local state = notebook.get(buf)
+	local code, cursor
+	if state then
+		code, cursor = completion_context(state, row, byte_col)
+	end
+	if not code then
+		callback(nil, nil)
+		return false
+	end
+	return tool_request(state, "completion.request", {
+		code = code,
+		cursor_pos = cursor,
+		timeout = (config.options.completion or {}).kernel_timeout_seconds or 2,
+	}, callback, false)
+end
+
+function M.inspect(code, cursor_pos, callback, state)
+	return tool_request(state, "inspect.request", {
+		code = code,
+		cursor_pos = cursor_pos or vim.str_utfindex(code),
+		detail_level = 1,
+		timeout = (config.options.completion or {}).kernel_timeout_seconds or 2,
+	}, callback, false)
+end
+
+function M.variables(state, callback)
+	return tool_request(state, "variables.list", {
+		limit = (config.options.inspector or {}).max_variables or 200,
+		timeout = (config.options.inspector or {}).timeout_seconds or 5,
+	}, callback, true)
+end
+
 function M.forget_displays(state, cell_id)
 	local session = state and sessions[state.buf]
 	if not session then
@@ -854,6 +1018,7 @@ function M.status(state)
 			kernel_name = state and kernel_name(state) or nil,
 			python_path = python_path,
 			python_source = python_source,
+			transport = configured_remote(state) and "remote" or "local",
 		}
 	end
 	return {
@@ -864,6 +1029,7 @@ function M.status(state)
 		kernel_name = kernel_name(state),
 		python_path = session.kernel_python,
 		python_source = session.kernel_python_source,
+		transport = session.transport or "local",
 		notebook_id = session.notebook_id,
 	}
 end
@@ -874,6 +1040,7 @@ end
 
 M._sessions = sessions
 M._handle_event = handle_event
+M._materialize_widget_images = materialize_widget_images
 M.find_kernel_python = configured_kernel_python
 M._rebuild_display_ids = rebuild_display_ids
 

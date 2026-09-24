@@ -53,6 +53,7 @@ M.defaults = {
 		system_python = false,
 		start_timeout_seconds = 30,
 		shutdown_on_close = true,
+		remote = false,
 	},
 	execution = {
 		trust_local_kernel = true,
@@ -60,6 +61,19 @@ M.defaults = {
 		clear_before_run = true,
 		repeat_policy = "queue",
 		stop_on_error = true,
+	},
+	completion = {
+		kernel = false,
+		kernel_timeout_seconds = 2,
+	},
+	inspector = {
+		max_variables = 200,
+		timeout_seconds = 5,
+		width = 88,
+		height = 24,
+	},
+	integrations = {
+		telescope = true,
 	},
 	lsp = {
 		enabled = true,
@@ -109,6 +123,7 @@ M.defaults = {
 		clear_output = "<leader>nc",
 		clear_all_outputs = "<leader>nC",
 		outline = "<leader>nl",
+		variables = "<leader>nv",
 		refresh = "<leader>nL",
 		run_current = "<C-CR>",
 		run_and_advance = "<S-CR>",

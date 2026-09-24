@@ -173,6 +173,9 @@ end
 function M.outline()
 	local nb = state()
 	local items = nb:outline_items()
+	if require("nvjup.telescope").outline(nb, items) then
+		return
+	end
 	vim.ui.select(items, {
 		prompt = "Notebook cells",
 		format_item = function(item)
@@ -184,6 +187,10 @@ function M.outline()
 			render.render(nb)
 		end
 	end)
+end
+
+function M.variables()
+	return require("nvjup.inspector").open(state())
 end
 
 function M.refresh()

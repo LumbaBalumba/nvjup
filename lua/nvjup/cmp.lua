@@ -1,8 +1,11 @@
+local config = require("nvjup.config")
+local kernel = require("nvjup.kernel")
 local lsp = require("nvjup.lsp")
 local notebook = require("nvjup.notebook")
 
 local M = {}
 local registered_source
+local registered_kernel_source
 local attached = {}
 
 local Source = {}
@@ -41,10 +44,48 @@ function Source:execute(item, callback)
 	lsp.execute_completion(item, callback)
 end
 
+local KernelSource = {}
+KernelSource.__index = KernelSource
+
+function KernelSource:is_available()
+	return config.options.completion.kernel == true and notebook.get() ~= nil
+end
+
+function KernelSource:get_debug_name()
+	return "nvjup live kernel"
+end
+
+function KernelSource:get_keyword_pattern()
+	return [[\k\+]]
+end
+
+function KernelSource:complete(params, callback)
+	local context = params.context
+	kernel.complete_at(context.bufnr, context.cursor.row - 1, context.cursor.col - 1, function(err, payload)
+		if err or not payload then
+			callback({ isIncomplete = false, items = {} })
+			return
+		end
+		local items = {}
+		for _, match in ipairs(payload.matches or {}) do
+			table.insert(items, {
+				label = match,
+				insertText = match,
+				kind = vim.lsp.protocol.CompletionItemKind.Variable,
+				detail = "[nvjup kernel]",
+			})
+		end
+		callback({ isIncomplete = false, items = items })
+	end)
+end
+
 local function source_list(cmp)
 	local result = { { name = "nvjup", priority = 1000 } }
+	if config.options.completion.kernel == true then
+		table.insert(result, { name = "nvjup_kernel", priority = 750 })
+	end
 	for _, source in ipairs(cmp.get_config().sources or {}) do
-		if source.name ~= "nvjup" then
+		if source.name ~= "nvjup" and source.name ~= "nvjup_kernel" then
 			table.insert(result, vim.deepcopy(source))
 		end
 	end
@@ -61,6 +102,9 @@ function M.attach(buf)
 	end
 	if not registered_source then
 		registered_source = cmp.register_source("nvjup", setmetatable({}, Source))
+	end
+	if config.options.completion.kernel == true and not registered_kernel_source then
+		registered_kernel_source = cmp.register_source("nvjup_kernel", setmetatable({}, KernelSource))
 	end
 	if not attached[buf] then
 		vim.api.nvim_buf_call(buf, function()

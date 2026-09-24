@@ -76,3 +76,16 @@ Stage 6 is complete when:
 9. multiple figures have independent pages and lifecycle cleanup;
 10. renderer crashes replay only still-trusted cached figures with bounded retries;
 11. status exposes frame/input metrics and tests cover trust, sandbox, Bokeh, external export, recovery, cleanup, and performance-sensitive paths.
+
+## Stage 7 acceptance criteria
+
+Stage 7 extension work is accepted incrementally when:
+
+1. completion, inspection, and variable requests use standard idle-kernel shell messages with bounded payloads, results, and timeouts;
+2. live-kernel completion is opt-in, lower priority than shadow LSP, requires nvim-cmp, and never starts a kernel while typing;
+3. the variable inspector has a dependency-free UI and optional Telescope picker;
+4. basic widget state is projected without loading notebook-provided JavaScript;
+5. ipympl data-URL frames pass through existing image bounds and lifecycle cleanup;
+6. statusline and Telescope adapters introduce no mandatory UI dependency;
+7. health reports optional integrations and actionable degraded modes;
+8. remote Jupyter Server uses authenticated REST lifecycle and negotiated WebSocket v1 channels, verifies TLS by default, never reports tokens, bounds reconnects/frames/queues, and passes an isolated real-server lifecycle test.

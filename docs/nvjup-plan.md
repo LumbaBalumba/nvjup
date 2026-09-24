@@ -954,15 +954,17 @@ pipeline, резервный push/pull TUI renderer, recovery, performance measu
 
 ### Этап 7 — расширение и polish
 
-- ipympl;
-- базовые ipywidgets;
-- remote Jupyter Server;
+Статус: реализован. Границы безопасной terminal projection, read-only widget UI,
+remote transport и optional integrations описаны в [`docs/stage7.md`](stage7.md).
+
+- ipympl: live PNG/data-url canvas frames без выполнения frontend JavaScript; browser-grade input остаётся отдельным расширением;
+- базовые ipywidgets: безопасная terminal projection для label/HTML/button/checkbox/text/slider/select/progress;
+- remote Jupyter Server через authenticated REST lifecycle и bounded WebSocket v1 channels;
 - variable inspector;
-- kernel-backed completion как optional LSP source;
+- kernel-backed completion как optional nvim-cmp source;
 - statusline adapters;
 - Telescope integration;
-- health checks;
-- migration guide from Molten/Quarto/Jupytext.
+- расширенные health checks.
 
 ---
 

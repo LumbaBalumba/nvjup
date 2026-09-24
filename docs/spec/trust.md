@@ -12,7 +12,7 @@ Trust levels:
 - `trusted_interactive`: sandboxed Plotly/Bokeh/HTML rendering is allowed;
 - `revoked`: a previous decision was explicitly removed.
 
-Trusting a notebook does not automatically execute its cells. Explicit local-kernel execution grants only revision-scoped, in-memory trust to output produced for that cell; it does not create a persisted notebook-wide trust record. `execution.trust_local_kernel = false` disables this default, and an explicit revoke takes precedence.
+Trusting a notebook does not automatically execute its cells. Explicit local-kernel execution grants only revision-scoped, in-memory trust to output produced for that cell; it does not create a persisted notebook-wide trust record. `execution.trust_local_kernel = false` disables this default, and an explicit revoke takes precedence. Kernels reached through the remote Jupyter Server transport are not local under this policy and never receive the ephemeral grant.
 
 ## Content identity
 

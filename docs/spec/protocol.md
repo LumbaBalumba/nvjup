@@ -57,10 +57,16 @@ Kernel lifecycle:
 
 - `kernel.list`;
 - `kernel.start`;
-- `kernel.attach`;
 - `kernel.interrupt`;
 - `kernel.restart`;
 - `kernel.shutdown`.
+
+`kernel.start` normally owns a local ZeroMQ kernel. An optional `remote` object
+selects an owned Jupyter Server kernel and contains `url`, an optional `token`,
+`verify_ssl`, optional explicit `origin`, and bounded `reconnect_attempts`.
+Credentials are transported only to the sidecar and never echoed in responses or
+events. Remote channels must negotiate `v1.kernel.websocket.jupyter.org`; legacy
+unbounded framing is rejected. Existing-kernel attachment is not part of v1.
 
 Execution:
 
@@ -68,7 +74,8 @@ Execution:
 - `execution.cancel`;
 - `execution.stdin_reply`;
 - `completion.request`;
-- `inspect.request`.
+- `inspect.request`;
+- `variables.list`.
 
 Renderer:
 
@@ -100,6 +107,7 @@ remain accepted for Stage 5 compatibility but are not emitted by current Lua.
 - `execution.clear_output`;
 - `execution.error`;
 - `execution.stdin_request`;
+- `execution.widget`;
 - `renderer.state`;
 - `renderer.frame`;
 - `renderer.warning`;

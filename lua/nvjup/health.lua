@@ -43,17 +43,28 @@ function M.check()
 	else
 		vim.health.info("ruff was not found; Ruff LSP integration is optional")
 	end
+	if config.options.completion.kernel then
+		if pcall(require, "cmp") then
+			vim.health.ok("optional live-kernel completion is enabled through nvim-cmp")
+		else
+			vim.health.warn("completion.kernel=true requires nvim-cmp")
+		end
+	else
+		vim.health.info("live-kernel completion is disabled; shadow LSP completion remains primary")
+	end
 
 	vim.health.start("nvjup Jupyter sidecar")
 	local command = rpc.default_command()
 	if config.options.sidecar.command then
 		vim.health.ok("custom sidecar command is configured: " .. table.concat(command, " "))
 	else
-		local result = vim.system({ command[1], "-c", "import jupyter_client" }, { text = true }):wait(5000)
+		local result = vim.system({ command[1], "-c", "import aiohttp,jupyter_client" }, { text = true }):wait(5000)
 		if result.code == 0 then
-			vim.health.ok("jupyter_client is available to " .. command[1])
+			vim.health.ok("jupyter_client and aiohttp are available to " .. command[1])
 		else
-			vim.health.error("jupyter_client is unavailable to " .. command[1] .. "; configure sidecar.python")
+			vim.health.error(
+				"jupyter_client or aiohttp is unavailable to " .. command[1] .. "; configure sidecar.python"
+			)
 		end
 		if vim.uv.fs_stat(command[2]) then
 			vim.health.ok("sidecar entry point is available")
@@ -121,9 +132,7 @@ function M.check()
 	if awrit_path ~= "" then
 		vim.health.ok("Awrit is available for zero-screenshot interactive focus: " .. awrit_path)
 	else
-		vim.health.warn(
-			"Awrit is unavailable; <leader>nf needs https://github.com/chase/awrit (TUI fallback: <leader>nF)"
-		)
+		vim.health.warn("Awrit is unavailable; <leader>nF needs https://github.com/chase/awrit (TUI focus: <leader>nf)")
 	end
 	if vim.env.KITTY_LISTEN_ON and vim.env.KITTY_LISTEN_ON ~= "" then
 		vim.health.ok("Kitty remote control is available for a separate Awrit OS window")
@@ -138,6 +147,37 @@ function M.check()
 	else
 		vim.health.ok("interactive notebook trust is required")
 	end
+
+	vim.health.start("nvjup Stage 7 integrations")
+	local remote = (config.options.kernel or {}).remote
+	if type(remote) == "table" and type(remote.url) == "string" and remote.url ~= "" then
+		if remote.url:match("^https://") then
+			vim.health.ok("remote Jupyter Server uses HTTPS")
+		elseif remote.url:match("^http://") then
+			vim.health.warn("remote Jupyter Server uses unencrypted HTTP")
+		else
+			vim.health.error("kernel.remote.url must use http:// or https://")
+		end
+		if remote.verify_ssl == false then
+			vim.health.warn("kernel.remote.verify_ssl=false disables TLS certificate verification")
+		end
+		if type(remote.token) == "string" and remote.token ~= "" then
+			vim.health.info("remote token is configured directly; token_env or a function avoids storing it in config")
+		elseif type(remote.token_env) == "string" and vim.env[remote.token_env] then
+			vim.health.ok("remote Jupyter token environment variable is available")
+		else
+			vim.health.info("no remote Jupyter token is configured; this is valid only for an unauthenticated server")
+		end
+	else
+		vim.health.info("remote Jupyter Server transport is not configured")
+	end
+	if require("nvjup.telescope").available() then
+		vim.health.ok("Telescope is available for notebook and variable pickers")
+	else
+		vim.health.info("Telescope is unavailable or disabled; vim.ui.select and floating inspectors are used")
+	end
+	vim.health.ok("variable inspector and statusline adapter are available")
+	vim.health.info("statusline API: require('nvjup.statusline').component()")
 end
 
 return M

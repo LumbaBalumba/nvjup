@@ -180,6 +180,53 @@ local function widget_models(cell, root_id)
 	return ordered
 end
 
+local function basic_widget_line(state)
+	local name = state._model_name or ""
+	local description = widget_text(state.description)
+	if name == "MPLCanvasModel" then
+		return string.format("[ipympl canvas%s]", state._data_url and " · live kernel frame" or " · awaiting frame")
+	end
+	if name == "HTMLModel" or name == "LabelModel" then
+		local value = widget_text(state.value)
+		return value ~= "" and value or nil
+	end
+	if name == "ButtonModel" then
+		return string.format(
+			"[%s]%s",
+			description ~= "" and description or "Button",
+			state.disabled and " (disabled)" or ""
+		)
+	end
+	if name == "CheckboxModel" or name == "ToggleButtonModel" then
+		return string.format(
+			"[%s] %s",
+			state.value and "x" or " ",
+			description ~= "" and description or name:gsub("Model$", "")
+		)
+	end
+	if name == "TextModel" or name == "TextareaModel" or name == "PasswordModel" then
+		local value = name == "PasswordModel" and string.rep("•", math.min(16, #(tostring(state.value or ""))))
+			or widget_text(state.value)
+		return string.format("%s%s%s", description, description ~= "" and ": " or "", value)
+	end
+	if name:match("SliderModel$") or name == "IntTextModel" or name == "FloatTextModel" then
+		local range = state.min ~= nil and state.max ~= nil and string.format(" [%s…%s]", state.min, state.max) or ""
+		return string.format(
+			"%s%s%s%s",
+			description,
+			description ~= "" and ": " or "",
+			tostring(state.value or ""),
+			range
+		)
+	end
+	if name == "DropdownModel" or name == "SelectModel" or name == "RadioButtonsModel" then
+		local options = state._options_labels or {}
+		local selected = tonumber(state.index) and options[tonumber(state.index) + 1] or state.value
+		return string.format("%s%s%s", description, description ~= "" and ": " or "", tostring(selected or ""))
+	end
+	return nil
+end
+
 local function render_widget(data, cell)
 	local view = data["application/vnd.jupyter.widget-view+json"]
 	local root_id = type(view) == "table" and view.model_id or nil
@@ -188,6 +235,7 @@ local function render_widget(data, cell)
 	end
 	local progress
 	local labels = {}
+	local basic = {}
 	for _, model in ipairs(widget_models(cell, root_id)) do
 		local state = model.state or {}
 		if state._model_name == "FloatProgressModel" or state._model_name == "IntProgressModel" then
@@ -197,9 +245,18 @@ local function render_widget(data, cell)
 			if text ~= "" then
 				table.insert(labels, text)
 			end
+		else
+			local line = basic_widget_line(state)
+			if line and line ~= "" then
+				table.insert(basic, line)
+			end
 		end
 	end
 	if not progress then
+		if #basic > 0 or #labels > 0 then
+			vim.list_extend(labels, basic)
+			return labels, "widget"
+		end
 		local fallback = split_text(data["text/plain"] or "Jupyter widget output · live state unavailable")
 		return #fallback > 0 and fallback or { "[Jupyter widget output · live state unavailable]" }, "interactive"
 	end

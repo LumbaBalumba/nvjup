@@ -10,8 +10,10 @@ CONTENTS                                                        *nvjup-contents*
 5. Language tooling                                  |nvjup-language|
 6. Kernel execution                                  |nvjup-execution|
 7. Rich static outputs                               |nvjup-rich-output|
-8. Commands                                          |nvjup-commands|
-9. Current limitations                               |nvjup-limitations|
+8. Interactive output                                |nvjup-plotly|
+9. Stage 7 tooling                                   |nvjup-stage7|
+10. Commands                                         |nvjup-commands|
+11. Current limitations                              |nvjup-limitations|
 
 ==============================================================================
 1. INTRODUCTION                                  *nvjup-introduction*
@@ -64,11 +66,29 @@ Options include:
       python_path = false,
       system_python = false,
       shutdown_on_close = true,
+      -- Optional authenticated Jupyter Server transport:
+      remote = false,
+      -- remote = { url = "https://host/jupyter",
+      --   token_env = "JUPYTER_TOKEN", verify_ssl = true,
+      --   reconnect_attempts = 2 },
     },
     execution = {
       trust_local_kernel = true,
       repeat_policy = "queue", -- queue, cancel, or replace
       stop_on_error = true,
+    },
+    completion = {
+      kernel = false,
+      kernel_timeout_seconds = 2,
+    },
+    inspector = {
+      max_variables = 200,
+      timeout_seconds = 5,
+      width = 88,
+      height = 24,
+    },
+    integrations = {
+      telescope = true,
     },
     lsp = {
       auto_start = true,
@@ -220,8 +240,10 @@ byte, pixel, conversion-time, memory, disk, and output-size bounds apply.
 Optional modes are split, vsplit, and tab. See docs/stage4.md for protocol and
 security details. :checkhealth nvjup reports the selected backend.
 
-`tqdm.auto` uses ipywidgets in Jupyter kernels. nvjup recognizes the bounded
-HTML/HBox/progress model subset and projects its live state as terminal text.
+`tqdm.auto` uses ipywidgets in Jupyter kernels. nvjup recognizes a bounded
+HTML/label/box/progress/button/checkbox/text/slider/selection model subset and
+projects live state as safe terminal text. ipympl data-URL frames reuse the
+bounded image path without loading notebook-provided widget JavaScript.
 
 ==============================================================================
 8. INTERACTIVE OUTPUT                                 *nvjup-plotly*
@@ -245,7 +267,21 @@ Mouse, wheel, and keyboard input are native in Awrit and forwarded in TUI mode.
 :NvJupPlotStatus shows component metrics and renderer state. See docs/stage6.md.
 
 ==============================================================================
-9. COMMANDS                                                 *nvjup-commands*
+9. STAGE 7 TOOLING                                          *nvjup-stage7*
+
+:NvJupVariables or <Leader>nv opens public globals from the idle live kernel.
+Telescope is used when available; otherwise a floating table supports <CR>
+inspection, r refresh, and q close. `completion.kernel = true` adds the optional
+lower-priority nvjup_kernel nvim-cmp source without starting a kernel on typing.
+
+Statusline plugins can call require('nvjup.statusline').component() or .get(0).
+The outline and variable pickers auto-detect Telescope and retain dependency-free
+fallbacks. `kernel.remote` can create an owned kernel on an authenticated Jupyter
+Server through REST and bounded WebSocket v1 channels. Tokens can come from an
+environment variable; TLS verification defaults on. See docs/stage7.md.
+
+==============================================================================
+10. COMMANDS                                                *nvjup-commands*
 
 :NvJupWrite             Save the notebook.
 :NvJupRefresh           Synchronize model and redraw extmarks.
@@ -271,7 +307,8 @@ Mouse, wheel, and keyboard input are native in Awrit and forwarded in TUI mode.
 :NvJupTrustStatus        Show trust level, identity, and invalidation reason.
 :NvJupCellClearOutput   Clear output and execution count.
 :NvJupClearAllOutputs   Clear every output and execution count.
-:NvJupOutline           Open cell outline through vim.ui.select().
+:NvJupOutline           Open cell outline through Telescope or vim.ui.select().
+:NvJupVariables         Inspect public variables in the live kernel.
 :NvJupRunCurrent        Run current code cell.
 :NvJupRunAndAdvance     Run current cell and move to the next cell.
 :NvJupRunAbove          Run code cells above the current cell.
@@ -298,13 +335,15 @@ Mouse, wheel, and keyboard input are native in Awrit and forwarded in TUI mode.
 :NvJupLspStatus         Show shadow documents and attached clients.
 
 ==============================================================================
-10. CURRENT LIMITATIONS                                 *nvjup-limitations*
+11. CURRENT LIMITATIONS                                 *nvjup-limitations*
 
-Arbitrary widgets, arbitrary HTML/JavaScript, Bokeh server sessions, and Bokeh
-payloads incompatible with the locally installed BokehJS are not enabled. PDF
-display uses only the first page. Animated images are currently static. Actual Kitty
-pixels require a compatible attached terminal UI. Remote Jupyter Server
-attachment and kernel-backed completion are also later work. Completion uses
-nvim-cmp when available and Neovim's built-in completion UI as a fallback.
+Arbitrary widget JavaScript and unsupported custom widget models, arbitrary
+HTML/JavaScript, Bokeh server sessions, and incompatible BokehJS payloads are not
+enabled. The basic widget projection is read-only; ipympl toolbar/pointer and
+binary-diff frontend emulation are not yet provided. PDF display uses only the
+first page. Animated images are static. Actual Kitty pixels require a compatible
+attached terminal UI. Remote transport creates an owned kernel and does not yet
+attach to an existing kernel or implement non-token multi-user login flows.
+Kernel-backed completion requires an already-running idle kernel and nvim-cmp.
 
 vim:tw=78:ts=8:noet:ft=help:norl:

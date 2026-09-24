@@ -2,7 +2,7 @@
 
 `nvjup` is a Neovim-native editor for Jupyter notebooks.
 
-The repository now contains the **Stage 6 notebook editor, kernel/LSP foundation, rich outputs, and production interactive renderer**:
+The repository now contains the **Stage 7 notebook editor, kernel/LSP tooling, rich outputs, and production interactive renderer**:
 
 - `.ipynb` opens as code, Markdown, and raw cells rather than JSON;
 - jupynvim-inspired cell borders, headers, execution counts, and output sections;
@@ -15,7 +15,11 @@ The repository now contains the **Stage 6 notebook editor, kernel/LSP foundation
 - viewport-safe PNG rendering through Kitty Unicode placeholders, with JPEG/SVG/PDF rasterization and chafa/text fallbacks;
 - a full-output float/split/tab pager that bypasses inline truncation;
 - content-trusted Plotly/Bokeh rendering with an Awrit-powered, zero-screenshot external focus window plus the legacy CDP/Kitty TUI focus fallback;
-- live terminal rendering for `tqdm.auto` progress widgets through a bounded ipywidgets protocol adapter;
+- bounded terminal projections for progress, label, HTML, button, checkbox, text, slider, and selection ipywidgets;
+- live ipympl data-URL canvas frames through the existing bounded image pipeline;
+- variable inspector with optional Telescope picker and kernel MIME inspection;
+- optional lower-priority live-kernel completion alongside shadow-LSP completion;
+- dependency-free statusline API and expanded health diagnostics;
 - undo-aware structural representation;
 - one versioned LSP shadow document per code language;
 - cross-cell diagnostics, completion, hover, signature help, navigation, references, symbols, semantic tokens, rename, and safe code actions;
@@ -23,13 +27,13 @@ The repository now contains the **Stage 6 notebook editor, kernel/LSP foundation
 - automatic project-local `.venv`/`venv` selection for Pyright;
 - IPython magic preprocessing that preserves Python expressions for LSP rename, plus UTF-8/UTF-16/UTF-32 source maps;
 - projected Tree-sitter highlighting for code and Markdown cells, including mixed-language notebooks;
-- an isolated Python `jupyter_client` sidecar with owned kernel lifecycle;
+- an isolated Python sidecar with local `jupyter_client` kernels and opt-in authenticated Jupyter Server REST/WebSocket transport;
 - current/advance/above/below/all/range execution through an immutable sequential queue;
 - streaming stdout/stderr, execute results, display updates, deferred clears, errors, and stdin;
 - interrupt, restart, restart-and-run-all, execution counts, stale-result tracking, and output persistence;
 - independent Neovim test configuration and Docker validation.
 
-Plotly and safely serialized Bokeh documents run only after an explicit local content-identity trust grant. Notebook HTML and arbitrary JavaScript are never executed. The ephemeral renderer uses bundled assets, strict CSP, blocked outbound requests, bounded queues and dimensions, and crash replay.
+Pre-existing Plotly and safely serialized Bokeh documents run only after an explicit local content-identity trust grant; output produced by an explicitly run local kernel receives revision-scoped ephemeral trust. Notebook HTML and arbitrary JavaScript are never executed. The ephemeral renderer uses bundled assets, strict CSP, blocked outbound requests, bounded queues and dimensions, and crash replay.
 
 The complete roadmap is in [`docs/nvjup-plan.md`](docs/nvjup-plan.md). Normative contracts are indexed in [`docs/spec/README.md`](docs/spec/README.md).
 
@@ -38,7 +42,7 @@ The complete roadmap is in [`docs/nvjup-plan.md`](docs/nvjup-plan.md). Normative
 - Neovim 0.11 or newer;
 - a Tree-sitter parser for every language that should be highlighted;
 - an LSP server for every language that should receive language features;
-- Python 3.11 or newer with `jupyter_client` for kernel execution;
+- Python 3.11 or newer with `jupyter_client` and `aiohttp` for local/remote kernel execution;
 - an installed kernelspec, such as the one provided by `ipykernel`;
 - [`uv`](https://docs.astral.sh/uv/) for the development and test environment;
 - Kitty or Ghostty for native terminal images (optional; chafa/text fallback otherwise);
@@ -46,7 +50,8 @@ The complete roadmap is in [`docs/nvjup-plan.md`](docs/nvjup-plan.md). Normative
 - `rsvg-convert` for bounded SVG rasterization (optional; preferred when available);
 - chafa for a terminal-symbol image fallback outside Kitty (optional);
 - Playwright, the Python Plotly and Bokeh packages (for local browser assets), and Chromium for inline interactive previews;
-- [Awrit](https://github.com/chase/awrit), Kitty remote control, and `KITTY_LISTEN_ON` for the zero-screenshot external focus window (optional; `<leader>nf` uses the TUI fallback).
+- [Awrit](https://github.com/chase/awrit), Kitty remote control, and `KITTY_LISTEN_ON` for the zero-screenshot external focus window (optional; `<leader>nf` uses the TUI fallback);
+- nvim-cmp for optional live-kernel completion and Telescope for optional outline/variable pickers.
 
 The editor and LSP proxy remain pure Lua. Kernel transport runs in a separate Python sidecar and does not depend on `pynvim` or `python3_host_prog`. Python notebooks use `pyright-langserver` and `ruff server` automatically when those executables are available. Missing parsers and servers degrade gracefully.
 
@@ -91,6 +96,7 @@ The launcher redirects config, data, state, and cache into `.test-runtime/`.
 | `<leader>nF` | open the current Plotly/Bokeh output in a separate Awrit/Kitty OS window |
 | `<leader>nc` / `<leader>nC` | clear current / all outputs |
 | `<leader>nl` / `<leader>nL` | notebook outline / refresh display |
+| `<leader>nv` | inspect live kernel variables |
 | `<C-CR>` | run current cell (Normal and Insert modes) |
 | `<S-CR>` / `<leader>nr` | run current cell and advance |
 | `<leader>nA` / `<leader>nB` | run code cells above / below |
@@ -265,6 +271,38 @@ require("nvjup").setup({
 
 See [`docs/stage6.md`](docs/stage6.md) for lifecycle, trust, sandbox, recovery, and performance details. Use `./scripts/benchmark-renderer` for a local 3D renderer profile.
 
+## Stage 7 live tooling and integrations
+
+```lua
+require("nvjup").setup({
+  kernel = {
+    -- false for a local owned kernel, or an authenticated Jupyter Server:
+    remote = false,
+    -- remote = {
+    --   url = "https://jupyter.example.org/jupyter",
+    --   token_env = "JUPYTER_TOKEN",
+    --   verify_ssl = true,
+    --   reconnect_attempts = 2,
+    -- },
+  },
+  completion = {
+    kernel = false, -- opt in to the lower-priority nvjup_kernel nvim-cmp source
+    kernel_timeout_seconds = 2,
+  },
+  inspector = {
+    max_variables = 200,
+    timeout_seconds = 5,
+    width = 88,
+    height = 24,
+  },
+  integrations = {
+    telescope = true, -- auto-detect; falls back without Telescope
+  },
+})
+```
+
+Use `:NvJupVariables` or `<leader>nv` for the live variable inspector. Statusline plugins can call `require("nvjup.statusline").component()`. Basic ipywidgets are projected as safe terminal UI, while ipympl `_data_url` frames reuse the bounded image renderer. Remote Jupyter Server kernels use authenticated REST lifecycle plus the bounded WebSocket v1 channel protocol. See [`docs/stage7.md`](docs/stage7.md) for configuration and support boundaries.
+
 ## Language tooling configuration
 
 ```lua
@@ -292,7 +330,7 @@ The notebook `metadata.language_info.name` chooses the primary language. A code 
 
 Tree-sitter parses each cell independently and projects captures into the composite buffer. This avoids treating Markdown and code as one language and does not require generated fenced-code wrappers.
 
-Because language servers are attached to hidden shadow buffers, the ordinary `nvim_lsp` completion source cannot see them from the visible notebook buffer. When `nvim-cmp` is installed, nvjup registers a dedicated `nvjup` source and adds it to the notebook's buffer-local source list. Existing `buffer`, `path`, snippets, and other completion sources remain enabled.
+Because language servers are attached to hidden shadow buffers, the ordinary `nvim_lsp` completion source cannot see them from the visible notebook buffer. When `nvim-cmp` is installed, nvjup registers a dedicated `nvjup` source and adds it to the notebook's buffer-local source list. Existing `buffer`, `path`, snippets, and other completion sources remain enabled. Setting `completion.kernel = true` adds the optional lower-priority `nvjup_kernel` source when a live kernel is already idle; typing never starts a kernel implicitly.
 
 For Python, nvjup searches the project root for `.venv/bin/python`, `venv/bin/python`, and their Windows equivalents. An explicitly configured `lsp.python_path` takes precedence, followed by `$VIRTUAL_ENV` and the system Python.
 
@@ -312,7 +350,8 @@ This runs:
 - Stage 4 HTML/table, MIME selection, SVG security, Kitty protocol, conversion, cleanup, fallback, and pager tests;
 - Stage 5 Plotly MIME/cache lifecycle tests;
 - Stage 6 trust/invalidation/recovery tests plus real Plotly/Bokeh Chromium screencast, pointer, keyboard, resize, and sandbox tests;
-- real `ipykernel` execution, interruption, restart, and sequential batch tests.
+- Stage 7 variable-inspector, kernel-completion, widget/ipympl, Telescope/statusline, and real remote Jupyter Server transport tests;
+- real `ipykernel` execution, completion, inspection, variables, interruption, restart, and sequential batch tests.
 
 To validate the installed Pyright and Ruff servers on the host:
 

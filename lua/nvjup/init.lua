@@ -1,6 +1,7 @@
 local config = require("nvjup.config")
 local features = require("nvjup.features")
 local image = require("nvjup.image")
+local inspector = require("nvjup.inspector")
 local interactive = require("nvjup.interactive")
 local kernel = require("nvjup.kernel")
 local lsp = require("nvjup.lsp")
@@ -92,6 +93,7 @@ local function define_buffer_commands(buf)
 	command("NvJupCellClearOutput", actions.clear_output)
 	command("NvJupClearAllOutputs", actions.clear_all_outputs)
 	command("NvJupOutline", actions.outline)
+	command("NvJupVariables", actions.variables)
 	command("NvJupRunCurrent", kernel.run_current)
 	command("NvJupRunAndAdvance", kernel.run_and_advance)
 	command("NvJupRunAbove", kernel.run_above)
@@ -290,6 +292,7 @@ end
 
 M.actions = actions
 M.image = image
+M.inspector = inspector
 M.interactive = interactive
 M.kernel = kernel
 M.lsp = lsp
@@ -297,6 +300,8 @@ M.notebook = notebook
 M.output = output
 M.render = render
 M.shadow = shadow
+M.statusline = require("nvjup.statusline")
+M.telescope = require("nvjup.telescope")
 M.treesitter = treesitter
 M.trust = trust
 

@@ -7,7 +7,7 @@ Machine-readable definitions are stored in `spec/state-machines/` and validated 
 States:
 
 - `stopped`: no owned live kernel;
-- `starting`: process or attachment is being established;
+- `starting`: a local process or owned remote-server kernel/channel is being established;
 - `idle`: ready for requests;
 - `busy`: at least one execution is active;
 - `interrupting`: interrupt was requested and acknowledgement is pending;
@@ -22,7 +22,9 @@ Important rules:
 - interrupt does not imply successful cancellation until the kernel returns to `idle`;
 - restart invalidates queued and running execution IDs from the old generation;
 - unexpected process exit leads to `dead`, never directly to `stopped`;
-- recovery from `dead` creates a new kernel generation.
+- recovery from `dead` creates a new kernel generation;
+- local ZeroMQ and remote WebSocket transports expose the same states and events;
+- an unexpected remote channel close fails active work, permits only bounded idle reconnects, and otherwise leads to `dead`.
 
 ## Execution lifecycle
 

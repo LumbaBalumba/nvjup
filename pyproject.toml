@@ -4,6 +4,7 @@ version = "0.0.0"
 description = "Neovim-native Jupyter notebook editor test and sidecar environment"
 requires-python = ">=3.11"
 dependencies = [
+  "aiohttp>=3.13,<4",
   "bokeh>=3.8,<4",
   "jupyter-client>=8.6,<9",
   "playwright>=1.55,<2",
@@ -13,8 +14,10 @@ dependencies = [
 [dependency-groups]
 test = [
   "ipykernel>=6.29,<8",
+  "ipympl>=0.9,<1",
   "ipywidgets>=8,<9",
   "jsonschema>=4.23,<5",
+  "jupyter-server>=2.17,<3",
   "nbformat>=5.10,<6",
   "pytest>=8,<10",
   "tqdm>=4.67,<5",

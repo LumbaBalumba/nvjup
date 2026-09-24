@@ -1,9 +1,11 @@
 from __future__ import annotations
 
+import ast
 import asyncio
 import contextlib
 import inspect
 import json
+import math
 import os
 import sys
 import traceback
@@ -13,6 +15,8 @@ from typing import Any
 
 from jupyter_client import AsyncKernelManager
 from jupyter_client.kernelspec import KernelSpec, KernelSpecManager
+
+from nvjup_sidecar.remote import RemoteKernelManager
 
 PROTOCOL = "nvjup/1"
 VERSION = "0.3.0"
@@ -37,10 +41,11 @@ class KernelSession:
     server: "SidecarServer"
     notebook_id: str
     kernel_name: str
-    manager: AsyncKernelManager
+    manager: Any
     client: Any
     python_path: str | None = None
     python_source: str = "kernelspec"
+    transport: str = "local"
     generation: int = 1
     state: str = "starting"
     queue: asyncio.Queue[Execution] = field(default_factory=asyncio.Queue)
@@ -51,6 +56,24 @@ class KernelSession:
     worker_task: asyncio.Task[None] | None = None
     monitor_task: asyncio.Task[None] | None = None
     closing: bool = False
+
+    async def shell_reply(
+        self, message_id: str, timeout: float = 5.0
+    ) -> dict[str, Any]:
+        if self.active or self.state != "idle":
+            raise RuntimeError(f"kernel is not idle ({self.state})")
+        loop = asyncio.get_running_loop()
+        deadline = loop.time() + max(0.1, min(timeout, 30.0))
+        while True:
+            remaining = deadline - loop.time()
+            if remaining <= 0:
+                raise TimeoutError("kernel request timed out")
+            message = await asyncio.wait_for(
+                self.client.get_shell_msg(timeout=remaining), timeout=remaining + 0.1
+            )
+            parent_id = message.get("parent_header", {}).get("msg_id")
+            if parent_id == message_id:
+                return message
 
     def start_tasks(self) -> None:
         self.worker_task = asyncio.create_task(self._worker())
@@ -66,6 +89,7 @@ class KernelSession:
                 "generation": self.generation,
                 "python_path": self.python_path,
                 "python_source": self.python_source,
+                "transport": self.transport,
                 **payload,
             },
         )
@@ -304,12 +328,26 @@ class KernelSession:
         if not isinstance(value, dict):
             return {}
         allowed = {
+            "_data_url",
+            "_figure_label",
+            "_model_module",
             "_model_name",
+            "_options_labels",
+            "_size",
             "bar_style",
+            "button_style",
             "children",
             "description",
+            "disabled",
+            "icon",
+            "index",
             "max",
             "min",
+            "orientation",
+            "placeholder",
+            "readout_format",
+            "step",
+            "tooltip",
             "value",
         }
         result: dict[str, Any] = {}
@@ -318,11 +356,23 @@ class KernelSession:
                 continue
             item = value[key]
             if isinstance(item, str):
-                result[key] = item[:4096]
+                result[key] = (
+                    item[: 10 * 1024 * 1024] if key == "_data_url" else item[:4096]
+                )
             elif isinstance(item, (int, float, bool)) or item is None:
                 result[key] = item
             elif key == "children" and isinstance(item, list):
                 result[key] = [str(child)[:256] for child in item[:64]]
+            elif key == "_options_labels" and isinstance(item, (list, tuple)):
+                result[key] = [str(option)[:256] for option in item[:256]]
+            elif key == "_size" and isinstance(item, (list, tuple)):
+                result[key] = [
+                    min(32768.0, max(1.0, float(size)))
+                    for size in item[:2]
+                    if isinstance(size, (int, float))
+                    and not isinstance(size, bool)
+                    and math.isfinite(float(size))
+                ]
         return result
 
     def _route_output(self, execution: Execution, message: dict[str, Any]) -> None:
@@ -581,6 +631,7 @@ class SidecarServer:
             "version": VERSION,
             "protocols": [PROTOCOL],
             "capabilities": {
+                "transports": ["local", "jupyter_server"],
                 "requests": [
                     "kernel.list",
                     "kernel.start",
@@ -590,6 +641,9 @@ class SidecarServer:
                     "execution.enqueue",
                     "execution.cancel",
                     "execution.stdin_reply",
+                    "completion.request",
+                    "inspect.request",
+                    "variables.list",
                 ],
                 "events": [
                     "kernel.state",
@@ -601,6 +655,7 @@ class SidecarServer:
                     "execution.clear_output",
                     "execution.error",
                     "execution.stdin_request",
+                    "execution.widget",
                 ],
             },
         }
@@ -661,6 +716,7 @@ class SidecarServer:
                 "generation": existing.generation,
                 "python_path": existing.python_path,
                 "python_source": existing.python_source,
+                "transport": existing.transport,
             }
         if existing:
             with contextlib.suppress(Exception):
@@ -669,29 +725,48 @@ class SidecarServer:
         kernel_name = str(request["payload"].get("kernel_name") or "python3")
         python_path = request["payload"].get("python_path")
         python_source = str(request["payload"].get("python_source") or "kernelspec")
-        manager = AsyncKernelManager(kernel_name=kernel_name)
-        if python_path:
-            python_path = await self._validate_kernel_python(str(python_path))
-            manager._kernel_spec = KernelSpec(
-                argv=[
-                    python_path,
-                    "-m",
-                    "ipykernel_launcher",
-                    "-f",
-                    "{connection_file}",
-                ],
-                display_name=f"Python ({python_path})",
-                language="python",
-                name="nvjup-project-python",
-            )
+        remote = request["payload"].get("remote")
+        transport = (
+            "remote" if isinstance(remote, dict) and remote.get("url") else "local"
+        )
         self.event(
             "kernel.state",
             notebook_id=notebook_id,
-            payload={"state": "starting", "generation": 1},
+            payload={"state": "starting", "generation": 1, "transport": transport},
         )
-        await manager.start_kernel(cwd=request["payload"].get("cwd"))
-        client = manager.client()
-        client.start_channels()
+        if transport == "remote":
+            assert isinstance(remote, dict)
+            python_path = None
+            python_source = "remote"
+            manager = await RemoteKernelManager.create(
+                base_url=str(remote["url"]),
+                token=str(remote.get("token") or ""),
+                verify_ssl=bool(remote.get("verify_ssl", True)),
+                origin=str(remote["origin"]) if remote.get("origin") else None,
+                timeout=float(request["payload"].get("timeout", 30)),
+                reconnect_attempts=int(remote.get("reconnect_attempts", 2)),
+                kernel_name=kernel_name,
+            )
+            client = manager.client()
+        else:
+            manager = AsyncKernelManager(kernel_name=kernel_name)
+            if python_path:
+                python_path = await self._validate_kernel_python(str(python_path))
+                manager._kernel_spec = KernelSpec(
+                    argv=[
+                        python_path,
+                        "-m",
+                        "ipykernel_launcher",
+                        "-f",
+                        "{connection_file}",
+                    ],
+                    display_name=f"Python ({python_path})",
+                    language="python",
+                    name="nvjup-project-python",
+                )
+            await manager.start_kernel(cwd=request["payload"].get("cwd"))
+            client = manager.client()
+            client.start_channels()
         try:
             await client.wait_for_ready(
                 timeout=float(request["payload"].get("timeout", 30))
@@ -708,6 +783,7 @@ class SidecarServer:
             client,
             python_path=python_path,
             python_source=python_source,
+            transport=transport,
             state="idle",
         )
         self.sessions[notebook_id] = session
@@ -719,6 +795,7 @@ class SidecarServer:
             "generation": 1,
             "python_path": python_path,
             "python_source": python_source,
+            "transport": transport,
         }
 
     async def _handle_kernel_interrupt(self, request: dict[str, Any]) -> dict[str, Any]:
@@ -739,6 +816,7 @@ class SidecarServer:
             "generation": session.generation,
             "python_path": session.python_path,
             "python_source": session.python_source,
+            "transport": session.transport,
         }
 
     async def _handle_kernel_shutdown(self, request: dict[str, Any]) -> dict[str, Any]:
@@ -787,6 +865,103 @@ class SidecarServer:
             execution_id, str(request["payload"].get("value", ""))
         )
         return {"execution_id": execution_id, "accepted": accepted}
+
+    async def _handle_completion_request(
+        self, request: dict[str, Any]
+    ) -> dict[str, Any]:
+        session = self._session(request)
+        code = str(request["payload"].get("code", ""))
+        if len(code.encode("utf-8")) > 1_000_000:
+            raise ValueError("completion code exceeds 1 MB")
+        cursor = int(request["payload"].get("cursor_pos", len(code)))
+        cursor = max(0, min(cursor, len(code)))
+        message_id = session.client.complete(code=code, cursor_pos=cursor)
+        reply = await session.shell_reply(
+            message_id, float(request["payload"].get("timeout", 5.0))
+        )
+        content = reply.get("content", {})
+        matches = content.get("matches", [])
+        return {
+            "status": str(content.get("status", "ok")),
+            "matches": [str(match)[:4096] for match in matches[:512]],
+            "cursor_start": int(content.get("cursor_start", cursor)),
+            "cursor_end": int(content.get("cursor_end", cursor)),
+            "metadata": {},
+        }
+
+    async def _handle_inspect_request(self, request: dict[str, Any]) -> dict[str, Any]:
+        session = self._session(request)
+        code = str(request["payload"].get("code", ""))
+        if len(code.encode("utf-8")) > 1_000_000:
+            raise ValueError("inspection code exceeds 1 MB")
+        cursor = int(request["payload"].get("cursor_pos", len(code)))
+        cursor = max(0, min(cursor, len(code)))
+        detail_level = max(0, min(int(request["payload"].get("detail_level", 0)), 1))
+        message_id = session.client.inspect(
+            code=code, cursor_pos=cursor, detail_level=detail_level
+        )
+        reply = await session.shell_reply(
+            message_id, float(request["payload"].get("timeout", 5.0))
+        )
+        content = reply.get("content", {})
+        raw_data = content.get("data", {})
+        data: dict[str, str] = {}
+        remaining = 1024 * 1024
+        if isinstance(raw_data, dict):
+            for mime, value in list(raw_data.items())[:16]:
+                if remaining <= 0:
+                    break
+                if isinstance(value, list):
+                    value = "".join(str(part) for part in value)
+                elif not isinstance(value, str):
+                    value = str(value)
+                encoded = value.encode("utf-8")[:remaining]
+                bounded = encoded.decode("utf-8", "ignore")
+                data[str(mime)[:256]] = bounded
+                remaining -= len(bounded.encode("utf-8"))
+        return {
+            "status": str(content.get("status", "ok")),
+            "found": bool(content.get("found", False)),
+            "data": data,
+            "metadata": {},
+        }
+
+    async def _handle_variables_list(self, request: dict[str, Any]) -> dict[str, Any]:
+        session = self._session(request)
+        limit = max(1, min(int(request["payload"].get("limit", 200)), 500))
+        expression = (
+            "__import__('json').dumps(["
+            "{'name':n,'type':type(v).__name__,'value':"
+            "(repr(v)[:240] if type(v) in (str,int,float,bool,type(None),complex) "
+            "else '<'+type(v).__name__+'>')} "
+            "for n,v in list(globals().items()) if not n.startswith('_')][:"
+            + str(limit)
+            + "],ensure_ascii=False)"
+        )
+        message_id = session.client.execute(
+            "",
+            silent=True,
+            store_history=False,
+            allow_stdin=False,
+            user_expressions={"nvjup_variables": expression},
+        )
+        reply = await session.shell_reply(
+            message_id, float(request["payload"].get("timeout", 5.0))
+        )
+        content = reply.get("content", {})
+        result = content.get("user_expressions", {}).get("nvjup_variables", {})
+        if result.get("status") != "ok":
+            raise RuntimeError(
+                str(result.get("evalue") or "variable inspection failed")
+            )
+        encoded = result.get("data", {}).get("text/plain", "''")
+        try:
+            variables = json.loads(ast.literal_eval(str(encoded)))
+        except (SyntaxError, ValueError, TypeError, json.JSONDecodeError) as exc:
+            raise RuntimeError("kernel returned invalid variable data") from exc
+        if not isinstance(variables, list):
+            raise RuntimeError("kernel returned invalid variable list")
+        return {"variables": variables[:limit], "generation": session.generation}
 
     async def close(self) -> None:
         sessions = list(self.sessions.values())

@@ -1,13 +1,17 @@
 from __future__ import annotations
 
 import json
+import os
 import queue
+import socket
 import subprocess
 import sys
 import threading
 import time
+from collections.abc import Callable
 from pathlib import Path
-from typing import Any, Callable
+from typing import Any
+from urllib.request import Request, urlopen
 
 import pytest
 
@@ -15,6 +19,7 @@ ROOT = Path(__file__).resolve().parents[2]
 SIDECAR = ROOT / "python" / "nvjup_sidecar_main.py"
 sys.path.insert(0, str(ROOT / "python"))
 
+from nvjup_sidecar.remote import _deserialize_v1, _serialize_v1  # noqa: E402
 from nvjup_sidecar.server import Execution, KernelSession  # noqa: E402
 
 
@@ -199,9 +204,12 @@ def test_widget_comm_messages_are_bounded_and_routed() -> None:
                 "data": {
                     "state": {
                         "_model_name": "FloatProgressModel",
+                        "_model_module": "@jupyter-widgets/controls",
+                        "_size": [640, 480],
                         "value": 0.0,
                         "min": 0.0,
                         "max": 4.0,
+                        "_options_labels": ["one", "two"],
                         "ignored": "not forwarded",
                     }
                 },
@@ -224,10 +232,169 @@ def test_widget_comm_messages_are_bounded_and_routed() -> None:
         "execution.widget",
     ]
     assert events[0]["payload"]["state"]["_model_name"] == "FloatProgressModel"
+    assert events[0]["payload"]["state"]["_model_module"] == "@jupyter-widgets/controls"
+    assert events[0]["payload"]["state"]["_size"] == [640.0, 480.0]
+    assert events[0]["payload"]["state"]["_options_labels"] == ["one", "two"]
     assert "ignored" not in events[0]["payload"]["state"]
     assert events[1]["payload"]["state"] == {"value": 2.0}
     assert events[1]["cell_id"] == "cell-widget"
     assert events[1]["revision"] == 3
+
+
+def test_remote_kernel_v1_framing_and_jupyter_server_transport(
+    sidecar: SidecarProcess, tmp_path: Path
+) -> None:
+    message = {
+        "header": {"msg_type": "execute_request"},
+        "parent_header": {},
+        "metadata": {},
+        "content": {"code": "40 + 2"},
+        "buffers": [b"frame"],
+    }
+    decoded = _deserialize_v1(_serialize_v1(message, "shell"))
+    assert decoded["channel"] == "shell"
+    assert decoded["content"] == {"code": "40 + 2"}
+    assert decoded["buffers"] == [b"frame"]
+
+    with socket.socket() as listener:
+        listener.bind(("127.0.0.1", 0))
+        port = listener.getsockname()[1]
+    token = "nvjup-remote-test-token"
+    env = {
+        **os.environ,
+        "JUPYTER_CONFIG_DIR": str(tmp_path / "config"),
+        "JUPYTER_DATA_DIR": str(tmp_path / "data"),
+        "JUPYTER_RUNTIME_DIR": str(tmp_path / "runtime"),
+    }
+    server = subprocess.Popen(
+        [
+            sys.executable,
+            "-m",
+            "jupyter_server",
+            "--no-browser",
+            "--ServerApp.ip=127.0.0.1",
+            f"--ServerApp.port={port}",
+            "--ServerApp.port_retries=0",
+            "--ServerApp.allow_root=True",
+            f"--IdentityProvider.token={token}",
+        ],
+        cwd=tmp_path,
+        env=env,
+        stdout=subprocess.DEVNULL,
+        stderr=subprocess.PIPE,
+        text=True,
+    )
+    base_url = f"http://127.0.0.1:{port}"
+    try:
+        deadline = time.monotonic() + 30
+        while time.monotonic() < deadline:
+            if server.poll() is not None:
+                stderr = server.stderr.read() if server.stderr else ""
+                raise AssertionError(f"Jupyter Server exited early: {stderr}")
+            try:
+                request = Request(
+                    base_url + "/api/status",
+                    headers={"Authorization": f"token {token}"},
+                )
+                with urlopen(request, timeout=0.5) as response:
+                    if response.status == 200:
+                        break
+            except OSError:
+                time.sleep(0.1)
+        else:
+            raise AssertionError("timed out starting Jupyter Server")
+
+        notebook_id = "notebook-remote"
+        started = sidecar.response(
+            sidecar.send(
+                "kernel.start",
+                {
+                    "kernel_name": "python3",
+                    "remote": {
+                        "url": base_url,
+                        "token": token,
+                        "verify_ssl": True,
+                    },
+                    "timeout": 30,
+                },
+                notebook_id=notebook_id,
+            ),
+            timeout=40,
+        )
+        assert started["payload"]["transport"] == "remote"
+        assert started["payload"]["python_source"] == "remote"
+        assert token not in json.dumps(started)
+
+        execution_id = "execution-remote"
+        enqueue(
+            sidecar,
+            notebook_id,
+            execution_id,
+            "remote_value = 42\nprint('remote ready', flush=True)",
+        )
+        assert (
+            "remote ready"
+            in sidecar.event("execution.stream", execution_id, timeout=30)["payload"][
+                "text"
+            ]
+        )
+        sidecar.event("execution.state", execution_id, state="completed", timeout=30)
+        stdin_id = "execution-remote-stdin"
+        enqueue(sidecar, notebook_id, stdin_id, "name = input('Remote: '); print(name)")
+        assert (
+            sidecar.event("execution.stdin_request", stdin_id, timeout=30)["payload"][
+                "prompt"
+            ]
+            == "Remote: "
+        )
+        stdin_reply = sidecar.response(
+            sidecar.send(
+                "execution.stdin_reply",
+                {"execution_id": stdin_id, "value": "nvjup"},
+                notebook_id=notebook_id,
+            )
+        )
+        assert stdin_reply["payload"]["accepted"] is True
+        assert (
+            "nvjup"
+            in sidecar.event("execution.stream", stdin_id, timeout=30)["payload"][
+                "text"
+            ]
+        )
+        sidecar.event("execution.state", stdin_id, state="completed", timeout=30)
+        completion = sidecar.response(
+            sidecar.send(
+                "completion.request",
+                {"code": "remote_v", "cursor_pos": 8},
+                notebook_id=notebook_id,
+            )
+        )
+        assert "remote_value" in completion["payload"]["matches"]
+        restarted = sidecar.response(
+            sidecar.send("kernel.restart", notebook_id=notebook_id), timeout=40
+        )
+        assert restarted["payload"]["transport"] == "remote"
+        assert restarted["payload"]["generation"] == 2
+        restarted_id = "execution-remote-restarted"
+        enqueue(sidecar, notebook_id, restarted_id, "print('remote restarted')")
+        assert (
+            "remote restarted"
+            in sidecar.event("execution.stream", restarted_id, timeout=30)["payload"][
+                "text"
+            ]
+        )
+        sidecar.event("execution.state", restarted_id, state="completed", timeout=30)
+        shutdown = sidecar.response(
+            sidecar.send("kernel.shutdown", notebook_id=notebook_id), timeout=30
+        )
+        assert shutdown["payload"]["state"] == "stopped"
+    finally:
+        server.terminate()
+        try:
+            server.wait(timeout=10)
+        except subprocess.TimeoutExpired:
+            server.kill()
+            server.wait(timeout=5)
 
 
 def test_sidecar_kernel_lifecycle_and_execution_routing(
@@ -237,6 +404,14 @@ def test_sidecar_kernel_lifecycle_and_execution_routing(
 
     hello = sidecar.response(sidecar.send("sidecar.hello"))
     assert hello["payload"]["protocols"] == ["nvjup/1"]
+    assert hello["payload"]["capabilities"]["transports"] == [
+        "local",
+        "jupyter_server",
+    ]
+    assert "completion.request" in hello["payload"]["capabilities"]["requests"]
+    assert "inspect.request" in hello["payload"]["capabilities"]["requests"]
+    assert "variables.list" in hello["payload"]["capabilities"]["requests"]
+    assert "execution.widget" in hello["payload"]["capabilities"]["events"]
     kernels = sidecar.response(sidecar.send("kernel.list"))
     assert any(item["name"] == "python3" for item in kernels["payload"]["kernels"])
 
@@ -298,6 +473,32 @@ print('after', flush=True)
     )
     assert sidecar.event("execution.state", rich_id, state="completed")["revision"] == 1
 
+    tooling_id = "execution-stage7-tooling"
+    enqueue(sidecar, notebook_id, tooling_id, "stage7_value = 42")
+    sidecar.event("execution.state", tooling_id, state="completed")
+    completion = sidecar.response(
+        sidecar.send(
+            "completion.request",
+            {"code": "stage7_v", "cursor_pos": 8},
+            notebook_id=notebook_id,
+        )
+    )["payload"]
+    assert "stage7_value" in completion["matches"]
+    assert completion["cursor_start"] == 0
+    inspected = sidecar.response(
+        sidecar.send(
+            "inspect.request",
+            {"code": "stage7_value", "cursor_pos": 12},
+            notebook_id=notebook_id,
+        )
+    )["payload"]
+    assert inspected["found"] is True
+    variables = sidecar.response(
+        sidecar.send("variables.list", {"limit": 50}, notebook_id=notebook_id)
+    )["payload"]["variables"]
+    stage7_variable = next(item for item in variables if item["name"] == "stage7_value")
+    assert stage7_variable == {"name": "stage7_value", "type": "int", "value": "42"}
+
     widget_id = "execution-widget-live"
     enqueue(
         sidecar,
@@ -322,6 +523,37 @@ print('after', flush=True)
     )
     assert updated["payload"]["action"] == "update"
     sidecar.event("execution.state", widget_id, state="completed")
+
+    ipympl_id = "execution-ipympl"
+    enqueue(
+        sidecar,
+        notebook_id,
+        ipympl_id,
+        "%matplotlib widget\nimport matplotlib.pyplot as plt\nfig, ax = plt.subplots()\nax.plot([0, 1], [0, 1])\nfig.canvas",
+    )
+    canvas_open = sidecar.wait_for(
+        lambda message: message.get("type") == "execution.widget"
+        and message.get("payload", {}).get("execution_id") == ipympl_id
+        and message.get("payload", {}).get("state", {}).get("_model_name")
+        == "MPLCanvasModel",
+        timeout=30,
+    )
+    canvas_model = canvas_open["payload"]["model_id"]
+    canvas_frame = sidecar.wait_for(
+        lambda message: message.get("type") == "execution.widget"
+        and message.get("payload", {}).get("execution_id") == ipympl_id
+        and message.get("payload", {}).get("model_id") == canvas_model
+        and str(
+            message.get("payload", {}).get("state", {}).get("_data_url", "")
+        ).startswith("data:image/png;base64,"),
+        timeout=30,
+    )
+    assert len(canvas_frame["payload"]["state"]["_data_url"]) > 100
+    ipympl_display = sidecar.event("execution.display", ipympl_id)
+    assert (
+        "application/vnd.jupyter.widget-view+json" in ipympl_display["payload"]["data"]
+    )
+    sidecar.event("execution.state", ipympl_id, state="completed")
 
     stdin_id = "execution-stdin"
     enqueue(
