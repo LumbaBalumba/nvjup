@@ -193,6 +193,10 @@ function M.variables()
 	return require("nvjup.inspector").open(state())
 end
 
+function M.remote_connection()
+	return require("nvjup.remote_connection").open(state())
+end
+
 function M.remote_files()
 	return require("nvjup.remote_files").open(state())
 end

@@ -21,7 +21,7 @@ from jupyter_client.kernelspec import KernelSpec, KernelSpecManager
 from nvjup_sidecar.remote import RemoteContentsClient, RemoteKernelManager
 
 PROTOCOL = "nvjup/1"
-VERSION = "0.4.0"
+VERSION = "0.5.0"
 
 
 @dataclass
@@ -648,6 +648,7 @@ class SidecarServer:
                     "completion.request",
                     "inspect.request",
                     "variables.list",
+                    "remote.server.probe",
                     "remote.files.list",
                     "remote.files.stat",
                     "remote.files.mkdir",
@@ -1004,6 +1005,12 @@ class SidecarServer:
             )
             self.contents_identity = identity
         return self.contents_client
+
+    async def _handle_remote_server_probe(
+        self, request: dict[str, Any]
+    ) -> dict[str, Any]:
+        client = await self._contents_client(request)
+        return await client.server_info()
 
     async def _handle_remote_files_list(
         self, request: dict[str, Any]

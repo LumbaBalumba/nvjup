@@ -438,6 +438,10 @@ local function flush_start_waiters(session, err)
 end
 
 local function kernel_name(state)
+	local selected = remote.kernel_name(state)
+	if selected then
+		return selected
+	end
 	local metadata = state.document.metadata or {}
 	local kernelspec = metadata.kernelspec or {}
 	return kernelspec.name or config.options.kernel.default_name or "python3"
@@ -774,12 +778,15 @@ function M.cancel(state, execution_id)
 	return true
 end
 
-function M.start()
-	local state = current_state()
+function M.start(state, callback)
+	state = state or current_state()
 	local session = get_session(state)
 	ensure_kernel(session, function(err)
 		if err then
 			notify(err.message or tostring(err), vim.log.levels.ERROR)
+		end
+		if callback then
+			callback(err, err and nil or M.status(state))
 		end
 	end)
 	return true
@@ -859,6 +866,18 @@ function M.shutdown(state)
 	end
 	sessions[state.buf] = nil
 	state.kernel = nil
+end
+
+function M.shutdown_remote_sessions()
+	local states = {}
+	for _, session in pairs(sessions) do
+		if session.transport == "remote" or (session.kernel_state == "starting" and remote.enabled(session.state)) then
+			table.insert(states, session.state)
+		end
+	end
+	for _, state in ipairs(states) do
+		M.shutdown(state)
+	end
 end
 
 function M.detach(state)

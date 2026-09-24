@@ -287,9 +287,12 @@ lower-priority nvjup_kernel nvim-cmp source without starting a kernel on typing.
 
 Statusline plugins can call require('nvjup.statusline').component() or .get(0).
 The outline and variable pickers auto-detect Telescope and retain dependency-free
-fallbacks. `kernel.remote` can create an owned kernel on an authenticated Jupyter
-Server through REST and bounded WebSocket v1 channels. Tokens can come from an
-environment variable; TLS verification defaults on. See docs/stage7.md.
+fallbacks. <Leader>nK or :NvJupRemoteConnect opens the complete remote connection
+UI: URL, hidden token entry, TLS/origin policy, live server probe, kernelspec
+selection, and owned-kernel startup. Credentials remain only in Neovim memory.
+Reopen it for status/reconnect/disconnect, or use :NvJupRemoteStatus and
+:NvJupRemoteDisconnect. Static `kernel.remote` configuration remains optional.
+Remote channels use authenticated REST and bounded WebSocket v1. See docs/stage7.md.
 
 ==============================================================================
 10. REMOTE JUPYTER FILES                              *nvjup-remote-files*
@@ -333,6 +336,9 @@ local panel and edits that copy. Telescope is required. See docs/stage8.md.
 :NvJupClearAllOutputs   Clear every output and execution count.
 :NvJupOutline           Open cell outline through Telescope or vim.ui.select().
 :NvJupVariables         Inspect public variables in the live kernel.
+:NvJupRemoteConnect     Connect/manage remote Jupyter entirely in the nvjup UI.
+:NvJupRemoteDisconnect  Stop remote kernels and clear in-memory credentials.
+:NvJupRemoteStatus      Show URL, selected kernel, auth, TLS, and profile source.
 :NvJupRemoteFiles       Open the two-panel local/remote file manager.
 :NvJupRunCurrent        Run current code cell.
 :NvJupRunAndAdvance     Run current cell and move to the next cell.

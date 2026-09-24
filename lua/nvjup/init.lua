@@ -259,7 +259,18 @@ end
 function M.setup(options)
 	config.setup(options)
 	group = vim.api.nvim_create_augroup("NvJup", { clear = true })
-	pcall(vim.api.nvim_del_user_command, "NvJupRemoteFiles")
+	for _, name in ipairs({ "NvJupRemoteConnect", "NvJupRemoteDisconnect", "NvJupRemoteStatus", "NvJupRemoteFiles" }) do
+		pcall(vim.api.nvim_del_user_command, name)
+	end
+	vim.api.nvim_create_user_command("NvJupRemoteConnect", function()
+		require("nvjup.remote_connection").open()
+	end, { desc = "Connect to or manage a remote Jupyter Server" })
+	vim.api.nvim_create_user_command("NvJupRemoteDisconnect", function()
+		require("nvjup.remote_connection").disconnect()
+	end, { desc = "Disconnect the in-memory remote Jupyter session" })
+	vim.api.nvim_create_user_command("NvJupRemoteStatus", function()
+		require("nvjup.remote_connection").status()
+	end, { desc = "Show the remote Jupyter connection status" })
 	vim.api.nvim_create_user_command("NvJupRemoteFiles", function()
 		require("nvjup.remote_files").open()
 	end, { desc = "Open the local/remote Jupyter file manager" })
@@ -302,6 +313,8 @@ M.kernel = kernel
 M.lsp = lsp
 M.notebook = notebook
 M.output = output
+M.remote = require("nvjup.remote")
+M.remote_connection = require("nvjup.remote_connection")
 M.remote_files = require("nvjup.remote_files")
 M.render = render
 M.shadow = shadow

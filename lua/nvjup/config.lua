@@ -134,6 +134,7 @@ M.defaults = {
 		clear_all_outputs = "<leader>nC",
 		outline = "<leader>nl",
 		variables = "<leader>nv",
+		remote_connection = "<leader>nK",
 		remote_files = "<leader>ne",
 		refresh = "<leader>nL",
 		run_current = "<C-CR>",

@@ -22,6 +22,8 @@ def _clean_base_url(value: str) -> str:
     parsed = urlsplit(value.strip())
     if parsed.scheme not in {"http", "https"} or not parsed.netloc:
         raise ValueError("remote Jupyter URL must use http:// or https://")
+    if parsed.username is not None or parsed.password is not None:
+        raise ValueError("remote Jupyter URL cannot contain embedded credentials")
     return urlunsplit((parsed.scheme, parsed.netloc, parsed.path.rstrip("/"), "", ""))
 
 
@@ -472,6 +474,39 @@ class RemoteContentsClient:
             "created": str(model.get("created", ""))[:128],
             "last_modified": str(model.get("last_modified", ""))[:128],
             "mimetype": str(model.get("mimetype") or "")[:256],
+        }
+
+    async def server_info(self) -> dict[str, Any]:
+        info = await self._json_request("GET", "/api", "")
+        response = await self._json_request("GET", "/api/kernelspecs", "")
+        raw_specs = (
+            response.get("kernelspecs", {}) if isinstance(response, dict) else {}
+        )
+        if not isinstance(raw_specs, dict):
+            raise TypeError("Jupyter Server returned invalid kernelspec data")
+        if len(raw_specs) > 1000:
+            raise ValueError("remote server returned too many kernelspecs")
+        kernels = []
+        for name, model in raw_specs.items():
+            if not isinstance(name, str) or not isinstance(model, dict):
+                continue
+            spec = model.get("spec", {})
+            if not isinstance(spec, dict):
+                spec = {}
+            kernels.append(
+                {
+                    "name": name[:256],
+                    "display_name": str(spec.get("display_name") or name)[:512],
+                    "language": str(spec.get("language") or "")[:128],
+                }
+            )
+        kernels.sort(key=lambda item: (item["display_name"].casefold(), item["name"]))
+        return {
+            "url": self.base_url,
+            "version": (
+                str(info.get("version") or "")[:128] if isinstance(info, dict) else ""
+            ),
+            "kernels": kernels,
         }
 
     async def list(self, path: str) -> dict[str, Any]:

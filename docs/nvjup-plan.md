@@ -971,6 +971,8 @@ remote transport и optional integrations описаны в [`docs/stage7.md`](s
 Статус: реализован. Детали UI, Contents API, limits и bindings описаны в
 [`docs/stage8.md`](stage8.md).
 
+- UI-only remote connect/manage flow: URL, hidden token, TLS/origin, server probe, kernelspec selection, start/status/disconnect;
+- session-only credentials без обязательного Lua config или environment variables;
 - authenticated Jupyter Contents API для list/stat/create/rename/delete/upload/download;
 - byte-preserving binary и notebook transfer;
 - двухпанельный Telescope UI для local/remote файловых систем;

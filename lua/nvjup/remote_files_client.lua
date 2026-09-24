@@ -10,9 +10,10 @@ local function structured_error(message)
 	return { code = "remote_files_unavailable", message = message, retryable = false, details = {} }
 end
 
-function Client.new(state)
+function Client.new(state, remote_options)
 	return setmetatable({
 		state = state,
+		remote_options = remote_options,
 		ready = false,
 		starting = false,
 		waiters = {},
@@ -49,7 +50,7 @@ function Client:_ensure(callback)
 		return
 	end
 	self.starting = true
-	local options = remote.resolve(self.state)
+	local options = self.remote_options or remote.resolve(self.state)
 	if not options then
 		self:_flush(structured_error("kernel.remote must be configured before opening remote files"))
 		return
@@ -80,23 +81,31 @@ function Client:_ensure(callback)
 	end)
 end
 
-function Client:request(operation, payload, callback)
+function Client:request_type(request_type, payload, callback)
 	callback = callback or function() end
 	self:_ensure(function(err)
 		if err then
 			callback(err)
 			return
 		end
-		local options = remote.resolve(self.state)
+		local options = self.remote_options or remote.resolve(self.state)
 		if not options then
 			callback(structured_error("kernel.remote is no longer configured"))
 			return
 		end
 		payload = vim.tbl_extend("force", payload or {}, { remote = options })
-		self.client:request("remote.files." .. operation, payload, {
+		self.client:request(request_type, payload, {
 			timeout_ms = options.file_timeout_seconds * 1000 + 5000,
 		}, callback)
 	end)
+end
+
+function Client:request(operation, payload, callback)
+	self:request_type("remote.files." .. operation, payload, callback)
+end
+
+function Client:probe(callback)
+	self:request_type("remote.server.probe", {}, callback)
 end
 
 function Client:list(path, callback)
@@ -152,8 +161,8 @@ function Client:shutdown()
 	self.client:shutdown()
 end
 
-function M.new(state)
-	return Client.new(state)
+function M.new(state, remote_options)
+	return Client.new(state, remote_options)
 end
 
 function M._set_client_factory(factory)

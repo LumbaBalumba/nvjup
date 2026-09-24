@@ -2,7 +2,9 @@
 
 Stage 8 extends the remote Jupyter Server transport with a bounded file-exchange layer and a two-panel Telescope file manager.
 
-## Configuration
+## Connection
+
+The normal workflow is entirely interactive: `:NvJupRemoteConnect` or `<leader>nK` asks for URL/authentication/TLS/origin, probes the server, offers its kernelspecs, stores credentials only in Neovim memory, and starts the chosen kernel. The resulting connection is reused by this file manager. Static configuration remains available when desired:
 
 ```lua
 require("nvjup").setup({
@@ -34,7 +36,7 @@ require("nvjup").setup({
 })
 ```
 
-Open the manager with `:NvJupRemoteFiles` from any buffer, or `<leader>ne` from an nvjup notebook. Telescope is required for this feature.
+Open the manager with `:NvJupRemoteFiles` from any buffer, or `<leader>ne` from an nvjup notebook. If disconnected, use `:NvJupRemoteConnect` first. Telescope is required only for the file-manager UI; the connection wizard itself uses built-in Neovim UI primitives.
 
 ## Two-panel model
 
@@ -85,6 +87,7 @@ A cross-filesystem transfer is therefore `c`, `<Tab>`, `p`; use `x`, `<Tab>`, `p
 
 Automated coverage includes:
 
+- real UI-only authenticated server probe, kernelspec selection, kernel startup, status and disconnect;
 - real authenticated Jupyter Server mkdir/list/stat/upload/download/rename/touch/delete;
 - byte-identical binary and Unicode-path notebook transfer;
 - path traversal rejection and token redaction;

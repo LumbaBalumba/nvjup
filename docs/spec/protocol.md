@@ -77,8 +77,9 @@ Execution:
 - `inspect.request`;
 - `variables.list`.
 
-Remote files:
+Remote server and files:
 
+- `remote.server.probe` returns bounded server metadata and kernelspec names without creating a kernel;
 - `remote.files.list`;
 - `remote.files.stat`;
 - `remote.files.mkdir`;

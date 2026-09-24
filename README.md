@@ -20,6 +20,7 @@ The repository now contains the **Stage 7 notebook editor, kernel/LSP tooling, r
 - variable inspector with optional Telescope picker and kernel MIME inspection;
 - optional lower-priority live-kernel completion alongside shadow-LSP completion;
 - dependency-free statusline API and expanded health diagnostics;
+- an in-Neovim remote connection wizard with hidden token entry, TLS/origin policy, live server probing, kernelspec selection, and memory-only credentials;
 - a Telescope two-panel local/remote file manager backed by the authenticated Jupyter Contents API;
 - undo-aware structural representation;
 - one versioned LSP shadow document per code language;
@@ -99,6 +100,7 @@ The launcher redirects config, data, state, and cache into `.test-runtime/`.
 | `<leader>nc` / `<leader>nC` | clear current / all outputs |
 | `<leader>nl` / `<leader>nL` | notebook outline / refresh display |
 | `<leader>nv` | inspect live kernel variables |
+| `<leader>nK` | connect to/manage a remote Jupyter Server entirely in the nvjup UI |
 | `<leader>ne` | open the two-panel local/remote Jupyter file manager |
 | `<C-CR>` | run current cell (Normal and Insert modes) |
 | `<S-CR>` / `<leader>nr` | run current cell and advance |
@@ -154,6 +156,9 @@ Commands:
 :NvJupClearAllOutputs
 :NvJupOutline
 :NvJupVariables
+:NvJupRemoteConnect
+:NvJupRemoteDisconnect
+:NvJupRemoteStatus
 :NvJupRemoteFiles
 :NvJupRunCurrent
 :NvJupRunAndAdvance
@@ -316,9 +321,11 @@ require("nvjup").setup({
 })
 ```
 
-Use `:NvJupVariables` or `<leader>nv` for the live variable inspector. Statusline plugins can call `require("nvjup.statusline").component()`. Basic ipywidgets are projected as safe terminal UI, while ipympl `_data_url` frames reuse the bounded image renderer. Remote Jupyter Server kernels use authenticated REST lifecycle plus the bounded WebSocket v1 channel protocol. See [`docs/stage7.md`](docs/stage7.md) for kernel configuration and support boundaries.
+Use `:NvJupVariables` or `<leader>nv` for the live variable inspector. Statusline plugins can call `require("nvjup.statusline").component()`. Basic ipywidgets are projected as safe terminal UI, while ipympl `_data_url` frames reuse the bounded image renderer.
 
-`:NvJupRemoteFiles` or `<leader>ne` opens a two-panel Telescope manager: the results and preview windows show the active and inactive local/remote filesystems, and `<Tab>` switches them. The nvim-tree-style `a/r/e/d/c/x/p/R/H/P/g?` operations include recursive copies and moves; `c`, `<Tab>`, `p` copies between filesystems. See [`docs/stage8.md`](docs/stage8.md) for the complete binding table, limits, and failure semantics.
+The preferred remote workflow needs no Lua configuration or environment variable: open a notebook and run `:NvJupRemoteConnect` or `<leader>nK`. nvjup asks for the URL, accepts the token through hidden input, asks for TLS/origin policy, probes the server, shows its kernelspecs, remembers the selected connection only in Neovim memory, and starts the chosen kernel. Reopen the same UI to inspect, reconnect, change server, or disconnect. `:NvJupRemoteStatus` and `:NvJupRemoteDisconnect` are also available globally. Static `kernel.remote` configuration remains supported for unattended setups. See [`docs/stage7.md`](docs/stage7.md).
+
+`:NvJupRemoteFiles` or `<leader>ne` opens a two-panel Telescope manager using the active UI or configured connection: the results and preview windows show the active and inactive local/remote filesystems, and `<Tab>` switches them. The nvim-tree-style `a/r/e/d/c/x/p/R/H/P/g?` operations include recursive copies and moves; `c`, `<Tab>`, `p` copies between filesystems. See [`docs/stage8.md`](docs/stage8.md) for the complete binding table, limits, and failure semantics.
 
 ## Language tooling configuration
 

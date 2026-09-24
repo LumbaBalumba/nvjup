@@ -1,16 +1,53 @@
 local config = require("nvjup.config")
 
 local M = {}
+local session_override_set = false
+local session_profile = nil
 
-local function configured(state)
-	local remote = (config.options.kernel or {}).remote
-	if type(remote) == "function" then
-		remote = remote(state and state.path or "", state)
+local function configured(state, ignore_session)
+	if session_override_set and not ignore_session then
+		return session_profile
 	end
-	if type(remote) ~= "table" or type(remote.url) ~= "string" or remote.url == "" then
+	local options = (config.options.kernel or {}).remote
+	if type(options) == "function" then
+		options = options(state and state.path or "", state)
+	end
+	if type(options) ~= "table" or type(options.url) ~= "string" or options.url == "" then
 		return nil
 	end
-	return remote
+	return options
+end
+
+local function normalized(state, options)
+	if not options then
+		return nil
+	end
+	local token = options.token
+	if type(token) == "function" then
+		token = token(state and state.path or "", state)
+	end
+	if (type(token) ~= "string" or token == "") and type(options.token_env) == "string" then
+		token = vim.env[options.token_env]
+	end
+	local files = config.options.remote_files or {}
+	return {
+		url = options.url:gsub("/+$", ""),
+		token = type(token) == "string" and token or "",
+		verify_ssl = options.verify_ssl ~= false,
+		origin = type(options.origin) == "string" and options.origin ~= "" and options.origin or nil,
+		reconnect_attempts = math.max(0, math.min(tonumber(options.reconnect_attempts) or 2, 5)),
+		file_timeout_seconds = math.max(
+			1,
+			math.min(tonumber(options.file_timeout_seconds) or files.timeout_seconds or 60, 300)
+		),
+		max_file_bytes = math.max(
+			1,
+			math.min(tonumber(options.max_file_bytes) or files.max_file_bytes or 64 * 1024 * 1024, 512 * 1024 * 1024)
+		),
+		max_entries = math.max(1, math.min(tonumber(options.max_entries) or files.max_entries or 10000, 100000)),
+		kernel_name = type(options.kernel_name) == "string" and options.kernel_name ~= "" and options.kernel_name
+			or nil,
+	}
 end
 
 function M.enabled(state)
@@ -18,33 +55,50 @@ function M.enabled(state)
 end
 
 function M.resolve(state)
-	local remote = configured(state)
-	if not remote then
-		return nil
-	end
-	local token = remote.token
-	if type(token) == "function" then
-		token = token(state and state.path or "", state)
-	end
-	if (type(token) ~= "string" or token == "") and type(remote.token_env) == "string" then
-		token = vim.env[remote.token_env]
-	end
-	local files = config.options.remote_files or {}
+	return normalized(state, configured(state))
+end
+
+function M.configured(state)
+	return normalized(state, configured(state, true))
+end
+
+function M.set_session(profile)
+	assert(type(profile) == "table" and type(profile.url) == "string" and profile.url ~= "")
+	session_override_set = true
+	session_profile = vim.deepcopy(profile)
+end
+
+function M.disconnect()
+	session_override_set = true
+	session_profile = nil
+end
+
+function M.reset_session()
+	session_override_set = false
+	session_profile = nil
+end
+
+function M.session()
+	return session_override_set and session_profile and vim.deepcopy(session_profile) or nil
+end
+
+function M.kernel_name(state)
+	local options = configured(state)
+	return options and type(options.kernel_name) == "string" and options.kernel_name ~= "" and options.kernel_name
+		or nil
+end
+
+function M.status(state)
+	local options = configured(state)
 	return {
-		url = remote.url,
-		token = type(token) == "string" and token or "",
-		verify_ssl = remote.verify_ssl ~= false,
-		origin = type(remote.origin) == "string" and remote.origin or nil,
-		reconnect_attempts = math.max(0, math.min(tonumber(remote.reconnect_attempts) or 2, 5)),
-		file_timeout_seconds = math.max(
-			1,
-			math.min(tonumber(remote.file_timeout_seconds) or files.timeout_seconds or 60, 300)
-		),
-		max_file_bytes = math.max(
-			1,
-			math.min(tonumber(remote.max_file_bytes) or files.max_file_bytes or 64 * 1024 * 1024, 512 * 1024 * 1024)
-		),
-		max_entries = math.max(1, math.min(tonumber(remote.max_entries) or files.max_entries or 10000, 100000)),
+		connected = options ~= nil,
+		source = session_override_set and (session_profile and "session" or "disconnected") or "config",
+		url = options and options.url:gsub("/+$", "") or nil,
+		kernel_name = options and options.kernel_name or nil,
+		verify_ssl = options and options.verify_ssl ~= false,
+		has_token = options
+				and ((type(options.token) == "string" and options.token ~= "") or type(options.token) == "function" or options.token_env ~= nil)
+			or false,
 	}
 end
 

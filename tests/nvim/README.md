@@ -24,6 +24,7 @@ Useful commands:
 - `:NvJupLspStatus` — inspect shadow documents and attached language clients;
 - `:NvJupKernelStatus` — inspect kernel transport, generation, queue, and active execution;
 - `:NvJupVariables` — inspect public variables in the live kernel;
+- `:NvJupRemoteConnect` / `:NvJupRemoteStatus` / `:NvJupRemoteDisconnect` — manage a memory-only remote Jupyter session from the UI;
 - `:NvJupRemoteFiles` — open the two-panel Telescope local/remote file manager;
 - `:NvJupRunCurrent` / `:NvJupRunAll` — execute code cells through the sidecar;
 - `:NvJupOutputOpen [float|split|vsplit|tab]` — inspect complete untruncated output.

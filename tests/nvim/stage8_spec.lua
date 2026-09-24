@@ -2,6 +2,7 @@ local config = require("nvjup.config")
 local local_fs = require("nvjup.local_fs")
 local notebook = require("nvjup.notebook")
 local remote = require("nvjup.remote")
+local remote_connection = require("nvjup.remote_connection")
 local remote_files = require("nvjup.remote_files")
 local remote_files_client = require("nvjup.remote_files_client")
 
@@ -33,7 +34,10 @@ local function close_fixture(state)
 	end
 end
 
-test("registers the global remote-files command", function()
+test("registers the global remote UI commands", function()
+	assert(vim.fn.exists(":NvJupRemoteConnect") == 2)
+	assert(vim.fn.exists(":NvJupRemoteDisconnect") == 2)
+	assert(vim.fn.exists(":NvJupRemoteStatus") == 2)
 	assert(vim.fn.exists(":NvJupRemoteFiles") == 2)
 end)
 
@@ -80,6 +84,125 @@ test("resolves bounded remote file transport options", function()
 	assert(resolved.file_timeout_seconds == 7)
 end)
 
+test("keeps UI connection credentials in a session-only override", function()
+	config.options.kernel.remote = { url = "https://configured.test", token = "configured" }
+	remote.set_session({
+		url = "https://session.test/jupyter/",
+		token = "session-secret",
+		verify_ssl = true,
+		kernel_name = "python-ui",
+	})
+	local resolved = assert(remote.resolve({ path = "/tmp/notebook.ipynb" }))
+	assert(resolved.url == "https://session.test/jupyter")
+	assert(resolved.token == "session-secret")
+	assert(remote.kernel_name() == "python-ui")
+	assert(remote.status().source == "session")
+	remote.disconnect()
+	assert(remote.resolve() == nil)
+	remote.reset_session()
+	assert(remote.resolve().url == "https://configured.test")
+	config.options.kernel.remote = false
+end)
+
+test("activates a probed UI profile and starts the selected kernel", function()
+	local state = open_fixture("00_minimal.ipynb")
+	local calls = { shutdown_remote = 0, shutdown = 0, start = 0 }
+	remote_connection._set_kernel({
+		shutdown_remote_sessions = function()
+			calls.shutdown_remote = calls.shutdown_remote + 1
+		end,
+		shutdown = function(shutdown_state)
+			assert(shutdown_state == state)
+			calls.shutdown = calls.shutdown + 1
+		end,
+		start = function(start_state, callback)
+			assert(start_state == state)
+			calls.start = calls.start + 1
+			callback(nil, { state = "idle", transport = "remote" })
+		end,
+	})
+	local completed
+	remote_connection.activate(
+		state,
+		{
+			url = "https://ui.test/jupyter",
+			token = "ui-secret",
+			verify_ssl = true,
+		},
+		"python-ui",
+		function(err, status)
+			assert(err == nil)
+			completed = status
+		end
+	)
+	assert(calls.shutdown_remote == 1 and calls.shutdown == 1 and calls.start == 1)
+	assert(completed.transport == "remote")
+	assert(remote.resolve(state).kernel_name == "python-ui")
+	remote.disconnect()
+	remote.reset_session()
+	remote_connection._set_kernel(nil)
+	close_fixture(state)
+end)
+
+test("runs the complete remote connection wizard through Neovim UI", function()
+	local state = open_fixture("00_minimal.ipynb")
+	local original_input, original_select = vim.ui.input, vim.ui.select
+	local inputs = { "https://wizard.test/jupyter/", "https://origin.test" }
+	local probed
+	vim.ui.input = function(_, callback)
+		callback(table.remove(inputs, 1))
+	end
+	vim.ui.select = function(items, options, callback)
+		if options.prompt == "Jupyter authentication" then
+			callback("Enter token")
+		elseif options.prompt == "TLS policy" then
+			callback(items[1])
+		elseif options.prompt:match("^Kernel on ") then
+			callback(items[1])
+		else
+			error("unexpected prompt: " .. tostring(options.prompt))
+		end
+	end
+	remote_connection._set_secret_reader(function(_, callback)
+		callback("wizard-secret")
+	end)
+	remote_connection._set_client_factory(function(_, options)
+		probed = options
+		return {
+			probe = function(_, callback)
+				callback(nil, {
+					url = options.url,
+					kernels = { { name = "python3", display_name = "Python 3", language = "python" } },
+				})
+			end,
+			shutdown = function() end,
+		}
+	end)
+	local started
+	remote_connection._set_kernel({
+		shutdown_remote_sessions = function() end,
+		shutdown = function() end,
+		start = function(_, callback)
+			started = true
+			callback(nil, { state = "idle", transport = "remote" })
+		end,
+	})
+	assert(remote_connection.connect(state))
+	assert(started)
+	assert(probed.url == "https://wizard.test/jupyter")
+	assert(probed.token == "wizard-secret")
+	assert(probed.verify_ssl == true)
+	assert(probed.origin == "https://origin.test")
+	assert(remote.resolve(state).kernel_name == "python3")
+	vim.ui.input, vim.ui.select = original_input, original_select
+	remote.disconnect()
+	remote.reset_session()
+	remote_connection._set_secret_reader(nil)
+	remote_connection._set_client_factory(nil)
+	remote_connection._set_kernel(nil)
+	close_fixture(state)
+end)
+
 test("routes remote file RPC without starting a kernel", function()
 	local requests = {}
 	local fake
@@ -92,7 +215,13 @@ test("routes remote file RPC without starting a kernel", function()
 		function fake:request(request_type, payload, _, callback)
 			table.insert(requests, { type = request_type, payload = payload })
 			if request_type == "sidecar.hello" then
-				callback(nil, { capabilities = { requests = { "remote.files.list" } } })
+				callback(nil, { capabilities = { requests = { "remote.server.probe", "remote.files.list" } } })
+			elseif request_type == "remote.server.probe" then
+				callback(nil, {
+					url = "https://example.test",
+					version = "2.17.0",
+					kernels = { { name = "python3", display_name = "Python 3", language = "python" } },
+				})
 			elseif request_type == "remote.files.list" then
 				callback(nil, { path = "", entries = { { name = "remote.txt", path = "remote.txt", type = "file" } } })
 			elseif request_type == "remote.files.download" then
@@ -110,6 +239,12 @@ test("routes remote file RPC without starting a kernel", function()
 	end)
 	config.options.kernel.remote = { url = "https://example.test", token = "secret" }
 	local client = remote_files_client.new({ path = "/tmp/test.ipynb" })
+	local probe
+	client:probe(function(err, payload)
+		assert(err == nil)
+		probe = payload
+	end)
+	assert(probe.kernels[1].name == "python3")
 	local listed
 	client:list("", function(err, payload)
 		assert(err == nil)
@@ -125,9 +260,12 @@ test("routes remote file RPC without starting a kernel", function()
 	client:upload("uploaded.bin", "a\0b", function(err)
 		assert(err == nil)
 	end)
-	assert(requests[2].type == "remote.files.list")
-	assert(requests[2].payload.remote.token == "secret")
-	assert(requests[4].payload.content == vim.base64.encode("a\0b"))
+	local by_type = {}
+	for _, request in ipairs(requests) do
+		by_type[request.type] = request
+	end
+	assert(by_type["remote.files.list"].payload.remote.token == "secret")
+	assert(by_type["remote.files.upload"].payload.content == vim.base64.encode("a\0b"))
 	for _, request in ipairs(requests) do
 		assert(request.type ~= "kernel.start")
 	end

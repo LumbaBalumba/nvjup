@@ -65,7 +65,24 @@ require("nvjup.statusline").get(0)
 
 ## Remote Jupyter Server
 
-Remote transport is opt-in and creates an owned kernel through the Jupyter Server REST API. Kernel channels use the negotiated `v1.kernel.websocket.jupyter.org` binary protocol and feed the same normalized nvjup RPC/event surface as local ZeroMQ kernels.
+Remote transport creates an owned kernel through the Jupyter Server REST API. Kernel channels use the negotiated `v1.kernel.websocket.jupyter.org` binary protocol and feed the same normalized nvjup RPC/event surface as local ZeroMQ kernels.
+
+### UI-only connection
+
+No remote settings have to be written into Lua. Open a notebook and run `:NvJupRemoteConnect` or `<leader>nK`. The nvjup UI performs the complete client-side workflow:
+
+1. asks for the Jupyter Server base URL;
+2. accepts a token through Neovim's hidden secret input, or selects unauthenticated access;
+3. confirms HTTPS certificate verification or an explicit HTTP/SSH-tunnel connection;
+4. optionally asks for an `Origin` header;
+5. probes `/api` and `/api/kernelspecs` without creating a kernel;
+6. displays the server kernelspecs and starts the selected owned kernel.
+
+The profile and token live only in Neovim process memory. They are neither written to disk nor placed in command history, notifications, health output, RPC responses, or errors. Reopen `<leader>nK` to show status, reconnect/change server, or disconnect. Global commands are `:NvJupRemoteConnect`, `:NvJupRemoteStatus`, and `:NvJupRemoteDisconnect`. Disconnect shuts down nvjup-owned remote kernels and clears the in-memory credentials. The active connection is also used automatically by `:NvJupRemoteFiles`.
+
+### Static configuration
+
+For unattended setups, the original configuration path remains available:
 
 ```lua
 require("nvjup").setup({
@@ -98,4 +115,5 @@ Stage 7 tests cover:
 - basic widget terminal projection;
 - ipympl data-URL materialization through the image pipeline;
 - optional Telescope fallback and public commands/mappings;
+- UI-only authenticated server probe, kernelspec selection, owned-kernel startup, status, and disconnect;
 - real authenticated local Jupyter Server execution, completion, restart, and shutdown over REST/WebSocket v1 framing.

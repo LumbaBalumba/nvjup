@@ -313,6 +313,16 @@ def test_remote_kernel_v1_framing_and_jupyter_server_transport(
             "max_file_bytes": 1024 * 1024,
             "max_entries": 100,
         }
+        probe = sidecar.response(
+            sidecar.send(
+                "remote.server.probe",
+                {"remote": remote},
+                notebook_id=notebook_id,
+            )
+        )
+        assert probe["payload"]["url"] == base_url
+        assert any(item["name"] == "python3" for item in probe["payload"]["kernels"])
+        assert token not in json.dumps(probe)
         made = sidecar.response(
             sidecar.send(
                 "remote.files.mkdir",
@@ -432,6 +442,17 @@ def test_remote_kernel_v1_framing_and_jupyter_server_transport(
         )
         assert traversal["error"]["code"] == "remote_files_list_failed"
         assert token not in json.dumps(traversal)
+        embedded_id = sidecar.send(
+            "remote.server.probe",
+            {"remote": {**remote, "url": f"http://user:password@127.0.0.1:{port}"}},
+            notebook_id=notebook_id,
+        )
+        embedded = sidecar.wait_for(
+            lambda item: item.get("kind") == "response"
+            and item.get("id") == embedded_id
+        )
+        assert embedded["error"]["code"] == "remote_server_probe_failed"
+        assert "password" not in json.dumps(embedded)
 
         started = sidecar.response(
             sidecar.send(

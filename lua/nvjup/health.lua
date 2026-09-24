@@ -1,5 +1,6 @@
 local config = require("nvjup.config")
 local image = require("nvjup.image")
+local remote_api = require("nvjup.remote")
 local rpc = require("nvjup.rpc")
 
 local M = {}
@@ -149,33 +150,34 @@ function M.check()
 	end
 
 	vim.health.start("nvjup remote and optional integrations")
-	local remote = (config.options.kernel or {}).remote
-	if type(remote) == "table" and type(remote.url) == "string" and remote.url ~= "" then
-		if remote.url:match("^https://") then
+	local remote_status = remote_api.status()
+	local remote_config = (config.options.kernel or {}).remote
+	if remote_status.connected then
+		if remote_status.url:match("^https://") then
 			vim.health.ok("remote Jupyter Server uses HTTPS")
-		elseif remote.url:match("^http://") then
-			vim.health.warn("remote Jupyter Server uses unencrypted HTTP")
+		elseif remote_status.url:match("^http://") then
+			vim.health.warn("remote Jupyter Server uses HTTP; use an SSH tunnel or trusted private network")
 		else
-			vim.health.error("kernel.remote.url must use http:// or https://")
+			vim.health.error("remote Jupyter URL must use http:// or https://")
 		end
-		if remote.verify_ssl == false then
-			vim.health.warn("kernel.remote.verify_ssl=false disables TLS certificate verification")
+		if remote_status.verify_ssl == false then
+			vim.health.warn("remote TLS certificate verification is disabled")
 		end
-		if type(remote.token) == "string" and remote.token ~= "" then
-			vim.health.info("remote token is configured directly; token_env or a function avoids storing it in config")
-		elseif type(remote.token_env) == "string" and vim.env[remote.token_env] then
-			vim.health.ok("remote Jupyter token environment variable is available")
+		if remote_status.source == "session" then
+			vim.health.ok("remote connection was established in the nvjup UI; credentials are memory-only")
+		elseif type(remote_config) == "table" and type(remote_config.token_env) == "string" then
+			vim.health.ok("remote Jupyter token environment variable is configured")
 		else
-			vim.health.info("no remote Jupyter token is configured; this is valid only for an unauthenticated server")
+			vim.health.info("remote Jupyter authentication is configured")
 		end
 	else
-		vim.health.info("remote Jupyter Server transport is not configured")
+		vim.health.info("remote Jupyter is disconnected; use :NvJupRemoteConnect or <leader>nK")
 	end
 	if require("nvjup.telescope").available() then
 		vim.health.ok("Telescope is available for notebook, variable, and two-panel remote file pickers")
 	else
 		vim.health.info("Telescope is unavailable or disabled; outline/variables use fallbacks")
-		if type(remote) == "table" and type(remote.url) == "string" and remote.url ~= "" then
+		if remote_status.connected then
 			vim.health.warn("the remote file manager requires Telescope")
 		end
 	end

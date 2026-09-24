@@ -822,6 +822,28 @@ function M.open(state)
 	return true
 end
 
+function M.close_all()
+	local browsers = {}
+	for _, browser in pairs(active_browsers) do
+		table.insert(browsers, browser)
+	end
+	for _, browser in ipairs(browsers) do
+		local prompt_bufnr = browser.picker and browser.picker.prompt_bufnr
+		if prompt_bufnr and vim.api.nvim_buf_is_valid(prompt_bufnr) then
+			local ok, actions = pcall(require, "telescope.actions")
+			if ok then
+				actions.close(prompt_bufnr)
+			else
+				vim.api.nvim_buf_delete(prompt_bufnr, { force = true })
+			end
+		else
+			browser.closed = true
+			browser.client:shutdown()
+			active_browsers[browser.state.buf] = nil
+		end
+	end
+end
+
 M._active = active_browsers
 M._launch = launch
 M._copy_recursive = copy_recursive
