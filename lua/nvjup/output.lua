@@ -247,13 +247,13 @@ local function render_bundle(data, metadata, options, cell)
 	end
 
 	if data["application/vnd.plotly.v1+json"] then
-		local lines = { "[Plotly interactive output · <leader>nf Awrit · <leader>nF TUI]" }
+		local lines = { "[Plotly interactive output · <leader>nf TUI · <leader>nF Awrit]" }
 		vim.list_extend(lines, split_text(data["text/plain"] or "Plotly figure"))
 		return lines, "interactive"
 	end
 
 	if data["application/vnd.bokehjs_exec.v0+json"] or data["application/vnd.bokehjs_load.v0+json"] then
-		local lines = { "[Bokeh interactive output · <leader>nf Awrit · <leader>nF TUI]" }
+		local lines = { "[Bokeh interactive output · <leader>nf TUI · <leader>nF Awrit]" }
 		vim.list_extend(lines, split_text(data["text/plain"] or "Bokeh document"))
 		return lines, "interactive"
 	end
