@@ -239,7 +239,9 @@ function Client:request(request_type, payload, context, callback)
 		end
 		return nil
 	end
-	local timeout = (config.options.sidecar and config.options.sidecar.request_timeout_ms) or 30000
+	local timeout = (context and context.timeout_ms)
+		or (config.options.sidecar and config.options.sidecar.request_timeout_ms)
+		or 30000
 	if timeout > 0 then
 		vim.defer_fn(function()
 			local pending = self.pending[id]

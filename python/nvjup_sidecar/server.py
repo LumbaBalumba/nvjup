@@ -2,6 +2,8 @@ from __future__ import annotations
 
 import ast
 import asyncio
+import base64
+import binascii
 import contextlib
 import inspect
 import json
@@ -16,10 +18,10 @@ from typing import Any
 from jupyter_client import AsyncKernelManager
 from jupyter_client.kernelspec import KernelSpec, KernelSpecManager
 
-from nvjup_sidecar.remote import RemoteKernelManager
+from nvjup_sidecar.remote import RemoteContentsClient, RemoteKernelManager
 
 PROTOCOL = "nvjup/1"
-VERSION = "0.3.0"
+VERSION = "0.4.0"
 
 
 @dataclass
@@ -496,6 +498,8 @@ class SidecarServer:
         self.sequence = 0
         self.running = True
         self.sessions: dict[str, KernelSession] = {}
+        self.contents_client: RemoteContentsClient | None = None
+        self.contents_identity: tuple[Any, ...] | None = None
 
     def send(self, message: dict[str, Any]) -> None:
         self.sequence += 1
@@ -644,6 +648,14 @@ class SidecarServer:
                     "completion.request",
                     "inspect.request",
                     "variables.list",
+                    "remote.files.list",
+                    "remote.files.stat",
+                    "remote.files.mkdir",
+                    "remote.files.touch",
+                    "remote.files.rename",
+                    "remote.files.delete",
+                    "remote.files.download",
+                    "remote.files.upload",
                 ],
                 "events": [
                     "kernel.state",
@@ -963,12 +975,120 @@ class SidecarServer:
             raise RuntimeError("kernel returned invalid variable list")
         return {"variables": variables[:limit], "generation": session.generation}
 
+    async def _contents_client(self, request: dict[str, Any]) -> RemoteContentsClient:
+        payload = request["payload"]
+        remote = payload.get("remote")
+        if not isinstance(remote, dict) or not remote.get("url"):
+            raise ValueError("remote Jupyter Server configuration is required")
+        identity = (
+            str(remote["url"]),
+            str(remote.get("token") or ""),
+            bool(remote.get("verify_ssl", True)),
+            str(remote["origin"]) if remote.get("origin") else None,
+            float(remote.get("file_timeout_seconds", 60)),
+            int(remote.get("max_file_bytes", 64 * 1024 * 1024)),
+            int(remote.get("max_entries", 10_000)),
+        )
+        if self.contents_client and self.contents_identity != identity:
+            await self.contents_client.close()
+            self.contents_client = None
+        if self.contents_client is None:
+            self.contents_client = RemoteContentsClient(
+                base_url=identity[0],
+                token=identity[1],
+                verify_ssl=identity[2],
+                origin=identity[3],
+                timeout=identity[4],
+                max_file_bytes=identity[5],
+                max_entries=identity[6],
+            )
+            self.contents_identity = identity
+        return self.contents_client
+
+    async def _handle_remote_files_list(
+        self, request: dict[str, Any]
+    ) -> dict[str, Any]:
+        client = await self._contents_client(request)
+        return await client.list(str(request["payload"].get("path", "")))
+
+    async def _handle_remote_files_stat(
+        self, request: dict[str, Any]
+    ) -> dict[str, Any]:
+        client = await self._contents_client(request)
+        return await client.stat(str(request["payload"].get("path", "")))
+
+    async def _handle_remote_files_mkdir(
+        self, request: dict[str, Any]
+    ) -> dict[str, Any]:
+        client = await self._contents_client(request)
+        return await client.mkdir(str(request["payload"].get("path", "")))
+
+    async def _handle_remote_files_touch(
+        self, request: dict[str, Any]
+    ) -> dict[str, Any]:
+        client = await self._contents_client(request)
+        return await client.touch(str(request["payload"].get("path", "")))
+
+    async def _handle_remote_files_rename(
+        self, request: dict[str, Any]
+    ) -> dict[str, Any]:
+        client = await self._contents_client(request)
+        return await client.rename(
+            str(request["payload"].get("path", "")),
+            str(request["payload"].get("new_path", "")),
+        )
+
+    async def _handle_remote_files_delete(
+        self, request: dict[str, Any]
+    ) -> dict[str, Any]:
+        client = await self._contents_client(request)
+        await client.delete(str(request["payload"].get("path", "")))
+        return {"deleted": True}
+
+    async def _handle_remote_files_download(
+        self, request: dict[str, Any]
+    ) -> dict[str, Any]:
+        client = await self._contents_client(request)
+        content = await client.download(str(request["payload"].get("path", "")))
+        return {
+            "content": base64.b64encode(content).decode("ascii"),
+            "encoding": "base64",
+            "size": len(content),
+        }
+
+    async def _handle_remote_files_upload(
+        self, request: dict[str, Any]
+    ) -> dict[str, Any]:
+        encoded = request["payload"].get("content")
+        if not isinstance(encoded, str):
+            raise ValueError("base64 file content is required")
+        remote = request["payload"].get("remote")
+        max_bytes = (
+            int(remote.get("max_file_bytes", 64 * 1024 * 1024))
+            if isinstance(remote, dict)
+            else 0
+        )
+        max_bytes = max(1, min(max_bytes, 512 * 1024 * 1024))
+        if len(encoded) > ((max_bytes + 2) // 3) * 4:
+            raise ValueError(f"file exceeds {max_bytes} bytes")
+        try:
+            content = base64.b64decode(encoded, validate=True)
+        except (ValueError, binascii.Error) as exc:
+            raise ValueError("invalid base64 file content") from exc
+        client = await self._contents_client(request)
+        return await client.upload(str(request["payload"].get("path", "")), content)
+
     async def close(self) -> None:
         sessions = list(self.sessions.values())
         self.sessions.clear()
         for session in sessions:
             with contextlib.suppress(Exception):
                 await session.shutdown(now=True)
+        if self.contents_client:
+            with contextlib.suppress(Exception):
+                await self.contents_client.close()
+            self.contents_client = None
+            self.contents_identity = None
 
 
 async def async_main() -> None:

@@ -193,6 +193,10 @@ function M.variables()
 	return require("nvjup.inspector").open(state())
 end
 
+function M.remote_files()
+	return require("nvjup.remote_files").open(state())
+end
+
 function M.refresh()
 	local nb = state()
 	local ok, err = nb:sync_from_buffer()

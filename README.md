@@ -20,6 +20,7 @@ The repository now contains the **Stage 7 notebook editor, kernel/LSP tooling, r
 - variable inspector with optional Telescope picker and kernel MIME inspection;
 - optional lower-priority live-kernel completion alongside shadow-LSP completion;
 - dependency-free statusline API and expanded health diagnostics;
+- a Telescope two-panel local/remote file manager backed by the authenticated Jupyter Contents API;
 - undo-aware structural representation;
 - one versioned LSP shadow document per code language;
 - cross-cell diagnostics, completion, hover, signature help, navigation, references, symbols, semantic tokens, rename, and safe code actions;
@@ -51,7 +52,8 @@ The complete roadmap is in [`docs/nvjup-plan.md`](docs/nvjup-plan.md). Normative
 - chafa for a terminal-symbol image fallback outside Kitty (optional);
 - Playwright, the Python Plotly and Bokeh packages (for local browser assets), and Chromium for inline interactive previews;
 - [Awrit](https://github.com/chase/awrit), Kitty remote control, and `KITTY_LISTEN_ON` for the zero-screenshot external focus window (optional; `<leader>nf` uses the TUI fallback);
-- nvim-cmp for optional live-kernel completion and Telescope for optional outline/variable pickers.
+- nvim-cmp for optional live-kernel completion;
+- Telescope for optional outline/variable pickers and the required two-panel remote file manager UI.
 
 The editor and LSP proxy remain pure Lua. Kernel transport runs in a separate Python sidecar and does not depend on `pynvim` or `python3_host_prog`. Python notebooks use `pyright-langserver` and `ruff server` automatically when those executables are available. Missing parsers and servers degrade gracefully.
 
@@ -97,6 +99,7 @@ The launcher redirects config, data, state, and cache into `.test-runtime/`.
 | `<leader>nc` / `<leader>nC` | clear current / all outputs |
 | `<leader>nl` / `<leader>nL` | notebook outline / refresh display |
 | `<leader>nv` | inspect live kernel variables |
+| `<leader>ne` | open the two-panel local/remote Jupyter file manager |
 | `<C-CR>` | run current cell (Normal and Insert modes) |
 | `<S-CR>` / `<leader>nr` | run current cell and advance |
 | `<leader>nA` / `<leader>nB` | run code cells above / below |
@@ -150,6 +153,8 @@ Commands:
 :NvJupCellClearOutput
 :NvJupClearAllOutputs
 :NvJupOutline
+:NvJupVariables
+:NvJupRemoteFiles
 :NvJupRunCurrent
 :NvJupRunAndAdvance
 :NvJupRunAbove
@@ -285,6 +290,16 @@ require("nvjup").setup({
     --   reconnect_attempts = 2,
     -- },
   },
+  remote_files = {
+    local_root = false, -- notebook directory, or cwd outside a notebook
+    remote_root = "", -- path relative to the Jupyter Server root
+    show_hidden = false,
+    confirm_delete = true,
+    max_file_bytes = 64 * 1024 * 1024,
+    max_transfer_bytes = 512 * 1024 * 1024,
+    max_entries = 10000,
+    timeout_seconds = 60,
+  },
   completion = {
     kernel = false, -- opt in to the lower-priority nvjup_kernel nvim-cmp source
     kernel_timeout_seconds = 2,
@@ -296,12 +311,14 @@ require("nvjup").setup({
     height = 24,
   },
   integrations = {
-    telescope = true, -- auto-detect; falls back without Telescope
+    telescope = true, -- auto-detect; required for remote files, optional elsewhere
   },
 })
 ```
 
-Use `:NvJupVariables` or `<leader>nv` for the live variable inspector. Statusline plugins can call `require("nvjup.statusline").component()`. Basic ipywidgets are projected as safe terminal UI, while ipympl `_data_url` frames reuse the bounded image renderer. Remote Jupyter Server kernels use authenticated REST lifecycle plus the bounded WebSocket v1 channel protocol. See [`docs/stage7.md`](docs/stage7.md) for configuration and support boundaries.
+Use `:NvJupVariables` or `<leader>nv` for the live variable inspector. Statusline plugins can call `require("nvjup.statusline").component()`. Basic ipywidgets are projected as safe terminal UI, while ipympl `_data_url` frames reuse the bounded image renderer. Remote Jupyter Server kernels use authenticated REST lifecycle plus the bounded WebSocket v1 channel protocol. See [`docs/stage7.md`](docs/stage7.md) for kernel configuration and support boundaries.
+
+`:NvJupRemoteFiles` or `<leader>ne` opens a two-panel Telescope manager: the results and preview windows show the active and inactive local/remote filesystems, and `<Tab>` switches them. The nvim-tree-style `a/r/e/d/c/x/p/R/H/P/g?` operations include recursive copies and moves; `c`, `<Tab>`, `p` copies between filesystems. See [`docs/stage8.md`](docs/stage8.md) for the complete binding table, limits, and failure semantics.
 
 ## Language tooling configuration
 
@@ -351,6 +368,7 @@ This runs:
 - Stage 5 Plotly MIME/cache lifecycle tests;
 - Stage 6 trust/invalidation/recovery tests plus real Plotly/Bokeh Chromium screencast, pointer, keyboard, resize, and sandbox tests;
 - Stage 7 variable-inspector, kernel-completion, widget/ipympl, Telescope/statusline, and real remote Jupyter Server transport tests;
+- Stage 8 local/remote filesystem, real Contents API, binary transfer, traversal security, and two-panel Telescope tests;
 - real `ipykernel` execution, completion, inspection, variables, interruption, restart, and sequential batch tests.
 
 To validate the installed Pyright and Ruff servers on the host:

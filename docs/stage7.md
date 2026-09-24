@@ -86,6 +86,8 @@ require("nvjup").setup({
 
 REST calls and WebSocket frames have time/size bounds, channel queues apply backpressure, unexpected channel loss fails the active request, and idle sessions make at most `reconnect_attempts` reconnects (bounded to 0–5). Interrupt, restart, shutdown, execution, stdin, completion, inspection, and variables all share the remote transport. Restart reconnects the channel; shutdown deletes the owned server kernel. Remote output does **not** receive the ephemeral trust reserved for explicitly run local kernels. Existing-kernel attachment and multi-user authentication flows outside token auth are not enabled.
 
+Stage 8 adds the authenticated Contents API and two-panel Telescope file exchange UI; see [`stage8.md`](stage8.md).
+
 ## Validation
 
 Stage 7 tests cover:

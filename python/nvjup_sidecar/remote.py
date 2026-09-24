@@ -1,18 +1,21 @@
 from __future__ import annotations
 
 import asyncio
+import base64
+import binascii
 import contextlib
 import json
 import uuid
 from collections.abc import Awaitable, Callable
 from datetime import UTC, datetime
-from typing import Any
+from typing import Any, Self
 from urllib.parse import quote, urlsplit, urlunsplit
 
 import aiohttp
 
 WS_PROTOCOL = "v1.kernel.websocket.jupyter.org"
 MAX_MESSAGE_BYTES = 16 * 1024 * 1024
+MAX_CONTENT_MODEL_BYTES = 16 * 1024 * 1024
 
 
 def _clean_base_url(value: str) -> str:
@@ -20,6 +23,22 @@ def _clean_base_url(value: str) -> str:
     if parsed.scheme not in {"http", "https"} or not parsed.netloc:
         raise ValueError("remote Jupyter URL must use http:// or https://")
     return urlunsplit((parsed.scheme, parsed.netloc, parsed.path.rstrip("/"), "", ""))
+
+
+def _content_path(value: str, *, allow_root: bool = True) -> str:
+    if not isinstance(value, str) or "\x00" in value or "\\" in value:
+        raise ValueError("invalid remote content path")
+    stripped = value.strip("/")
+    if not stripped:
+        if allow_root:
+            return ""
+        raise ValueError("remote content path cannot be the server root")
+    parts = stripped.split("/")
+    if any(part in {"", ".", ".."} for part in parts):
+        raise ValueError(
+            "remote content path cannot contain empty, '.' or '..' segments"
+        )
+    return "/".join(parts)
 
 
 def _deserialize_v1(data: bytes) -> dict[str, Any]:
@@ -282,15 +301,29 @@ class RemoteKernelClient:
         return message
 
     async def wait_for_ready(self, timeout: float = 30) -> None:
-        message_id = self._schedule("shell", "kernel_info_request", {})
         deadline = asyncio.get_running_loop().time() + timeout
-        while True:
+        last_error: Exception | None = None
+        for attempt in range(3):
             remaining = deadline - asyncio.get_running_loop().time()
             if remaining <= 0:
-                raise TimeoutError("remote kernel did not become ready")
-            message = await self.get_shell_msg(remaining)
-            if message.get("parent_header", {}).get("msg_id") == message_id:
-                return
+                break
+            if attempt > 0:
+                await self.reconnect()
+            message_id = self._schedule("shell", "kernel_info_request", {})
+            attempt_deadline = min(
+                deadline, asyncio.get_running_loop().time() + max(2.0, timeout / 3)
+            )
+            try:
+                while True:
+                    wait = attempt_deadline - asyncio.get_running_loop().time()
+                    if wait <= 0:
+                        raise TimeoutError("remote kernel readiness attempt timed out")
+                    message = await self.get_shell_msg(wait)
+                    if message.get("parent_header", {}).get("msg_id") == message_id:
+                        return
+            except (ConnectionError, TimeoutError) as exc:
+                last_error = exc
+        raise TimeoutError("remote kernel did not become ready") from last_error
 
     async def execute_interactive(
         self,
@@ -353,6 +386,227 @@ class RemoteKernelClient:
         self.last_input_request = None
 
 
+class RemoteContentsClient:
+    def __init__(
+        self,
+        *,
+        base_url: str,
+        token: str,
+        verify_ssl: bool,
+        origin: str | None,
+        timeout: float,
+        max_file_bytes: int,
+        max_entries: int,
+    ) -> None:
+        self.base_url = _clean_base_url(base_url)
+        self.token = token
+        self.verify_ssl = verify_ssl
+        self.origin = origin
+        self.timeout = max(1.0, min(timeout, 300.0))
+        self.max_file_bytes = max(1, min(max_file_bytes, 512 * 1024 * 1024))
+        self.max_entries = max(1, min(max_entries, 100_000))
+        self.http = aiohttp.ClientSession(
+            timeout=aiohttp.ClientTimeout(total=self.timeout)
+        )
+
+    async def __aenter__(self) -> Self:
+        return self
+
+    async def __aexit__(self, *_: object) -> None:
+        await self.close()
+
+    async def close(self) -> None:
+        if not self.http.closed:
+            await self.http.close()
+
+    def headers(self) -> dict[str, str]:
+        headers = {"Authorization": f"token {self.token}"} if self.token else {}
+        if self.origin:
+            headers["Origin"] = self.origin
+        return headers
+
+    def _url(self, prefix: str, path: str) -> str:
+        encoded = quote(_content_path(path), safe="/")
+        return f"{self.base_url}{prefix}{('/' + encoded) if encoded else ''}"
+
+    async def _json_request(
+        self,
+        method: str,
+        prefix: str,
+        path: str,
+        *,
+        params: dict[str, Any] | None = None,
+        body: dict[str, Any] | None = None,
+        allow_root: bool = True,
+    ) -> Any:
+        normalized = _content_path(path, allow_root=allow_root)
+        async with self.http.request(
+            method,
+            self._url(prefix, normalized),
+            headers=self.headers(),
+            ssl=self.verify_ssl,
+            params=params,
+            json=body,
+            allow_redirects=False,
+        ) as response:
+            raw = await response.content.read(MAX_CONTENT_MODEL_BYTES + 1)
+            if len(raw) > MAX_CONTENT_MODEL_BYTES:
+                raise ValueError("remote content response exceeds 16 MB")
+            if response.status >= 300:
+                detail = raw.decode("utf-8", "replace")[:1024].replace("\n", " ")
+                raise RuntimeError(
+                    f"Jupyter Server returned HTTP {response.status}: {detail}"
+                )
+            if response.status == 204 or not raw:
+                return None
+            return json.loads(raw)
+
+    @staticmethod
+    def _entry(model: dict[str, Any]) -> dict[str, Any]:
+        return {
+            "name": str(model.get("name", ""))[:4096],
+            "path": _content_path(str(model.get("path", ""))),
+            "type": str(model.get("type", "file"))[:64],
+            "writable": bool(model.get("writable", False)),
+            "size": model.get("size") if isinstance(model.get("size"), int) else None,
+            "created": str(model.get("created", ""))[:128],
+            "last_modified": str(model.get("last_modified", ""))[:128],
+            "mimetype": str(model.get("mimetype") or "")[:256],
+        }
+
+    async def list(self, path: str) -> dict[str, Any]:
+        normalized = _content_path(path)
+        model = await self._json_request(
+            "GET",
+            "/api/contents",
+            normalized,
+            params={"content": 1, "type": "directory"},
+        )
+        content = model.get("content", []) if isinstance(model, dict) else []
+        if not isinstance(content, list):
+            raise TypeError("Jupyter Server returned an invalid directory model")
+        if len(content) > self.max_entries:
+            raise ValueError(f"remote directory exceeds {self.max_entries} entries")
+        entries = [self._entry(item) for item in content if isinstance(item, dict)]
+        entries.sort(
+            key=lambda item: (
+                item["type"] != "directory",
+                item["name"].casefold(),
+                item["name"],
+            )
+        )
+        return {"path": normalized, "entries": entries}
+
+    async def stat(self, path: str) -> dict[str, Any]:
+        normalized = _content_path(path)
+        model = await self._json_request(
+            "GET", "/api/contents", normalized, params={"content": 0}
+        )
+        if not isinstance(model, dict):
+            raise TypeError("Jupyter Server returned an invalid content model")
+        return self._entry(model)
+
+    async def mkdir(self, path: str) -> dict[str, Any]:
+        normalized = _content_path(path, allow_root=False)
+        model = await self._json_request(
+            "PUT",
+            "/api/contents",
+            normalized,
+            body={"type": "directory", "format": "json", "content": None},
+            allow_root=False,
+        )
+        return self._entry(model)
+
+    async def touch(self, path: str) -> dict[str, Any]:
+        return await self.upload(path, b"")
+
+    async def upload(self, path: str, content: bytes) -> dict[str, Any]:
+        normalized = _content_path(path, allow_root=False)
+        if len(content) > self.max_file_bytes:
+            raise ValueError(f"file exceeds {self.max_file_bytes} bytes")
+        model = await self._json_request(
+            "PUT",
+            "/api/contents",
+            normalized,
+            body={
+                "type": "file",
+                "format": "base64",
+                "content": base64.b64encode(content).decode("ascii"),
+            },
+            allow_root=False,
+        )
+        return self._entry(model)
+
+    async def download(self, path: str) -> bytes:
+        normalized = _content_path(path, allow_root=False)
+        async with self.http.get(
+            self._url("/files", normalized),
+            headers=self.headers(),
+            ssl=self.verify_ssl,
+            allow_redirects=False,
+        ) as response:
+            if response.status < 300:
+                declared = response.content_length
+                if declared is not None and declared > self.max_file_bytes:
+                    raise ValueError(f"file exceeds {self.max_file_bytes} bytes")
+                chunks: list[bytes] = []
+                size = 0
+                async for chunk in response.content.iter_chunked(64 * 1024):
+                    size += len(chunk)
+                    if size > self.max_file_bytes:
+                        raise ValueError(f"file exceeds {self.max_file_bytes} bytes")
+                    chunks.append(chunk)
+                return b"".join(chunks)
+            if response.status not in {400, 404}:
+                detail = (await response.text())[:1024].replace("\n", " ")
+                raise RuntimeError(
+                    f"Jupyter Server returned HTTP {response.status}: {detail}"
+                )
+        model = await self._json_request(
+            "GET", "/api/contents", normalized, params={"content": 1}, allow_root=False
+        )
+        if not isinstance(model, dict):
+            raise TypeError("Jupyter Server returned an invalid file model")
+        content = model.get("content")
+        file_format = model.get("format")
+        if file_format == "base64" and isinstance(content, str):
+            try:
+                result = base64.b64decode(content, validate=True)
+            except (ValueError, binascii.Error) as exc:
+                raise RuntimeError(
+                    "Jupyter Server returned invalid base64 file content"
+                ) from exc
+        elif file_format == "text" and isinstance(content, str):
+            result = content.encode("utf-8")
+        elif file_format == "json":
+            result = (json.dumps(content, ensure_ascii=False, indent=1) + "\n").encode(
+                "utf-8"
+            )
+        else:
+            raise RuntimeError("Jupyter Server returned an unsupported file format")
+        if len(result) > self.max_file_bytes:
+            raise ValueError(f"file exceeds {self.max_file_bytes} bytes")
+        return result
+
+    async def rename(self, path: str, new_path: str) -> dict[str, Any]:
+        normalized = _content_path(path, allow_root=False)
+        target = _content_path(new_path, allow_root=False)
+        model = await self._json_request(
+            "PATCH",
+            "/api/contents",
+            normalized,
+            body={"path": target},
+            allow_root=False,
+        )
+        return self._entry(model)
+
+    async def delete(self, path: str) -> None:
+        normalized = _content_path(path, allow_root=False)
+        await self._json_request(
+            "DELETE", "/api/contents", normalized, allow_root=False
+        )
+
+
 class RemoteKernelManager:
     def __init__(
         self,
@@ -385,9 +639,10 @@ class RemoteKernelManager:
             self.base_url + path,
             headers=self.headers(),
             ssl=self.verify_ssl,
+            allow_redirects=False,
             **kwargs,
         ) as response:
-            if response.status >= 400:
+            if response.status >= 300:
                 detail = (await response.text())[:1024].replace("\n", " ")
                 raise RuntimeError(
                     f"Jupyter Server returned HTTP {response.status}: {detail}"

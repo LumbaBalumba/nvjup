@@ -259,6 +259,10 @@ end
 function M.setup(options)
 	config.setup(options)
 	group = vim.api.nvim_create_augroup("NvJup", { clear = true })
+	pcall(vim.api.nvim_del_user_command, "NvJupRemoteFiles")
+	vim.api.nvim_create_user_command("NvJupRemoteFiles", function()
+		require("nvjup.remote_files").open()
+	end, { desc = "Open the local/remote Jupyter file manager" })
 
 	vim.api.nvim_create_autocmd("BufReadCmd", {
 		group = group,
@@ -298,6 +302,7 @@ M.kernel = kernel
 M.lsp = lsp
 M.notebook = notebook
 M.output = output
+M.remote_files = require("nvjup.remote_files")
 M.render = render
 M.shadow = shadow
 M.statusline = require("nvjup.statusline")

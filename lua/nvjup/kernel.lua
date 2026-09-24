@@ -2,6 +2,7 @@ local config = require("nvjup.config")
 local lsp = require("nvjup.lsp")
 local notebook = require("nvjup.notebook")
 local render = require("nvjup.render")
+local remote = require("nvjup.remote")
 local rpc = require("nvjup.rpc")
 local trust = require("nvjup.trust")
 
@@ -462,32 +463,8 @@ local function python_has_ipykernel(path)
 	return result.code == 0
 end
 
-local function configured_remote(state)
-	local remote = (config.options.kernel or {}).remote
-	if type(remote) == "function" then
-		remote = remote(state.path, state)
-	end
-	if type(remote) ~= "table" or type(remote.url) ~= "string" or remote.url == "" then
-		return nil
-	end
-	local token = remote.token
-	if type(token) == "function" then
-		token = token(state.path, state)
-	end
-	if (type(token) ~= "string" or token == "") and type(remote.token_env) == "string" then
-		token = vim.env[remote.token_env]
-	end
-	return {
-		url = remote.url,
-		token = type(token) == "string" and token or "",
-		verify_ssl = remote.verify_ssl ~= false,
-		origin = type(remote.origin) == "string" and remote.origin or nil,
-		reconnect_attempts = math.max(0, math.min(tonumber(remote.reconnect_attempts) or 2, 5)),
-	}
-end
-
-local function configured_kernel_python(state)
-	if configured_remote(state) then
+local function configured_kernel_python(state, remote_options)
+	if remote_options then
 		return nil, "remote"
 	end
 	if not notebook_language(state):match("^python") then
@@ -564,14 +541,15 @@ local function ensure_kernel(session, callback)
 			flush_start_waiters(session, hello_err)
 			return
 		end
-		local python_path, python_source = configured_kernel_python(session.state)
+		local remote_options = remote.resolve(session.state)
+		local python_path, python_source = configured_kernel_python(session.state, remote_options)
 		session.kernel_python = python_path
 		session.kernel_python_source = python_source
 		session.client:request("kernel.start", {
 			kernel_name = kernel_name(session.state),
 			python_path = python_path,
 			python_source = python_source,
-			remote = configured_remote(session.state),
+			remote = remote_options,
 			cwd = session.state.path ~= "" and vim.fs.dirname(session.state.path) or nil,
 			timeout = config.options.kernel.start_timeout_seconds,
 		}, { notebook_id = session.notebook_id }, function(err, payload)
@@ -1009,8 +987,9 @@ function M.status(state)
 	local session = state and sessions[state.buf]
 	if not session then
 		local python_path, python_source
+		local remote_enabled = state and remote.enabled(state) or false
 		if state then
-			python_path, python_source = configured_kernel_python(state)
+			python_path, python_source = configured_kernel_python(state, remote_enabled and {} or nil)
 		end
 		return {
 			state = "stopped",
@@ -1018,7 +997,7 @@ function M.status(state)
 			kernel_name = state and kernel_name(state) or nil,
 			python_path = python_path,
 			python_source = python_source,
-			transport = configured_remote(state) and "remote" or "local",
+			transport = remote_enabled and "remote" or "local",
 		}
 	end
 	return {
@@ -1041,7 +1020,9 @@ end
 M._sessions = sessions
 M._handle_event = handle_event
 M._materialize_widget_images = materialize_widget_images
-M.find_kernel_python = configured_kernel_python
+M.find_kernel_python = function(state)
+	return configured_kernel_python(state, remote.enabled(state) and {} or nil)
+end
 M._rebuild_display_ids = rebuild_display_ids
 
 return M

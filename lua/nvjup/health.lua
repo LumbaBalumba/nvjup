@@ -148,7 +148,7 @@ function M.check()
 		vim.health.ok("interactive notebook trust is required")
 	end
 
-	vim.health.start("nvjup Stage 7 integrations")
+	vim.health.start("nvjup remote and optional integrations")
 	local remote = (config.options.kernel or {}).remote
 	if type(remote) == "table" and type(remote.url) == "string" and remote.url ~= "" then
 		if remote.url:match("^https://") then
@@ -172,10 +172,21 @@ function M.check()
 		vim.health.info("remote Jupyter Server transport is not configured")
 	end
 	if require("nvjup.telescope").available() then
-		vim.health.ok("Telescope is available for notebook and variable pickers")
+		vim.health.ok("Telescope is available for notebook, variable, and two-panel remote file pickers")
 	else
-		vim.health.info("Telescope is unavailable or disabled; vim.ui.select and floating inspectors are used")
+		vim.health.info("Telescope is unavailable or disabled; outline/variables use fallbacks")
+		if type(remote) == "table" and type(remote.url) == "string" and remote.url ~= "" then
+			vim.health.warn("the remote file manager requires Telescope")
+		end
 	end
+	local files = config.options.remote_files or {}
+	vim.health.info(
+		string.format(
+			"remote file limits: %d bytes/file, %d bytes/transfer",
+			files.max_file_bytes or 64 * 1024 * 1024,
+			files.max_transfer_bytes or 512 * 1024 * 1024
+		)
+	)
 	vim.health.ok("variable inspector and statusline adapter are available")
 	vim.health.info("statusline API: require('nvjup.statusline').component()")
 end

@@ -77,6 +77,23 @@ Execution:
 - `inspect.request`;
 - `variables.list`.
 
+Remote files:
+
+- `remote.files.list`;
+- `remote.files.stat`;
+- `remote.files.mkdir`;
+- `remote.files.touch`;
+- `remote.files.rename`;
+- `remote.files.delete`;
+- `remote.files.download`;
+- `remote.files.upload`.
+
+Every remote-file request carries the resolved remote server object inside the
+local Neovim↔sidecar channel. It is never echoed. API-style paths are root-relative,
+forward-slash-delimited and reject empty, dot, dot-dot, backslash and NUL segments.
+File bytes use bounded base64 in nvjup RPC; the sidecar streams authenticated
+Jupyter `/files` downloads and uses bounded Contents API models for mutation.
+
 Renderer:
 
 - `renderer.hello`;

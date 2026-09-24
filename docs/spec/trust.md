@@ -70,4 +70,4 @@ Kitty remote control is not required for graphics. The plugin must not depend on
 
 ## Secrets and logs
 
-Jupyter connection keys, authorization tokens, environment variables, cell contents, stdin responses, and rendered HTML are sensitive. Default logs contain identifiers and bounded summaries, not raw secret-bearing payloads.
+Jupyter connection keys, authorization tokens, environment variables, cell contents, stdin responses, transferred file bytes, and rendered HTML are sensitive. Default logs contain identifiers and bounded summaries, not raw secret-bearing payloads. Remote file REST redirects and traversal components are rejected; resolved tokens travel only over the local Neovim-to-sidecar RPC and authenticated requests to the configured origin, and are never echoed in responses.

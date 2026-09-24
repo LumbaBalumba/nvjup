@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import base64
 import json
 import os
 import queue
@@ -305,16 +306,139 @@ def test_remote_kernel_v1_framing_and_jupyter_server_transport(
             raise AssertionError("timed out starting Jupyter Server")
 
         notebook_id = "notebook-remote"
+        remote = {
+            "url": base_url,
+            "token": token,
+            "verify_ssl": True,
+            "max_file_bytes": 1024 * 1024,
+            "max_entries": 100,
+        }
+        made = sidecar.response(
+            sidecar.send(
+                "remote.files.mkdir",
+                {"remote": remote, "path": "transfer"},
+                notebook_id=notebook_id,
+            )
+        )
+        assert made["payload"]["type"] == "directory"
+        binary = b"nvjup\x00remote\xfffile"
+        uploaded = sidecar.response(
+            sidecar.send(
+                "remote.files.upload",
+                {
+                    "remote": remote,
+                    "path": "transfer/data.bin",
+                    "content": base64.b64encode(binary).decode("ascii"),
+                },
+                notebook_id=notebook_id,
+            )
+        )
+        assert uploaded["payload"]["path"] == "transfer/data.bin"
+        listing = sidecar.response(
+            sidecar.send(
+                "remote.files.list",
+                {"remote": remote, "path": "transfer"},
+                notebook_id=notebook_id,
+            )
+        )
+        assert [entry["name"] for entry in listing["payload"]["entries"]] == [
+            "data.bin"
+        ]
+        downloaded = sidecar.response(
+            sidecar.send(
+                "remote.files.download",
+                {"remote": remote, "path": "transfer/data.bin"},
+                notebook_id=notebook_id,
+            )
+        )
+        assert base64.b64decode(downloaded["payload"]["content"]) == binary
+        notebook_bytes = b'{"nbformat":4,"nbformat_minor":5,"metadata":{},"cells":[]}\n'
+        sidecar.response(
+            sidecar.send(
+                "remote.files.upload",
+                {
+                    "remote": remote,
+                    "path": "transfer/notes \u03b4.ipynb",
+                    "content": base64.b64encode(notebook_bytes).decode("ascii"),
+                },
+                notebook_id=notebook_id,
+            )
+        )
+        notebook_download = sidecar.response(
+            sidecar.send(
+                "remote.files.download",
+                {"remote": remote, "path": "transfer/notes \u03b4.ipynb"},
+                notebook_id=notebook_id,
+            )
+        )
+        assert (
+            base64.b64decode(notebook_download["payload"]["content"]) == notebook_bytes
+        )
+        renamed = sidecar.response(
+            sidecar.send(
+                "remote.files.rename",
+                {
+                    "remote": remote,
+                    "path": "transfer/data.bin",
+                    "new_path": "transfer/renamed.bin",
+                },
+                notebook_id=notebook_id,
+            )
+        )
+        assert renamed["payload"]["path"] == "transfer/renamed.bin"
+        sidecar.response(
+            sidecar.send(
+                "remote.files.touch",
+                {"remote": remote, "path": "transfer/empty.txt"},
+                notebook_id=notebook_id,
+            )
+        )
+        sidecar.response(
+            sidecar.send(
+                "remote.files.delete",
+                {"remote": remote, "path": "transfer/renamed.bin"},
+                notebook_id=notebook_id,
+            )
+        )
+        sidecar.response(
+            sidecar.send(
+                "remote.files.delete",
+                {"remote": remote, "path": "transfer/empty.txt"},
+                notebook_id=notebook_id,
+            )
+        )
+        sidecar.response(
+            sidecar.send(
+                "remote.files.delete",
+                {"remote": remote, "path": "transfer/notes \u03b4.ipynb"},
+                notebook_id=notebook_id,
+            )
+        )
+        sidecar.response(
+            sidecar.send(
+                "remote.files.delete",
+                {"remote": remote, "path": "transfer"},
+                notebook_id=notebook_id,
+            )
+        )
+        traversal_id = sidecar.send(
+            "remote.files.list",
+            {"remote": remote, "path": "../escape"},
+            notebook_id=notebook_id,
+        )
+        traversal = sidecar.wait_for(
+            lambda item: item.get("kind") == "response"
+            and item.get("id") == traversal_id
+        )
+        assert traversal["error"]["code"] == "remote_files_list_failed"
+        assert token not in json.dumps(traversal)
+
         started = sidecar.response(
             sidecar.send(
                 "kernel.start",
                 {
                     "kernel_name": "python3",
-                    "remote": {
-                        "url": base_url,
-                        "token": token,
-                        "verify_ssl": True,
-                    },
+                    "remote": remote,
                     "timeout": 30,
                 },
                 notebook_id=notebook_id,

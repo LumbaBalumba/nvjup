@@ -89,3 +89,17 @@ Stage 7 extension work is accepted incrementally when:
 6. statusline and Telescope adapters introduce no mandatory UI dependency;
 7. health reports optional integrations and actionable degraded modes;
 8. remote Jupyter Server uses authenticated REST lifecycle and negotiated WebSocket v1 channels, verifies TLS by default, never reports tokens, bounds reconnects/frames/queues, and passes an isolated real-server lifecycle test.
+
+## Stage 8 acceptance criteria
+
+Remote file exchange is accepted when:
+
+1. authenticated Contents API requests list, stat, create, rename and delete local-server test resources;
+2. binary and notebook upload/download preserve bytes, including Unicode API paths;
+3. traversal components and HTTP redirects are rejected before credentials or file data can escape the configured endpoint;
+4. file bytes, aggregate transfer bytes, entries, response models and timeouts are bounded;
+5. Telescope always renders distinct local and remote panels and switches the active side without losing either current directory;
+6. create/open/rename/delete/copy/cut/paste/refresh/hidden/path/info/help mappings follow their nvim-tree equivalents;
+7. copy and move work within either filesystem and recursively across filesystems, deleting a moved source only after a successful copy;
+8. remote file operations do not start a kernel and close their dedicated sidecar when the picker closes;
+9. local, mocked Telescope/RPC, real Contents API and host real-Telescope tests pass.

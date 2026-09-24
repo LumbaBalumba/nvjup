@@ -966,6 +966,19 @@ remote transport и optional integrations описаны в [`docs/stage7.md`](s
 - Telescope integration;
 - расширенные health checks.
 
+### Этап 8 — remote file exchange
+
+Статус: реализован. Детали UI, Contents API, limits и bindings описаны в
+[`docs/stage8.md`](stage8.md).
+
+- authenticated Jupyter Contents API для list/stat/create/rename/delete/upload/download;
+- byte-preserving binary и notebook transfer;
+- двухпанельный Telescope UI для local/remote файловых систем;
+- nvim-tree-style create/open/rename/delete/copy/cut/paste/refresh/navigation bindings;
+- рекурсивное копирование и перемещение внутри и между файловыми системами;
+- path traversal, redirect, size/count/timeout и aggregate-transfer bounds;
+- real Jupyter Server и real Telescope E2E.
+
 ---
 
 ## 12. Тестовая стратегия
