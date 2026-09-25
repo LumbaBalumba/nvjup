@@ -217,6 +217,59 @@ test("caps every interactive event mix while preserving releases", function()
 	assert(#callbacks == 1, "the stalled request must keep all later events queued")
 end)
 
+test("close focus drains a queued release behind an in-flight down", function()
+	local sent = {}
+	local callbacks = {}
+	interactive._set_client_factory(function()
+		return {
+			request = function(_, request_type, payload, _, callback)
+				if request_type == "renderer.open" then
+					callback(nil, {
+						figure_id = payload.figure_id,
+						png = png,
+						width = 900,
+						height = 540,
+					})
+				elseif request_type == "renderer.event" then
+					table.insert(sent, payload.event)
+					table.insert(callbacks, callback)
+				elseif callback then
+					callback(nil, {})
+				end
+			end,
+			kill = function() end,
+		}
+	end)
+	local state = { buf = 99127 }
+	local cell = {
+		id = "release-on-close",
+		outputs = {
+			{
+				output_type = "display_data",
+				data = { ["application/vnd.plotly.v1+json"] = { data = {}, layout = {} } },
+				metadata = {},
+			},
+		},
+	}
+	interactive.prepare_cell(state, cell)
+	assert(interactive.open_focus(state, cell))
+	local active = assert(interactive._focus())
+	interactive._queue_event(active, { figure_id = active.entry.figure_id, event = "down", x = 2, y = 3 })
+	interactive._queue_event(active, { figure_id = active.entry.figure_id, event = "up", x = 2, y = 3 })
+	assert(vim.deep_equal(sent, { "down" }))
+	interactive._close_focus()
+	assert(interactive.status().focus == nil)
+	assert(#active.event_queue == 1 and active.event_queue[1].event == "up")
+	assert(#callbacks == 1)
+	table.remove(callbacks, 1)(nil, {})
+	assert(vim.deep_equal(sent, { "down", "up" }), vim.inspect(sent))
+	assert(#callbacks == 1)
+	table.remove(callbacks, 1)(nil, {})
+	assert(not active.event_pending)
+	assert(#active.event_queue == 0)
+	interactive.finish_render(state, {})
+end)
+
 test("queues clicks and releases behind an in-flight hover frame", function()
 	local sent = {}
 	local callbacks = {}

@@ -164,6 +164,156 @@ test("resolves remote Jupyter transport settings for the sidecar", function()
 	assert(remote_trust_revision == nil)
 end)
 
+test("keeps stale interactive output blocked after its running cell is edited", function()
+	local state = open_fixture("00_minimal.ipynb")
+	local cell = state.cells[1]
+	kernel.start()
+	local session = kernel._sessions[state.buf]
+	local execution = {
+		execution_id = "stale-interactive",
+		cell_id = cell.id,
+		revision = cell.revision,
+		source = cell.source,
+	}
+	session.executions[execution.execution_id] = execution
+	cell.revision = cell.revision + 1
+	cell.source = cell.source .. "# edited while running\n"
+	kernel._handle_event(session, {
+		type = "execution.display",
+		notebook_id = session.notebook_id,
+		payload = {
+			execution_id = execution.execution_id,
+			output_type = "display_data",
+			data = { ["application/vnd.plotly.v1+json"] = { data = {}, layout = {} } },
+			metadata = {},
+		},
+	})
+	local produced = cell.outputs[#cell.outputs]
+	assert(not trust.allows_interactive(state, cell, produced))
+	close_fixture(state)
+end)
+
+test("trusts fresh local Plotly and Bokeh outputs from their producer revision", function()
+	local state = open_fixture("00_minimal.ipynb")
+	local cell = state.cells[1]
+	kernel.start()
+	local session = kernel._sessions[state.buf]
+	local execution = {
+		execution_id = "fresh-interactive",
+		cell_id = cell.id,
+		revision = cell.revision,
+		source = cell.source,
+	}
+	session.executions[execution.execution_id] = execution
+	for _, data in ipairs({
+		{ ["application/vnd.plotly.v1+json"] = { data = {}, layout = {} } },
+		{ ["application/vnd.bokehjs_exec.v0+json"] = { docs_json = {}, render_items = {} } },
+	}) do
+		kernel._handle_event(session, {
+			type = "execution.display",
+			notebook_id = session.notebook_id,
+			payload = {
+				execution_id = execution.execution_id,
+				output_type = "display_data",
+				data = data,
+				metadata = {},
+			},
+		})
+		assert(trust.allows_interactive(state, cell, cell.outputs[#cell.outputs]))
+	end
+	close_fixture(state)
+end)
+
+test("cross-cell display and widget updates cannot adopt output trust", function()
+	local state = open_fixture("09_lsp_mapping.ipynb")
+	local cells = {}
+	for _, cell in ipairs(state.cells) do
+		if cell.cell_type == "code" then
+			table.insert(cells, cell)
+		end
+	end
+	local producer, updater = cells[1], cells[2]
+	kernel.start()
+	local session = kernel._sessions[state.buf]
+	local produced = {
+		execution_id = "producer-a",
+		cell_id = producer.id,
+		revision = producer.revision,
+		source = producer.source,
+	}
+	session.executions[produced.execution_id] = produced
+	kernel._handle_event(session, {
+		type = "execution.widget",
+		notebook_id = session.notebook_id,
+		payload = {
+			execution_id = produced.execution_id,
+			action = "open",
+			model_id = "root",
+			state = { _model_name = "HBoxModel", children = { "IPY_MODEL_child" } },
+		},
+	})
+	kernel._handle_event(session, {
+		type = "execution.display",
+		notebook_id = session.notebook_id,
+		payload = {
+			execution_id = produced.execution_id,
+			output_type = "display_data",
+			data = { ["application/vnd.plotly.v1+json"] = { data = {}, layout = {} } },
+			metadata = {},
+			transient = { display_id = "owned-by-a" },
+		},
+	})
+	local display_output = producer.outputs[#producer.outputs]
+	kernel._handle_event(session, {
+		type = "execution.display",
+		notebook_id = session.notebook_id,
+		payload = {
+			execution_id = produced.execution_id,
+			output_type = "display_data",
+			data = { ["application/vnd.jupyter.widget-view+json"] = { model_id = "root" } },
+			metadata = {},
+		},
+	})
+	local widget_output = producer.outputs[#producer.outputs]
+	assert(trust.allows_interactive(state, producer, display_output))
+	assert(trust.allows_interactive(state, producer, widget_output))
+
+	producer.revision = producer.revision + 1
+	producer.source = producer.source .. "\n# edited"
+	assert(not trust.allows_interactive(state, producer, display_output))
+	assert(not trust.allows_interactive(state, producer, widget_output))
+	local update = {
+		execution_id = "updater-b",
+		cell_id = updater.id,
+		revision = updater.revision,
+		source = updater.source,
+	}
+	session.executions[update.execution_id] = update
+	kernel._handle_event(session, {
+		type = "execution.display_update",
+		notebook_id = session.notebook_id,
+		payload = {
+			execution_id = update.execution_id,
+			data = { ["application/vnd.plotly.v1+json"] = { data = {}, layout = { title = "updated" } } },
+			metadata = {},
+			transient = { display_id = "owned-by-a" },
+		},
+	})
+	assert(not trust.allows_interactive(state, producer, display_output))
+	kernel._handle_event(session, {
+		type = "execution.widget",
+		notebook_id = session.notebook_id,
+		payload = {
+			execution_id = update.execution_id,
+			action = "open",
+			model_id = "child",
+			state = { _model_name = "HTMLModel", value = "from B" },
+		},
+	})
+	assert(not trust.allows_interactive(state, producer, widget_output))
+	close_fixture(state)
+end)
+
 test("does not retrust persisted mixed widget output after an unrelated local widget event", function()
 	local state = open_fixture("00_minimal.ipynb")
 	local cell = state.cells[1]

@@ -22,6 +22,16 @@ PROTOCOL = "nvjup/1"
 MAX_MESSAGE_BYTES = 12 * 1024 * 1024
 MAX_FIGURE_BYTES = 8 * 1024 * 1024
 DEFAULT_FRAME_INTERVAL = 1 / 30
+FIGURE_EVENT_QUEUE_LIMIT = 64
+EVENT_PRIORITY = {
+    "move": 1,
+    "wheel": 1,
+    "key": 2,
+    "click": 3,
+    "drag": 3,
+    "down": 4,
+    "up": 5,
+}
 ALLOWED_KEYS = {
     "ArrowDown",
     "ArrowLeft",
@@ -797,7 +807,7 @@ class PlotlyRenderer:
         figure.metrics["input_latency_ms"] = (time.monotonic() - started) * 1000
 
     @staticmethod
-    def _enqueue_event(figure: Figure, payload: dict[str, Any]) -> None:
+    def _enqueue_event(figure: Figure, payload: dict[str, Any]) -> bool:
         event_type = str(payload.get("event", "move"))
         if (
             event_type == "move"
@@ -820,13 +830,32 @@ class PlotlyRenderer:
             previous["x"] = payload.get("x", previous.get("x", 0))
             previous["y"] = payload.get("y", previous.get("y", 0))
         else:
-            if len(figure.event_queue) >= 64:
-                for queued in list(figure.event_queue):
-                    if queued.get("event") in {"move", "wheel"}:
-                        figure.event_queue.remove(queued)
-                        break
+            if len(figure.event_queue) >= FIGURE_EVENT_QUEUE_LIMIT:
+                incoming_priority = EVENT_PRIORITY[event_type]
+                candidates = [
+                    (
+                        EVENT_PRIORITY.get(str(queued.get("event")), 2),
+                        index,
+                    )
+                    for index, queued in enumerate(figure.event_queue)
+                    if queued.get("event") != "up"
+                    and EVENT_PRIORITY.get(str(queued.get("event")), 2)
+                    < incoming_priority
+                ]
+                eviction_index = min(candidates)[1] if candidates else None
+                if eviction_index is not None:
+                    del figure.event_queue[eviction_index]
+                elif event_type == "up" and all(
+                    queued.get("event") == "up" for queued in figure.event_queue
+                ):
+                    # Keep the newest release when the queue consists solely of
+                    # releases; retaining every duplicate has no additional value.
+                    figure.event_queue.popleft()
+                else:
+                    return False
             figure.event_queue.append(payload)
         figure.event_signal.set()
+        return True
 
     async def _input_loop(self, figure: Figure) -> None:
         try:
@@ -854,12 +883,14 @@ class PlotlyRenderer:
         if figure.push_enabled:
             queued = dict(payload)
             queued["_received_at"] = received
-            self._enqueue_event(figure, queued)
-            if not figure.event_task or figure.event_task.done():
+            accepted = self._enqueue_event(figure, queued)
+            if figure.event_queue and (
+                not figure.event_task or figure.event_task.done()
+            ):
                 figure.event_task = asyncio.create_task(self._input_loop(figure))
             return {
                 "figure_id": figure_id,
-                "accepted": True,
+                "accepted": accepted,
                 "push_frames": True,
                 "queue_depth": len(figure.event_queue),
                 "enqueue_latency_ms": round((time.monotonic() - received) * 1000, 2),

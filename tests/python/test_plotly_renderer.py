@@ -10,7 +10,7 @@ import pytest
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[2] / "python"))
 
-from nvjup_plotly_renderer.server import PlotlyRenderer  # noqa: E402
+from nvjup_plotly_renderer.server import Figure, PlotlyRenderer  # noqa: E402
 from nvjup_sidecar.server import PROTOCOL  # noqa: E402
 
 
@@ -29,6 +29,70 @@ def chromium() -> str | None:
 def test_renderer_reports_only_local_chromium() -> None:
     assert PROTOCOL == "nvjup/1"
     assert PlotlyRenderer.chromium_path() == chromium()
+
+
+def queued_figure() -> Figure:
+    return Figure(
+        figure_id="queue-test",
+        page=None,
+        cdp=None,
+        backend="plotly",
+        payload={},
+        width=640,
+        height=480,
+        push_requested=True,
+        adaptive=True,
+        low_width=320,
+        low_height=240,
+        max_fps=30,
+        push_enabled=True,
+    )
+
+
+@pytest.mark.parametrize("event_type", ["key", "down", "up"])
+def test_push_event_queue_is_hard_bounded_for_saturated_events(
+    event_type: str,
+) -> None:
+    figure = queued_figure()
+    for sequence in range(512):
+        payload: dict[str, object] = {
+            "event": event_type,
+            "key": "Enter",
+            "x": sequence,
+            "y": sequence,
+        }
+        PlotlyRenderer._enqueue_event(figure, payload)
+        assert len(figure.event_queue) <= 64
+    assert len(figure.event_queue) == 64
+    if event_type == "up":
+        assert figure.event_queue[-1]["x"] == 511
+
+
+def test_push_event_queue_preserves_releases_and_rejects_lower_priority() -> None:
+    figure = queued_figure()
+    for sequence in range(32):
+        assert PlotlyRenderer._enqueue_event(
+            figure, {"event": "up", "x": sequence, "y": sequence}
+        )
+        assert PlotlyRenderer._enqueue_event(
+            figure, {"event": "down", "x": sequence, "y": sequence}
+        )
+    assert len(figure.event_queue) == 64
+
+    for event_type in ("key", "down"):
+        assert not PlotlyRenderer._enqueue_event(
+            figure, {"event": event_type, "key": "Enter", "x": 0, "y": 0}
+        )
+        assert len(figure.event_queue) == 64
+        assert sum(event["event"] == "up" for event in figure.event_queue) == 32
+
+    for sequence in range(100):
+        assert PlotlyRenderer._enqueue_event(
+            figure, {"event": "up", "x": sequence, "y": sequence}
+        )
+        assert len(figure.event_queue) == 64
+    assert all(event["event"] == "up" for event in figure.event_queue)
+    assert figure.event_queue[-1]["x"] == 99
 
 
 def test_bokeh_parser_rejects_arbitrary_notebook_javascript() -> None:

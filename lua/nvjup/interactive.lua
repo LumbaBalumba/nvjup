@@ -587,11 +587,18 @@ end
 
 function dispatch_event(active, payload)
 	active.event_pending = true
+	active.event_in_flight = payload
+	if payload.event == "down" then
+		active.pointer_down = true
+	elseif payload.event == "up" then
+		active.pointer_down = false
+	end
 	get_client():request("renderer.event", payload, {}, function(err, frame)
 		active.event_pending = false
-		if not err and frame and frame.png then
+		active.event_in_flight = nil
+		if not active.closing and not err and frame and frame.png then
 			store_frame(active.entry.state, active.entry, frame)
-		elseif err then
+		elseif not active.closing and err then
 			active.entry.error = err.message or tostring(err)
 		end
 		local next_event = table.remove(active.event_queue, 1)
@@ -637,8 +644,35 @@ local function close_focus()
 		return
 	end
 	local active = focus
-	focus = nil
+	active.closing = true
+	local release
+	if active.pointer_down and not (active.event_in_flight and active.event_in_flight.event == "up") then
+		for index = #active.event_queue, 1, -1 do
+			if active.event_queue[index].event == "up" then
+				release = active.event_queue[index]
+				break
+			end
+		end
+		if not release then
+			local pointer = active.last_pointer
+			local in_flight = active.event_in_flight or {}
+			release = {
+				figure_id = active.entry.figure_id,
+				event = "up",
+				x = pointer and pointer[1] or in_flight.x or 0,
+				y = pointer and pointer[2] or in_flight.y or 0,
+			}
+		end
+	end
 	active.event_queue = {}
+	if release then
+		if active.event_pending then
+			table.insert(active.event_queue, release)
+		else
+			dispatch_event(active, release)
+		end
+	end
+	focus = nil
 	vim.o.mousemoveevent = active.previous_mousemoveevent
 	if vim.api.nvim_buf_is_valid(active.buf) then
 		image.detach({ buf = active.buf })
@@ -803,6 +837,7 @@ function M.open_focus(state, cell)
 		namespace = vim.api.nvim_create_namespace("nvjup-interactive-focus-" .. buffer),
 		previous_mousemoveevent = vim.o.mousemoveevent,
 		event_queue = {},
+		pointer_down = false,
 	}
 	vim.bo[buffer].buftype = "nofile"
 	vim.bo[buffer].bufhidden = "wipe"
@@ -980,6 +1015,9 @@ end
 
 M._cache = cache
 M._close_focus = close_focus
+M._focus = function()
+	return focus
+end
 M._pixel_position = pixel_position
 M._queue_event = queue_event
 M._on_renderer_event = on_renderer_event

@@ -198,7 +198,11 @@ local function locally_executed(cell, output_item)
 	if cell._nvjup_local_execution_revision ~= nil and cell._nvjup_local_execution_revision == (cell.revision or 0) then
 		return true
 	end
-	return output_item ~= nil and local_outputs[output_item] == (cell.revision or 0)
+	local producer = output_item ~= nil and local_outputs[output_item] or nil
+	return producer ~= nil
+		and producer.cell_id == cell.id
+		and producer.execution_id ~= nil
+		and producer.revision == (cell.revision or 0)
 end
 
 function M.status(state, cell, output_item)
@@ -249,14 +253,26 @@ function M.mark_local_execution(cell, revision)
 	end
 end
 
-function M.mark_local_output(cell, output_item)
+function M.mark_local_output(cell, output_item, producer_cell_id, execution_id, execution_revision)
 	if
 		config.options.execution
 		and config.options.execution.trust_local_kernel ~= false
 		and cell
 		and type(output_item) == "table"
+		and type(producer_cell_id) == "string"
+		and type(execution_id) == "string"
+		and type(execution_revision) == "number"
+		and producer_cell_id == cell.id
+		and execution_revision == (cell.revision or 0)
+		and local_outputs[output_item] == nil
 	then
-		local_outputs[output_item] = cell.revision or 0
+		-- Producer ownership is immutable: later display/widget updates may target
+		-- another cell, but cannot adopt and thereby trust that cell's output.
+		local_outputs[output_item] = {
+			cell_id = producer_cell_id,
+			execution_id = execution_id,
+			revision = execution_revision,
+		}
 	end
 end
 
