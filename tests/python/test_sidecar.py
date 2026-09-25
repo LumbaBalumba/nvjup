@@ -362,6 +362,52 @@ def test_remote_kernel_v1_framing_and_jupyter_server_transport(
             )
         )
         assert base64.b64decode(downloaded["payload"]["content"]) == binary
+        direct_target = tmp_path / "direct-download.bin"
+        direct = sidecar.response(
+            sidecar.send(
+                "remote.files.download_to",
+                {
+                    "remote": remote,
+                    "path": "transfer/data.bin",
+                    "local_path": str(direct_target),
+                },
+                notebook_id=notebook_id,
+            )
+        )
+        assert direct["payload"]["size"] == len(binary)
+        assert direct_target.read_bytes() == binary
+        upload_source = tmp_path / "direct-upload.bin"
+        upload_source.write_bytes(b"direct\x00upload")
+        sidecar.response(
+            sidecar.send(
+                "remote.files.upload_from",
+                {
+                    "remote": remote,
+                    "path": "transfer/direct.bin",
+                    "local_path": str(upload_source),
+                },
+                notebook_id=notebook_id,
+            )
+        )
+        sidecar.response(
+            sidecar.send(
+                "remote.files.copy",
+                {
+                    "remote": remote,
+                    "path": "transfer/direct.bin",
+                    "new_path": "transfer/direct-copy.bin",
+                },
+                notebook_id=notebook_id,
+            )
+        )
+        copied = sidecar.response(
+            sidecar.send(
+                "remote.files.download",
+                {"remote": remote, "path": "transfer/direct-copy.bin"},
+                notebook_id=notebook_id,
+            )
+        )
+        assert base64.b64decode(copied["payload"]["content"]) == b"direct\x00upload"
         notebook_bytes = b'{"nbformat":4,"nbformat_minor":5,"metadata":{},"cells":[]}\n'
         sidecar.response(
             sidecar.send(
@@ -424,6 +470,14 @@ def test_remote_kernel_v1_framing_and_jupyter_server_transport(
                 notebook_id=notebook_id,
             )
         )
+        for path in ("transfer/direct.bin", "transfer/direct-copy.bin"):
+            sidecar.response(
+                sidecar.send(
+                    "remote.files.delete",
+                    {"remote": remote, "path": path},
+                    notebook_id=notebook_id,
+                )
+            )
         sidecar.response(
             sidecar.send(
                 "remote.files.delete",

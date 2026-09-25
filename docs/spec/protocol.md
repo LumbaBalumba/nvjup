@@ -87,13 +87,22 @@ Remote server and files:
 - `remote.files.rename`;
 - `remote.files.delete`;
 - `remote.files.download`;
-- `remote.files.upload`.
+- `remote.files.upload`;
+- `remote.files.download_to`;
+- `remote.files.upload_from`;
+- `remote.files.copy`.
 
 Every remote-file request carries the resolved remote server object inside the
 local Neovim↔sidecar channel. It is never echoed. API-style paths are root-relative,
 forward-slash-delimited and reject empty, dot, dot-dot, backslash and NUL segments.
-File bytes use bounded base64 in nvjup RPC; the sidecar streams authenticated
-Jupyter `/files` downloads and uses bounded Contents API models for mutation.
+Small compatibility calls may use bounded base64 in nvjup RPC. Normal file-manager
+transfers use `download_to` / `upload_from`: the sidecar reads or writes a new
+local path directly, so file bytes never enter Neovim's newline-delimited JSON
+channel. Same-server copies remain inside the sidecar. The sidecar streams
+authenticated Jupyter `/files` downloads, enforces configured byte limits before
+publishing a local file, removes partial downloads on error, and uses bounded
+Contents API models for mutation. RPC messages themselves have a hard configured
+size limit and an oversized frame terminates the sidecar connection.
 
 Renderer:
 

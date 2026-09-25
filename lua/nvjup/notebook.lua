@@ -62,6 +62,7 @@ local function touch_outputs(cell)
 	cell.output_revision = (cell.output_revision or 0) + 1
 	cell.output_render_cache = nil
 	cell.image_descriptor_cache = nil
+	cell.interactive_render_cache = nil
 end
 
 M.touch_outputs = touch_outputs
@@ -179,7 +180,7 @@ end
 
 local function apply_cell_type(cell, cell_type)
 	if cell.cell_type == cell_type then
-		return
+		return false
 	end
 	if cell.cell_type == "code" then
 		cell.saved_code_state = {
@@ -208,6 +209,7 @@ local function apply_cell_type(cell, cell_type)
 	cell.cell_type = cell_type
 	cell.markdown_rendered = cell_type == "markdown" and false or nil
 	touch_outputs(cell)
+	return true
 end
 
 function Notebook:_build_buffer_lines()
@@ -237,6 +239,7 @@ function Notebook:_rebuild_ranges()
 
 	for index, cell in ipairs(self.cells) do
 		local marker_row = marker_rows[index]
+		cell.index = index
 		if marker_row then
 			local next_marker = marker_rows[index + 1] or #lines
 			cell.range = {
@@ -274,6 +277,7 @@ function Notebook:sync_from_buffer()
 	end
 
 	local lines = vim.api.nvim_buf_get_lines(self.buf, 0, -1, false)
+	local previous_cells = self.cells
 	local parsed = {}
 	local current
 	local seen = {}
@@ -299,9 +303,12 @@ function Notebook:sync_from_buffer()
 	end
 
 	local cells = {}
+	local changed = {}
+	local structural = #parsed ~= #previous_cells
 	for index, entry in ipairs(parsed) do
 		local cell = self.cell_store[entry.id]
 		if not cell then
+			structural = true
 			local raw = new_raw_cell(entry.cell_type, entry.id)
 			cell = {
 				id = entry.id,
@@ -324,8 +331,14 @@ function Notebook:sync_from_buffer()
 			self.cell_store[entry.id] = cell
 		end
 
-		apply_cell_type(cell, entry.cell_type)
-		update_source(cell, util.lines_to_source(entry.lines))
+		if not structural and previous_cells[index] ~= cell then
+			structural = true
+		end
+		local type_changed = apply_cell_type(cell, entry.cell_type)
+		local source_changed = update_source(cell, util.lines_to_source(entry.lines))
+		if type_changed or source_changed then
+			changed[cell.id] = true
+		end
 		local next_marker = parsed[index + 1] and parsed[index + 1].marker_row or #lines
 		cell.range = {
 			marker_row = entry.marker_row,
@@ -333,21 +346,31 @@ function Notebook:sync_from_buffer()
 			end_row = math.max(entry.marker_row + 1, next_marker - 1),
 			end_exclusive = next_marker,
 		}
+		cell.index = index
 		table.insert(cells, cell)
 	end
 
 	self.cells = cells
-	return true
+	self.last_sync_changed = changed
+	self.last_sync_structural = structural
+	return true, changed, structural
 end
 
 function Notebook:cell_index_at(row)
 	row = row or (vim.api.nvim_win_get_cursor(0)[1] - 1)
-	for index, cell in ipairs(self.cells) do
-		if row >= cell.range.marker_row and row < cell.range.end_exclusive then
-			return index
+	local low, high = 1, #self.cells
+	while low <= high do
+		local middle = math.floor((low + high) / 2)
+		local cell = self.cells[middle]
+		if row < cell.range.marker_row then
+			high = middle - 1
+		elseif row >= cell.range.end_exclusive then
+			low = middle + 1
+		else
+			return middle
 		end
 	end
-	return #self.cells > 0 and #self.cells or nil
+	return #self.cells > 0 and math.min(low, #self.cells) or nil
 end
 
 function Notebook:current_cell()
@@ -357,13 +380,9 @@ end
 
 function Notebook:cell_by_id(id)
 	local cell = self.cell_store[id]
-	if not cell then
-		return nil
-	end
-	for index, candidate in ipairs(self.cells) do
-		if candidate == cell then
-			return cell, index
-		end
+	local index = cell and cell.index
+	if index and self.cells[index] == cell then
+		return cell, index
 	end
 	return nil
 end

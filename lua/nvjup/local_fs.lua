@@ -258,4 +258,165 @@ function M.write(path, content)
 	return true
 end
 
+local function async_remove(path, callback)
+	uv.fs_lstat(path, function(stat_err, stat)
+		if stat_err or not stat then
+			callback(nil, stat_err or "path does not exist")
+			return
+		end
+		if stat.type ~= "directory" then
+			uv.fs_unlink(path, function(err)
+				callback(not err or nil, err)
+			end)
+			return
+		end
+		uv.fs_scandir(path, function(scan_err, scan)
+			if scan_err or not scan then
+				callback(nil, scan_err)
+				return
+			end
+			local names = {}
+			while true do
+				local name = uv.fs_scandir_next(scan)
+				if not name then
+					break
+				end
+				table.insert(names, name)
+			end
+			local index = 1
+			local function next_child(ok, err)
+				if not ok then
+					callback(nil, err)
+					return
+				end
+				local name = names[index]
+				if not name then
+					uv.fs_rmdir(path, function(remove_err)
+						callback(not remove_err or nil, remove_err)
+					end)
+					return
+				end
+				index = index + 1
+				async_remove(path .. "/" .. name, next_child)
+			end
+			next_child(true)
+		end)
+	end)
+end
+
+local function async_copy(source, target, budget, callback)
+	budget.count = budget.count + 1
+	if budget.count > budget.max_entries then
+		callback(nil, string.format("copy exceeds %d entries", budget.max_entries))
+		return
+	end
+	uv.fs_lstat(source, function(stat_err, stat)
+		if stat_err or not stat then
+			callback(nil, stat_err)
+			return
+		end
+		uv.fs_lstat(target, function(_, existing)
+			if existing then
+				callback(nil, "target already exists: " .. target)
+				return
+			end
+			if stat.type == "directory" then
+				if target:sub(1, #source + 1) == source .. "/" then
+					callback(nil, "cannot copy a directory into itself")
+					return
+				end
+				uv.fs_mkdir(target, stat.mode or 493, function(mkdir_err)
+					if mkdir_err then
+						callback(nil, mkdir_err)
+						return
+					end
+					uv.fs_scandir(source, function(scan_err, scan)
+						if scan_err or not scan then
+							async_remove(target, function()
+								callback(nil, scan_err)
+							end)
+							return
+						end
+						local names = {}
+						while true do
+							local name = uv.fs_scandir_next(scan)
+							if not name then
+								break
+							end
+							table.insert(names, name)
+						end
+						local index = 1
+						local function next_child(ok, err)
+							if not ok then
+								async_remove(target, function()
+									callback(nil, err)
+								end)
+								return
+							end
+							local name = names[index]
+							if not name then
+								callback(true)
+								return
+							end
+							index = index + 1
+							async_copy(source .. "/" .. name, target .. "/" .. name, budget, next_child)
+						end
+						next_child(true)
+					end)
+				end)
+			elseif stat.type == "link" then
+				uv.fs_readlink(source, function(link_err, link)
+					if link_err then
+						callback(nil, link_err)
+						return
+					end
+					uv.fs_symlink(link, target, function(err)
+						callback(not err or nil, err)
+					end)
+				end)
+			elseif stat.type == "file" then
+				uv.fs_copyfile(source, target, function(err)
+					callback(not err or nil, err)
+				end)
+			else
+				callback(nil, "unsupported local filesystem entry: " .. stat.type)
+			end
+		end)
+	end)
+end
+
+function M.copy_async(source, target, max_entries, callback)
+	async_copy(
+		absolute(source),
+		absolute(target),
+		{ count = 0, max_entries = max_entries or 10000 },
+		vim.schedule_wrap(callback)
+	)
+end
+
+function M.move_async(source, target, max_entries, callback)
+	source, target = absolute(source), absolute(target)
+	uv.fs_rename(source, target, function(err)
+		if not err then
+			vim.schedule(function()
+				callback(true)
+			end)
+			return
+		end
+		async_copy(source, target, { count = 0, max_entries = max_entries or 10000 }, function(ok, copy_err)
+			if not ok then
+				vim.schedule(function()
+					callback(nil, copy_err)
+				end)
+				return
+			end
+			async_remove(source, vim.schedule_wrap(callback))
+		end)
+	end)
+end
+
+function M.delete_async(path, callback)
+	async_remove(absolute(path), vim.schedule_wrap(callback))
+end
+
 return M

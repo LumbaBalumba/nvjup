@@ -48,7 +48,7 @@ local function mark_outputs_changed(session, cell, execution_revision)
 	cell.raw.outputs = cell.outputs
 	cell.raw.execution_count = cell.execution_count == nil and vim.NIL or cell.execution_count
 	vim.bo[state.buf].modified = true
-	refresh(state)
+	render.request_cell(state, cell)
 end
 
 local function remove_display_refs(session, cell_id)
@@ -104,8 +104,10 @@ local function append_stream(session, cell, payload)
 	local text = payload.text or ""
 	local previous = cell.outputs[#cell.outputs]
 	if previous and previous.output_type == "stream" and previous.name == name then
-		previous.text = (type(previous.text) == "table" and table.concat(previous.text, "") or previous.text or "")
-			.. text
+		if type(previous.text) ~= "table" then
+			previous.text = previous.text and { previous.text } or {}
+		end
+		table.insert(previous.text, text)
 	else
 		table.insert(cell.outputs, { output_type = "stream", name = name, text = text })
 	end

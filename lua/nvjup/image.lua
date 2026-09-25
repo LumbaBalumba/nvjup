@@ -455,12 +455,10 @@ local function read_bytes(path)
 	return value
 end
 
-local function refresh_when_ready(state)
-	vim.schedule(function()
-		if vim.api.nvim_buf_is_valid(state.buf) then
-			require("nvjup.render").render(state)
-		end
-	end)
+local function refresh_when_ready(state, entry)
+	if vim.api.nvim_buf_is_valid(state.buf) then
+		require("nvjup.render").request_cell(state, entry and entry.cell_id, 10)
+	end
 end
 
 local function run_bounded(command, callback)
@@ -556,7 +554,7 @@ local function convert_to_png(state, entry, descriptor, bytes)
 			entry.png_base64 = vim.base64.encode(png)
 			entry.status = "converted"
 		end
-		refresh_when_ready(state)
+		refresh_when_ready(state, entry)
 	end)
 end
 
@@ -593,11 +591,15 @@ local function prepare_chafa(state, entry, descriptor, bytes, limits)
 			entry.ascii_lines = vim.split(value, "\n", { plain = true, trimempty = true })
 			entry.status = "ready"
 		end
-		refresh_when_ready(state)
+		refresh_when_ready(state, entry)
 	end)
 end
 
 local function prepare(state, entry, descriptor, available_width, limits)
+	if entry.backend == "text" then
+		entry.status = "fallback"
+		return
+	end
 	local bytes, err = bounded_bytes(descriptor)
 	if not bytes then
 		entry.status = "failed"
@@ -605,10 +607,6 @@ local function prepare(state, entry, descriptor, available_width, limits)
 		return
 	end
 	entry.source_bytes = bytes
-	if entry.backend == "text" then
-		entry.status = "fallback"
-		return
-	end
 	if entry.backend == "chafa" then
 		prepare_chafa(state, entry, descriptor, bytes, limits)
 		return
@@ -709,6 +707,7 @@ function M.render(state, cell, available_width, limits)
 			entry = {
 				key = key,
 				buf = state.buf,
+				cell_id = cell.id,
 				hash = hash,
 				backend = backend,
 				status = "new",

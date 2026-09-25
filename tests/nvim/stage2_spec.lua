@@ -170,6 +170,33 @@ test("projects Tree-sitter captures from Markdown and Lua cells", function()
 	close_fixture(state)
 end)
 
+test("reparses only the dirty Tree-sitter cell", function()
+	local state = open_fixture("09_lsp_mapping.ipynb")
+	local cell = state.cells[1]
+	local original_parser = vim.treesitter.get_string_parser
+	local calls = 0
+	vim.treesitter.get_string_parser = function(...)
+		calls = calls + 1
+		return original_parser(...)
+	end
+	cell.source = cell.source .. "\nchanged_value = 1"
+	cell.revision = cell.revision + 1
+	state.internal_change = true
+	vim.api.nvim_buf_set_lines(
+		state.buf,
+		cell.range.end_exclusive,
+		cell.range.end_exclusive,
+		false,
+		{ "changed_value = 1" }
+	)
+	state.internal_change = false
+	state:_rebuild_ranges()
+	assert(treesitter.update(state))
+	vim.treesitter.get_string_parser = original_parser
+	assert(calls == 1, "expected one dirty parser, got " .. calls)
+	close_fixture(state)
+end)
+
 test("falls back cleanly when a Tree-sitter parser is unavailable", function()
 	local state = open_fixture("09_lsp_mapping.ipynb")
 	state.cells[2].raw.metadata.language = "definitely_missing_nvjuplang"

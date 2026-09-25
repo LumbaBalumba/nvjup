@@ -1,48 +1,41 @@
 local config = require("nvjup.config")
 local language = require("nvjup.language")
+local util = require("nvjup.util")
 
 local M = {}
 
-local function fingerprint(state)
+local function structure_fingerprint(state)
 	local parts = {}
 	for _, cell in ipairs(state.cells) do
-		table.insert(
-			parts,
-			table.concat({
-				cell.id,
-				cell.cell_type,
-				language.for_cell(state, cell),
-				tostring(cell.range.start_row),
-				tostring(cell.range.end_row),
-				cell.source,
-			}, "\0")
-		)
+		table.insert(parts, table.concat({ cell.id, cell.cell_type, language.for_cell(state, cell) }, "\0"))
 	end
 	return vim.fn.sha256(table.concat(parts, "\1"))
 end
 
-local function parser_available(lang)
+local function parser_available(ts, lang)
+	if ts.languages[lang] then
+		return ts.languages[lang].available, ts.languages[lang].error
+	end
 	if lang == "text" then
-		return false, "plain text cells do not use a parser"
+		ts.languages[lang] = { available = false, error = "plain text cells do not use a parser" }
+		return false, ts.languages[lang].error
 	end
 	local ok, err = pcall(vim.treesitter.language.add, lang)
-	if ok then
-		return true, nil
-	end
-	return false, tostring(err)
+	ts.languages[lang] = { available = ok, error = ok and nil or tostring(err) }
+	return ok, ts.languages[lang].error
 end
 
-local function escaped_source_offset(state, cell, row)
-	local source_line = vim.split(cell.source, "\n", { plain = true, trimempty = false })[row + 1]
-	if not source_line then
-		return 0
+local function delete_cell_marks(state, entry)
+	if not entry then
+		return
 	end
-	local visible =
-		vim.api.nvim_buf_get_lines(state.buf, cell.range.start_row + row, cell.range.start_row + row + 1, false)[1]
-	return visible == "\\" .. source_line and 1 or 0
+	for _, mark in ipairs(entry.marks or {}) do
+		pcall(vim.api.nvim_buf_del_extmark, state.buf, state.treesitter_ns, mark)
+	end
+	state.treesitter.capture_count = math.max(0, state.treesitter.capture_count - #(entry.marks or {}))
 end
 
-local function add_capture(state, lang, capture, node)
+local function add_capture(state, entry, lang, capture, node, offsets)
 	if capture:sub(1, 1) == "_" then
 		return
 	end
@@ -50,46 +43,57 @@ local function add_capture(state, lang, capture, node)
 	if start_row == end_row and start_col == end_col then
 		return
 	end
-	local cell = state.treesitter.current_cell
-	local buffer_start = cell.range.start_row
-	start_col = start_col + escaped_source_offset(state, cell, start_row)
-	end_col = end_col + escaped_source_offset(state, cell, end_row)
-	local ok =
-		pcall(vim.api.nvim_buf_set_extmark, state.buf, state.treesitter_ns, buffer_start + start_row, start_col, {
-			end_row = buffer_start + end_row,
+	start_col = start_col + (offsets[start_row + 1] or 0)
+	end_col = end_col + (offsets[end_row + 1] or 0)
+	local ok, mark =
+		pcall(vim.api.nvim_buf_set_extmark, state.buf, state.treesitter_ns, entry.start_row + start_row, start_col, {
+			end_row = entry.start_row + end_row,
 			end_col = end_col,
 			hl_group = "@" .. capture .. "." .. lang,
 			hl_mode = "combine",
 			priority = config.options.treesitter.priority,
 		})
 	if ok then
+		table.insert(entry.marks, mark)
 		state.treesitter.capture_count = state.treesitter.capture_count + 1
 	end
 end
 
 local function highlight_cell(state, cell, lang)
-	local available, parser_error = parser_available(lang)
-	state.treesitter.languages[lang] = {
-		available = available,
-		error = parser_error,
+	local ts = state.treesitter
+	local entry = {
+		revision = cell.revision,
+		source = cell.source,
+		cell_type = cell.cell_type,
+		lang = lang,
+		start_row = cell.range.start_row,
+		marks = {},
 	}
+	ts.cells[cell.id] = entry
+	local available = parser_available(ts, lang)
 	if not available or cell.source == "" then
 		return
 	end
 
+	local source_lines = util.source_to_lines(cell.source)
+	local visible_lines =
+		vim.api.nvim_buf_get_lines(state.buf, cell.range.start_row, cell.range.start_row + #source_lines, false)
+	local offsets = {}
+	for index, source_line in ipairs(source_lines) do
+		offsets[index] = visible_lines[index] == "\\" .. source_line and 1 or 0
+	end
+
 	local ok, parser = pcall(vim.treesitter.get_string_parser, cell.source, lang)
 	if not ok then
-		state.treesitter.languages[lang].available = false
-		state.treesitter.languages[lang].error = tostring(parser)
+		ts.languages[lang] = { available = false, error = tostring(parser) }
 		return
 	end
 	local parsed, parse_error = pcall(parser.parse, parser, true)
 	if not parsed then
-		state.treesitter.languages[lang].error = tostring(parse_error)
+		ts.languages[lang].error = tostring(parse_error)
 		return
 	end
 
-	state.treesitter.current_cell = cell
 	parser:for_each_tree(function(tree, language_tree)
 		local tree_lang = language_tree:lang()
 		local query_ok, highlights = pcall(vim.treesitter.query.get, tree_lang, "highlights")
@@ -99,11 +103,10 @@ local function highlight_cell(state, cell, lang)
 		for capture_id, node in highlights:iter_captures(tree:root(), cell.source, 0, -1) do
 			local capture = highlights.captures[capture_id]
 			if capture then
-				add_capture(state, tree_lang, capture, node)
+				add_capture(state, entry, tree_lang, capture, node, offsets)
 			end
 		end
 	end)
-	state.treesitter.current_cell = nil
 end
 
 function M.update(state)
@@ -111,25 +114,54 @@ function M.update(state)
 		M.detach(state)
 		return false
 	end
-	local current_fingerprint = fingerprint(state)
-	state.treesitter = state.treesitter or {}
-	if state.treesitter.fingerprint == current_fingerprint then
-		return false
+	local structure = structure_fingerprint(state)
+	state.treesitter = state.treesitter or {
+		structure = nil,
+		capture_count = 0,
+		languages = {},
+		cells = {},
+	}
+	local ts = state.treesitter
+	local structural_change = ts.structure ~= nil and ts.structure ~= structure
+	if structural_change then
+		vim.api.nvim_buf_clear_namespace(state.buf, state.treesitter_ns, 0, -1)
+		ts.capture_count = 0
+		ts.cells = {}
 	end
-
-	vim.api.nvim_buf_clear_namespace(state.buf, state.treesitter_ns, 0, -1)
-	state.treesitter.fingerprint = current_fingerprint
-	state.treesitter.capture_count = 0
-	state.treesitter.languages = {}
+	ts.structure = structure
 	vim.bo[state.buf].syntax = ""
 
+	local changed = structural_change
+	local present = {}
 	for _, cell in ipairs(state.cells) do
+		present[cell.id] = true
 		local lang = language.for_cell(state, cell)
-		if cell.cell_type ~= "raw" then
-			highlight_cell(state, cell, lang)
+		local previous = ts.cells[cell.id]
+		local dirty = not previous
+			or previous.revision ~= cell.revision
+			or previous.source ~= cell.source
+			or previous.cell_type ~= cell.cell_type
+			or previous.lang ~= lang
+		if dirty then
+			changed = true
+			delete_cell_marks(state, previous)
+			ts.cells[cell.id] = nil
+			if cell.cell_type ~= "raw" then
+				highlight_cell(state, cell, lang)
+			end
+		elseif previous then
+			-- Extmarks follow buffer edits; retain the actual current start for diagnostics.
+			previous.start_row = cell.range.start_row
 		end
 	end
-	return true
+	for id, entry in pairs(ts.cells) do
+		if not present[id] then
+			delete_cell_marks(state, entry)
+			ts.cells[id] = nil
+			changed = true
+		end
+	end
+	return changed
 end
 
 function M.status(state)
@@ -137,10 +169,12 @@ function M.status(state)
 end
 
 function M.detach(state)
-	if not state or not vim.api.nvim_buf_is_valid(state.buf) then
+	if not state then
 		return
 	end
-	vim.api.nvim_buf_clear_namespace(state.buf, state.treesitter_ns, 0, -1)
+	if vim.api.nvim_buf_is_valid(state.buf) then
+		vim.api.nvim_buf_clear_namespace(state.buf, state.treesitter_ns, 0, -1)
+	end
 	state.treesitter = nil
 end
 

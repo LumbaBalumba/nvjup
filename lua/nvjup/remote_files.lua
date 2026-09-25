@@ -232,8 +232,7 @@ end
 
 local function delete_path(browser, side, path, callback)
 	if side == "local" then
-		local ok, err = local_fs.delete(path)
-		callback(ok, err)
+		local_fs.delete_async(path, callback)
 	else
 		browser.client:delete(path, function(err)
 			callback(not err, err and error_message(err) or nil)
@@ -248,6 +247,43 @@ local function copy_recursive(browser, source_side, entry, target_side, target, 
 		return
 	end
 	if entry.type ~= "directory" then
+		local declared_size = tonumber(entry.size) or 0
+		if declared_size > 0 and budget.bytes + declared_size > budget.max_bytes then
+			callback(nil, string.format("transfer exceeds %d bytes", budget.max_bytes))
+			return
+		end
+		if source_side == "remote" and target_side == "local" and browser.client.download_to then
+			local parent = vim.fs.dirname(target)
+			if vim.fn.mkdir(parent, "p", 493) ~= 1 and not vim.uv.fs_stat(parent) then
+				callback(nil, "failed to create local destination directory")
+				return
+			end
+			browser.client:download_to(entry.path, target, function(err, payload)
+				if err then
+					callback(nil, error_message(err))
+					return
+				end
+				budget.bytes = budget.bytes + (tonumber((payload or {}).size) or declared_size)
+				callback(true)
+			end)
+			return
+		elseif source_side == "local" and target_side == "remote" and browser.client.upload_from then
+			browser.client:upload_from(target, entry.path, function(err)
+				if not err then
+					budget.bytes = budget.bytes + declared_size
+				end
+				callback(not err, err and error_message(err) or nil)
+			end)
+			return
+		elseif source_side == "remote" and target_side == "remote" and browser.client.copy then
+			browser.client:copy(entry.path, target, function(err)
+				if not err then
+					budget.bytes = budget.bytes + declared_size
+				end
+				callback(not err, err and error_message(err) or nil)
+			end)
+			return
+		end
 		read_file(browser, source_side, entry.path, function(content, read_err)
 			if not content then
 				callback(nil, read_err)
@@ -375,19 +411,20 @@ local function transfer(browser, clipboard)
 			end
 		end
 		if clipboard.side == "local" and target_side == "local" then
-			local operation = clipboard.cut and local_fs.move or local_fs.copy
-			local ok, err = operation(clipboard.entry.path, target, browser.max_entries)
-			if clipboard.cut then
-				browser.pending = false
-				if not ok then
-					notify(err, vim.log.levels.ERROR)
+			local operation = clipboard.cut and local_fs.move_async or local_fs.copy_async
+			operation(clipboard.entry.path, target, browser.max_entries, function(ok, err)
+				if clipboard.cut then
+					browser.pending = false
+					if not ok then
+						notify(err, vim.log.levels.ERROR)
+					else
+						browser.clipboard = nil
+						refresh(browser)
+					end
 				else
-					browser.clipboard = nil
-					refresh(browser)
+					done(ok, err)
 				end
-			else
-				done(ok, err)
-			end
+			end)
 		elseif clipboard.side == "remote" and target_side == "remote" and clipboard.cut then
 			browser.client:rename(clipboard.entry.path, target, function(err)
 				browser.pending = false
@@ -548,21 +585,28 @@ local function navigate(browser, entry)
 			end
 			return
 		end
-		read_file(browser, "remote", entry.path, function(content, read_err)
-			if not content then
-				notify(read_err, vim.log.levels.ERROR)
-				return
-			end
-			local ok, write_err = local_fs.write(target, content)
-			if not ok then
-				notify(write_err, vim.log.levels.ERROR)
+		local function open_download(download_err)
+			if download_err then
+				notify(error_message(download_err), vim.log.levels.ERROR)
 				return
 			end
 			require("telescope.actions").close(browser.prompt_bufnr)
 			vim.schedule(function()
 				vim.cmd.edit(vim.fn.fnameescape(target))
 			end)
-		end)
+		end
+		if browser.client.download_to then
+			browser.client:download_to(entry.path, target, open_download)
+		else
+			read_file(browser, "remote", entry.path, function(content, read_err)
+				if not content then
+					open_download(read_err)
+					return
+				end
+				local ok, write_err = local_fs.write(target, content)
+				open_download(ok and nil or write_err)
+			end)
+		end
 	end)
 end
 

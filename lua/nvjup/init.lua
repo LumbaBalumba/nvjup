@@ -143,6 +143,7 @@ local function detach_buffer(state)
 	end
 	local buf = state.buf
 	kernel.detach(state)
+	render.detach(state)
 	interactive.detach(state)
 	image.detach(state)
 	markdown.detach(state)
@@ -228,7 +229,10 @@ local function attach_buffer(state)
 		callback = function()
 			local current = notebook.get(buf)
 			if current and not current.internal_change then
-				render.request(current, config.options.render.debounce_ms)
+				local ok, changed, structural = current:sync_from_buffer()
+				if ok then
+					render.request_source(current, changed, structural, config.options.render.debounce_ms)
+				end
 			end
 		end,
 	})

@@ -663,7 +663,8 @@ test("uses lightweight cursor updates and coalesces text renders", function()
 	local state = open_fixture("01_markdown_code.ipynb")
 	local original_render = render.render
 	local original_active = render.active
-	local full_calls, active_calls = 0, 0
+	local original_cell = render.render_cell
+	local full_calls, active_calls, cell_calls = 0, 0, 0
 	render.render = function(...)
 		full_calls = full_calls + 1
 		return true
@@ -672,20 +673,91 @@ test("uses lightweight cursor updates and coalesces text renders", function()
 		active_calls = active_calls + 1
 		return true
 	end
+	render.render_cell = function(_, _, options)
+		assert(options.source == true)
+		cell_calls = cell_calls + 1
+		return true
+	end
 	vim.api.nvim_exec_autocmds("CursorMoved", { buffer = state.buf, modeline = false })
 	assert(full_calls == 0)
 	assert(active_calls == 1)
 
+	local changed = { [state.cells[1].id] = true }
 	for _ = 1, 5 do
-		vim.api.nvim_exec_autocmds("TextChangedI", { buffer = state.buf, modeline = false })
+		render.request_source(state, changed, false, 10)
 	end
 	assert(vim.wait(500, function()
-		return full_calls == 1
+		return cell_calls == 1
 	end, 5))
 	vim.wait(50)
 	render.render = original_render
 	render.active = original_active
-	assert(full_calls == 1)
+	render.render_cell = original_cell
+	assert(full_calls == 0)
+	close_fixture(state)
+end)
+
+test("updates edited cell chrome without rebuilding untouched cells", function()
+	local state = open_fixture("01_markdown_code.ipynb")
+	local edited = state.cells[1]
+	local untouched = state.cells[2]
+	local untouched_header = untouched.render_header_mark
+	local insert_row = edited.range.end_exclusive
+	state.internal_change = true
+	vim.api.nvim_buf_set_lines(state.buf, insert_row, insert_row, false, { "new paragraph" })
+	state.internal_change = false
+	local ok, changed, structural = state:sync_from_buffer()
+	assert(ok and not structural and changed[edited.id])
+	render.request_source(state, changed, structural, 5)
+	assert(vim.wait(500, function()
+		return state.render_request_cells and next(state.render_request_cells) == nil
+	end, 5))
+	assert(untouched.render_header_mark == untouched_header)
+	local marks = vim.api.nvim_buf_get_extmarks(
+		state.buf,
+		state.render_ns,
+		{ edited.range.end_row, 0 },
+		{ edited.range.end_row, -1 },
+		{ details = true }
+	)
+	local border = false
+	for _, mark in ipairs(marks) do
+		local virtual = mark[4].virt_text or {}
+		if virtual[1] and virtual[1][1] == "│ " then
+			border = true
+		end
+	end
+	assert(border, "new source row did not receive notebook borders")
+	close_fixture(state)
+end)
+
+test("uses one timer and targeted cell renders for output bursts", function()
+	local state = open_fixture("01_markdown_code.ipynb")
+	local cell = state.cells[#state.cells]
+	local original_render = render.render
+	local original_cell = render.render_cell
+	local full_calls, cell_calls = 0, 0
+	render.render = function(...)
+		full_calls = full_calls + 1
+		return true
+	end
+	render.render_cell = function(_, id)
+		assert(id == cell.id)
+		cell_calls = cell_calls + 1
+		return true
+	end
+	for _ = 1, 1000 do
+		render.request_cell(state, cell, 10)
+	end
+	local timer = state.render_request_timer
+	assert(timer and not timer:is_closing())
+	assert(vim.wait(500, function()
+		return cell_calls == 1
+	end, 5))
+	assert(state.render_request_timer == timer)
+	assert(full_calls == 0)
+	render.render = original_render
+	render.render_cell = original_cell
 	close_fixture(state)
 end)
 

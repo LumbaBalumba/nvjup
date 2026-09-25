@@ -156,6 +156,18 @@ function Client:upload(path, content, callback)
 	self:request("upload", { path = path, content = encoded }, callback)
 end
 
+function Client:download_to(path, local_path, callback)
+	self:request("download_to", { path = path, local_path = local_path }, callback)
+end
+
+function Client:upload_from(path, local_path, callback)
+	self:request("upload_from", { path = path, local_path = local_path }, callback)
+end
+
+function Client:copy(path, new_path, callback)
+	self:request("copy", { path = path, new_path = new_path }, callback)
+end
+
 function Client:shutdown()
 	self.ready = false
 	self.client:shutdown()

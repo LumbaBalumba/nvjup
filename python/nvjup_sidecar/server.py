@@ -657,6 +657,9 @@ class SidecarServer:
                     "remote.files.delete",
                     "remote.files.download",
                     "remote.files.upload",
+                    "remote.files.download_to",
+                    "remote.files.upload_from",
+                    "remote.files.copy",
                 ],
                 "events": [
                     "kernel.state",
@@ -1062,6 +1065,50 @@ class SidecarServer:
             "encoding": "base64",
             "size": len(content),
         }
+
+    async def _handle_remote_files_download_to(
+        self, request: dict[str, Any]
+    ) -> dict[str, Any]:
+        client = await self._contents_client(request)
+        target = str(request["payload"].get("local_path", ""))
+        if not target or os.path.exists(target):
+            raise ValueError("download target must be a new local path")
+        content = await client.download(str(request["payload"].get("path", "")))
+
+        def write_new() -> None:
+            with open(target, "xb") as stream:
+                stream.write(content)
+
+        try:
+            await asyncio.to_thread(write_new)
+        except BaseException:
+            with contextlib.suppress(OSError):
+                os.unlink(target)
+            raise
+        return {"size": len(content), "local_path": target}
+
+    async def _handle_remote_files_upload_from(
+        self, request: dict[str, Any]
+    ) -> dict[str, Any]:
+        client = await self._contents_client(request)
+        source = str(request["payload"].get("local_path", ""))
+        stat = await asyncio.to_thread(os.stat, source)
+        if not os.path.isfile(source) or stat.st_size > client.max_file_bytes:
+            raise ValueError("local upload source is not a bounded regular file")
+
+        def read_source() -> bytes:
+            with open(source, "rb") as stream:
+                return stream.read()
+
+        content = await asyncio.to_thread(read_source)
+        return await client.upload(str(request["payload"].get("path", "")), content)
+
+    async def _handle_remote_files_copy(
+        self, request: dict[str, Any]
+    ) -> dict[str, Any]:
+        client = await self._contents_client(request)
+        content = await client.download(str(request["payload"].get("path", "")))
+        return await client.upload(str(request["payload"].get("new_path", "")), content)
 
     async def _handle_remote_files_upload(
         self, request: dict[str, Any]

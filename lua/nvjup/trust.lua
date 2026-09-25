@@ -202,23 +202,34 @@ function M.status(state, cell)
 	if config.options.interactive and config.options.interactive.require_trust == false then
 		return "trusted_interactive", { bypassed = true }
 	end
-	local hash, path = M.identity(state)
-	if not hash then
-		if locally_executed(cell) then
-			return "trusted_interactive", { local_kernel = true, ephemeral = true }
-		end
-		return "unknown", { reason = path }
+	local path = canonical_path(state)
+	if not path then
+		local local_execution = locally_executed(cell)
+		return local_execution and "trusted_interactive" or "unknown",
+			{
+				reason = "notebook has no canonical path",
+				local_kernel = local_execution or nil,
+				ephemeral = local_execution or nil,
+			}
 	end
 	local record = load_records()[path]
+	-- Default-deny notebooks with no persisted decision do not need an expensive
+	-- canonical hash merely to display a blocked placeholder. Grant/revoke still
+	-- compute the full identity before persisting a decision.
 	if record and record.level == "revoked" then
-		return "revoked", { hash = hash, path = path, record = record }
+		return "revoked", { path = path, record = record }
 	end
 	if locally_executed(cell) then
-		return "trusted_interactive", { hash = hash, path = path, local_kernel = true }
+		return "trusted_interactive", { path = path, local_kernel = true }
 	end
 	if not record then
-		return "unknown", { hash = hash, path = path }
+		return "unknown", { path = path }
 	end
+	local hash, identity_path = M.identity(state)
+	if not hash then
+		return "unknown", { reason = identity_path }
+	end
+	path = identity_path
 	if record.policy_version ~= POLICY_VERSION or record.hash ~= hash then
 		return "untrusted", { hash = hash, path = path, record = record, reason = "content_changed" }
 	end

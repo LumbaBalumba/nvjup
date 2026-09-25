@@ -32,6 +32,7 @@ M.defaults = {
 		python = false,
 		request_timeout_ms = 60000,
 		stderr_limit = 16384,
+		max_message_bytes = 128 * 1024 * 1024,
 	},
 	interactive = {
 		enabled = true,

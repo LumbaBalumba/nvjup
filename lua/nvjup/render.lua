@@ -198,13 +198,13 @@ local function render_markdown_line(state, cell, row, line)
 	local hashes = line:match("^(#+)%s")
 	if hashes then
 		local level = math.min(6, #hashes)
-		vim.api.nvim_buf_set_extmark(state.buf, state.render_ns, row, 0, {
+		return vim.api.nvim_buf_set_extmark(state.buf, state.render_ns, row, 0, {
 			end_col = #line,
 			hl_group = "NvJupMarkdownH" .. level,
 			priority = 120,
 		})
 	elseif line:match("^%s*[-*+]%s") then
-		vim.api.nvim_buf_set_extmark(state.buf, state.render_ns, row, 0, {
+		return vim.api.nvim_buf_set_extmark(state.buf, state.render_ns, row, 0, {
 			end_col = #line,
 			hl_group = "NvJupMarkdown",
 			priority = 110,
@@ -271,12 +271,150 @@ function M.active(state, force)
 	return true
 end
 
+local function set_output_mark(state, cell, width)
+	local output_lines, cell_images, cell_interactive = output_virtual_lines(state, cell, width)
+	local options = {
+		virt_lines = output_lines,
+		priority = 100,
+	}
+	if cell.render_output_mark then
+		options.id = cell.render_output_mark
+	end
+	local ok, mark = pcall(vim.api.nvim_buf_set_extmark, state.buf, state.render_ns, cell.range.end_row, 0, options)
+	if not ok and options.id then
+		options.id = nil
+		mark = vim.api.nvim_buf_set_extmark(state.buf, state.render_ns, cell.range.end_row, 0, options)
+	end
+	cell.render_output_mark = mark
+	state.render_cell_images = state.render_cell_images or {}
+	state.render_cell_interactive = state.render_cell_interactive or {}
+	state.render_cell_images[cell.id] = cell_images
+	state.render_cell_interactive[cell.id] = cell_interactive
+	return cell_images, cell_interactive
+end
+
+local function delete_mark(buf, namespace, mark)
+	if mark then
+		pcall(vim.api.nvim_buf_del_extmark, buf, namespace, mark)
+	end
+end
+
+local function render_cell_chrome(state, cell, index, width, buffer_lines, clear)
+	if clear then
+		delete_mark(state.buf, state.render_ns, cell.render_header_mark)
+		delete_mark(state.buf, state.render_ns, cell.render_output_mark)
+		delete_mark(state.buf, state.marker_ns, cell.render_marker_mark)
+		for _, mark in ipairs(cell.render_body_marks or {}) do
+			delete_mark(state.buf, state.render_ns, mark)
+		end
+	end
+	cell.render_body_marks = {}
+	local header = header_text(cell, index, width, index == state.render_active_index)
+	cell.render_header_mark = vim.api.nvim_buf_set_extmark(state.buf, state.render_ns, cell.range.start_row, 0, {
+		virt_lines = { { { header, index == state.render_active_index and "NvJupHeaderActive" or "NvJupHeader" } } },
+		virt_lines_above = true,
+		priority = 100,
+	})
+	local marker_line = buffer_lines[cell.range.marker_row + 1] or ""
+	cell.render_marker_mark = vim.api.nvim_buf_set_extmark(state.buf, state.marker_ns, cell.range.marker_row, 0, {
+		end_col = #marker_line,
+		conceal = "",
+		virt_text = { { "····", "NvJupSeparator" } },
+		virt_text_pos = "overlay",
+		priority = 200,
+	})
+	local function body_mark(row, options)
+		table.insert(cell.render_body_marks, vim.api.nvim_buf_set_extmark(state.buf, state.render_ns, row, 0, options))
+	end
+	for row = cell.range.start_row, cell.range.end_row do
+		local line = buffer_lines[row + 1] or ""
+		body_mark(row, {
+			virt_text = { { "│ ", "NvJupBorder" } },
+			virt_text_pos = "inline",
+			hl_mode = "combine",
+			priority = 80,
+		})
+		body_mark(row, {
+			virt_text = { { "│", "NvJupBorder" } },
+			virt_text_win_col = 0,
+			virt_text_repeat_linebreak = true,
+			hl_mode = "combine",
+			priority = 75,
+		})
+		if config.options.render.right_border then
+			body_mark(row, {
+				virt_text = { { "│", "NvJupBorder" } },
+				virt_text_pos = "right_align",
+				virt_text_repeat_linebreak = true,
+				hl_mode = "combine",
+				priority = 80,
+			})
+		end
+		local markdown_mark = render_markdown_line(state, cell, row, line)
+		if markdown_mark then
+			table.insert(cell.render_body_marks, markdown_mark)
+		end
+	end
+	set_output_mark(state, cell, width)
+end
+
+local function finish_seen(state)
+	local seen_images, seen_interactive = {}, {}
+	for _, values in pairs(state.render_cell_images or {}) do
+		for key in pairs(values) do
+			seen_images[key] = true
+		end
+	end
+	for _, values in pairs(state.render_cell_interactive or {}) do
+		for key in pairs(values) do
+			seen_interactive[key] = true
+		end
+	end
+	image.finish_render(state, seen_images)
+	interactive.finish_render(state, seen_interactive)
+end
+
+function M.render_cell(state, cell_or_id, options)
+	options = options or {}
+	if not state or not state.rendered or not vim.api.nvim_buf_is_valid(state.buf) then
+		return false
+	end
+	local cell, index
+	if type(cell_or_id) == "table" then
+		cell = cell_or_id
+		index = cell.index
+	else
+		cell, index = state:cell_by_id(cell_or_id)
+	end
+	if not cell or not index then
+		return false
+	end
+	local width = window_width(state.buf)
+	if width ~= state.render_width then
+		return M.render(state)
+	end
+	if options.source then
+		local lines = vim.api.nvim_buf_get_lines(state.buf, 0, -1, false)
+		render_cell_chrome(state, cell, index, width, lines, true)
+	else
+		update_header(state, index, index == state.render_active_index)
+		set_output_mark(state, cell, width)
+	end
+	finish_seen(state)
+	return true
+end
+
 function M.render(state, options)
 	options = options or {}
 	if not state or not vim.api.nvim_buf_is_valid(state.buf) then
 		return false
 	end
 	state.render_request_generation = (state.render_request_generation or 0) + 1
+	if state.render_request_timer and not state.render_request_timer:is_closing() then
+		state.render_request_timer:stop()
+	end
+	state.render_request_full = false
+	state.render_request_cells = {}
 	if options.sync ~= false then
 		local ok = state:sync_from_buffer()
 		if not ok then
@@ -291,75 +429,17 @@ function M.render(state, options)
 
 	local width = window_width(state.buf)
 	local buffer_lines = vim.api.nvim_buf_get_lines(state.buf, 0, -1, false)
-	local seen_images = {}
-	local seen_interactive = {}
+	state.render_cell_images = {}
+	state.render_cell_interactive = {}
+	state.render_active_index = nil
 
 	for index, cell in ipairs(state.cells) do
-		local header = header_text(cell, index, width, false)
-		cell.render_header_mark = vim.api.nvim_buf_set_extmark(state.buf, state.render_ns, cell.range.start_row, 0, {
-			virt_lines = { { { header, "NvJupHeader" } } },
-			virt_lines_above = true,
-			priority = 100,
-		})
-
-		local marker_line = buffer_lines[cell.range.marker_row + 1] or ""
-		vim.api.nvim_buf_set_extmark(state.buf, state.marker_ns, cell.range.marker_row, 0, {
-			end_col = #marker_line,
-			conceal = "",
-			virt_text = { { "····", "NvJupSeparator" } },
-			virt_text_pos = "overlay",
-			priority = 200,
-		})
-
-		for row = cell.range.start_row, cell.range.end_row do
-			local line = buffer_lines[row + 1] or ""
-			-- Shift the first visual row to make room for the left border.
-			vim.api.nvim_buf_set_extmark(state.buf, state.render_ns, row, 0, {
-				virt_text = { { "│ ", "NvJupBorder" } },
-				virt_text_pos = "inline",
-				hl_mode = "combine",
-				priority = 80,
-			})
-			-- Wrapped continuation rows do not repeat inline virtual text. Pin a
-			-- second border to window column zero and repeat it on every visual row.
-			-- breakindentopt=min:2 reserves the same two columns on continuations.
-			vim.api.nvim_buf_set_extmark(state.buf, state.render_ns, row, 0, {
-				virt_text = { { "│", "NvJupBorder" } },
-				virt_text_win_col = 0,
-				virt_text_repeat_linebreak = true,
-				hl_mode = "combine",
-				priority = 75,
-			})
-			if config.options.render.right_border then
-				vim.api.nvim_buf_set_extmark(state.buf, state.render_ns, row, 0, {
-					virt_text = { { "│", "NvJupBorder" } },
-					virt_text_pos = "right_align",
-					virt_text_repeat_linebreak = true,
-					hl_mode = "combine",
-					priority = 80,
-				})
-			end
-			render_markdown_line(state, cell, row, line)
-		end
-
-		local output_lines, cell_images, cell_interactive = output_virtual_lines(state, cell, width)
-		for key in pairs(cell_images) do
-			seen_images[key] = true
-		end
-		for key in pairs(cell_interactive) do
-			seen_interactive[key] = true
-		end
-		vim.api.nvim_buf_set_extmark(state.buf, state.render_ns, cell.range.end_row, 0, {
-			virt_lines = output_lines,
-			priority = 100,
-		})
+		render_cell_chrome(state, cell, index, width, buffer_lines, false)
 	end
-	image.finish_render(state, seen_images)
-	interactive.finish_render(state, seen_interactive)
+	finish_seen(state)
 
 	state.render_width = width
 	state.rendered = true
-	state.render_active_index = nil
 	M.active(state, true)
 	for _, win in ipairs(vim.fn.win_findbuf(state.buf)) do
 		M.configure_window(win)
@@ -369,21 +449,93 @@ function M.render(state, options)
 	return true
 end
 
+local function ensure_request_timer(state)
+	if state.render_request_timer and not state.render_request_timer:is_closing() then
+		return state.render_request_timer
+	end
+	state.render_request_timer = vim.uv.new_timer()
+	return state.render_request_timer
+end
+
+local function schedule_request(state, delay_ms)
+	local timer = ensure_request_timer(state)
+	timer:stop()
+	timer:start(math.max(0, tonumber(delay_ms) or tonumber(config.options.render.debounce_ms) or 30), 0, function()
+		vim.schedule(function()
+			if not vim.api.nvim_buf_is_valid(state.buf) or notebook.get(state.buf) ~= state then
+				return
+			end
+			local full = state.render_request_full
+			local cells = state.render_request_cells or {}
+			state.render_request_full = false
+			state.render_request_cells = {}
+			if full or not state.rendered then
+				M.render(state)
+				return
+			end
+			local source_changed = false
+			for id, reason in pairs(cells) do
+				local source = reason == "source"
+				source_changed = source_changed or source
+				M.render_cell(state, id, { source = source })
+			end
+			if source_changed then
+				M.active(state, true)
+				features.update(state)
+				markdown.refresh(state)
+			end
+		end)
+	end)
+end
+
 function M.request(state, delay_ms)
 	if not state or not vim.api.nvim_buf_is_valid(state.buf) then
 		return
 	end
-	state.render_request_generation = (state.render_request_generation or 0) + 1
-	local generation = state.render_request_generation
-	vim.defer_fn(function()
-		if
-			vim.api.nvim_buf_is_valid(state.buf)
-			and state.render_request_generation == generation
-			and notebook.get(state.buf) == state
-		then
-			M.render(state)
-		end
-	end, math.max(0, tonumber(delay_ms) or tonumber(config.options.render.debounce_ms) or 30))
+	state.render_request_full = true
+	schedule_request(state, delay_ms)
+end
+
+function M.request_cell(state, cell_or_id, delay_ms, reason)
+	if not state or not vim.api.nvim_buf_is_valid(state.buf) then
+		return
+	end
+	local id = type(cell_or_id) == "table" and cell_or_id.id or cell_or_id
+	if not id then
+		return M.request(state, delay_ms)
+	end
+	state.render_request_cells = state.render_request_cells or {}
+	if reason == "source" or state.render_request_cells[id] == nil then
+		state.render_request_cells[id] = reason or "output"
+	end
+	schedule_request(state, delay_ms)
+end
+
+function M.request_source(state, changed, structural, delay_ms)
+	if structural then
+		return M.request(state, delay_ms)
+	end
+	local any = false
+	for id in pairs(changed or {}) do
+		any = true
+		M.request_cell(state, id, delay_ms, "source")
+	end
+	if not any then
+		M.active(state)
+	end
+end
+
+function M.detach(state)
+	if not state then
+		return
+	end
+	local timer = state.render_request_timer
+	if timer and not timer:is_closing() then
+		timer:stop()
+		timer:close()
+	end
+	state.render_request_timer = nil
+	state.render_request_cells = nil
 end
 
 function M.refresh_window(state)

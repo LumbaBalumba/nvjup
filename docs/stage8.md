@@ -42,7 +42,7 @@ Open the manager with `:NvJupRemoteFiles` from any buffer, or `<leader>ne` from 
 
 Telescope's results window is the **active** filesystem and the preview window is the other filesystem. Both local and remote directory listings are always visible. `<Tab>` swaps their roles while preserving each current directory. Filtering applies to the active panel.
 
-The remote side uses Jupyter Server's authenticated Contents API for metadata and mutation. Downloads prefer the authenticated `/files` byte stream so notebooks and binary files remain byte-identical; the standard Contents model is a bounded fallback. Uploads use base64 file models. No shell command is constructed from a remote path.
+The remote side uses Jupyter Server's authenticated Contents API for metadata and mutation. Downloads prefer the authenticated `/files` byte stream so notebooks and binary files remain byte-identical; the standard Contents model is a bounded fallback. Uploads use base64 Contents models only inside the sidecar. Normal transfers use direct sidecar `download_to` / `upload_from` requests, so large file bytes do not pass through Neovim's JSON RPC or its UI thread. Same-server copies also remain inside the sidecar. No shell command is constructed from a remote path.
 
 ## Bindings
 

@@ -251,45 +251,59 @@ local function range_touches_transformed(document, range, encoding)
 	return false
 end
 
+local function segment_at(segments, position, start_field, end_field)
+	local low, high = 1, #segments
+	while low <= high do
+		local middle = math.floor((low + high) / 2)
+		local segment = segments[middle]
+		if position < segment[start_field] then
+			high = middle - 1
+		elseif position >= segment[end_field] then
+			low = middle + 1
+		else
+			return segment
+		end
+	end
+	return nil
+end
+
 function Manager:notebook_to_shadow(row, byte_col, encoding)
 	for _, document in pairs(self.documents) do
-		for _, segment in ipairs(document.segments) do
-			if row >= segment.notebook_start_row and row < segment.notebook_end_exclusive then
-				local local_row = row - segment.notebook_start_row
-				if local_row >= #segment.source_lines then
-					return nil, "position is outside editable cell source"
-				end
-				local source_col = source_byte_column(self.state, segment, local_row, byte_col)
-				return {
-					document = document,
-					cell_id = segment.cell_id,
-					transformed = transformed_at(segment, local_row, source_col),
-					position = {
-						line = segment.shadow_start_row + local_row,
-						character = encoding_column(segment.source_lines[local_row + 1], source_col, encoding),
-					},
-				}
+		local segment = segment_at(document.segments, row, "notebook_start_row", "notebook_end_exclusive")
+		if segment then
+			local local_row = row - segment.notebook_start_row
+			if local_row >= #segment.source_lines then
+				return nil, "position is outside editable cell source"
 			end
+			local source_col = source_byte_column(self.state, segment, local_row, byte_col)
+			return {
+				document = document,
+				cell_id = segment.cell_id,
+				transformed = transformed_at(segment, local_row, source_col),
+				position = {
+					line = segment.shadow_start_row + local_row,
+					character = encoding_column(segment.source_lines[local_row + 1], source_col, encoding),
+				},
+			}
 		end
 	end
 	return nil, "position is not inside a code cell"
 end
 
 function Manager:shadow_to_notebook(document, position, encoding)
-	for _, segment in ipairs(document.segments) do
-		if position.line >= segment.shadow_start_row and position.line < segment.shadow_end_exclusive then
-			local local_row = position.line - segment.shadow_start_row
-			local source_line = segment.source_lines[local_row + 1] or ""
-			local col = byte_column(source_line, position.character, encoding)
-			local _, visible_offset = source_byte_column(self.state, segment, local_row, col)
-			return {
-				buf = self.state.buf,
-				cell_id = segment.cell_id,
-				row = segment.notebook_start_row + local_row,
-				col = col + visible_offset,
-				transformed = transformed_at(segment, local_row, col),
-			}
-		end
+	local segment = segment_at(document.segments, position.line, "shadow_start_row", "shadow_end_exclusive")
+	if segment then
+		local local_row = position.line - segment.shadow_start_row
+		local source_line = segment.source_lines[local_row + 1] or ""
+		local col = byte_column(source_line, position.character, encoding)
+		local _, visible_offset = source_byte_column(self.state, segment, local_row, col)
+		return {
+			buf = self.state.buf,
+			cell_id = segment.cell_id,
+			row = segment.notebook_start_row + local_row,
+			col = col + visible_offset,
+			transformed = transformed_at(segment, local_row, col),
+		}
 	end
 	return nil, "shadow position touches a synthetic separator"
 end
@@ -352,8 +366,35 @@ function Manager:update()
 			self.documents[lang] = document
 		end
 		local lines, segments = build_document(state, lang, cells)
+		local same_structure = #document.segments == #segments
+		if same_structure then
+			for index, segment in ipairs(segments) do
+				if document.segments[index].cell_id ~= segment.cell_id then
+					same_structure = false
+					break
+				end
+			end
+		end
 		vim.bo[document.buf].modifiable = true
-		vim.api.nvim_buf_set_lines(document.buf, 0, -1, false, lines)
+		if same_structure then
+			-- Apply changed cells from bottom to top so old ranges remain valid while
+			-- Neovim/LSP receive narrow incremental buffer changes.
+			for index = #segments, 1, -1 do
+				local old = document.segments[index]
+				local new = segments[index]
+				if table.concat(old.source_lines, "\n") ~= table.concat(new.source_lines, "\n") then
+					vim.api.nvim_buf_set_lines(
+						document.buf,
+						old.shadow_start_row,
+						old.shadow_end_exclusive,
+						false,
+						new.source_lines
+					)
+				end
+			end
+		else
+			vim.api.nvim_buf_set_lines(document.buf, 0, -1, false, lines)
+		end
 		vim.bo[document.buf].modifiable = false
 		vim.bo[document.buf].modified = false
 		document.segments = segments

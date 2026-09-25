@@ -149,6 +149,8 @@ test("untrusted output is blocked without starting Chromium", function()
 	local segments = output.segments(copy, { include_images = false })
 	assert(segments[1].lines[1]:find("blocked", 1, true))
 	assert(current.cells[1].outputs[1].data["application/vnd.plotly.v1+json"] ~= nil)
+	local cached = interactive.prepare_cell(current, current.cells[1])
+	assert(cached == copy, "unchanged large interactive projections should be reused")
 end)
 
 test("trusted output opens and renderer crashes replay cached figures", function()

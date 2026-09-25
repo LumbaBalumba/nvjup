@@ -3,6 +3,8 @@ local config = require("nvjup.config")
 local M = {}
 local Client = {}
 Client.__index = Client
+local python_probe_cache = {}
+local default_python_cache
 
 local function plugin_root()
 	local source = debug.getinfo(1, "S").source:gsub("^@", "")
@@ -13,13 +15,20 @@ local function python_has_jupyter(python)
 	if not python or python == "" or not vim.uv.fs_stat(python) then
 		return false
 	end
+	if python_probe_cache[python] ~= nil then
+		return python_probe_cache[python]
+	end
 	local result = vim.system({ python, "-c", "import jupyter_client" }, { text = true }):wait(3000)
-	return result.code == 0
+	python_probe_cache[python] = result.code == 0
+	return python_probe_cache[python]
 end
 
 local function default_python(options)
 	if type(options.python) == "string" and options.python ~= "" then
 		return options.python
+	end
+	if default_python_cache then
+		return default_python_cache
 	end
 	local root = plugin_root()
 	local candidates = { vim.fs.joinpath(root, ".venv", "bin", "python") }
@@ -38,11 +47,13 @@ local function default_python(options)
 		if python and python ~= "" and not seen[python] then
 			seen[python] = true
 			if python_has_jupyter(python) then
+				default_python_cache = python
 				return python
 			end
 		end
 	end
-	return vim.fn.exepath("python3") ~= "" and vim.fn.exepath("python3") or "python3"
+	default_python_cache = vim.fn.exepath("python3") ~= "" and vim.fn.exepath("python3") or "python3"
+	return default_python_cache
 end
 
 local function default_command()
@@ -136,6 +147,18 @@ function Client:start()
 end
 
 function Client:_consume_stdout(data)
+	local maximum = (config.options.sidecar and config.options.sidecar.max_message_bytes) or (128 * 1024 * 1024)
+	if #self.stdout_buffer + #data > maximum then
+		self.stdout_buffer = ""
+		local err = structured_error(
+			"sidecar_message_too_large",
+			string.format("sidecar message exceeds %d bytes", maximum),
+			false
+		)
+		self:_fail_all(err)
+		self:kill()
+		return
+	end
 	self.stdout_buffer = self.stdout_buffer .. data
 	while true do
 		local newline = self.stdout_buffer:find("\n", 1, true)
@@ -174,6 +197,10 @@ function Client:_dispatch(message)
 		end
 		self.pending[message.id] = nil
 		pending.done = true
+		if pending.timer and not pending.timer:is_closing() then
+			pending.timer:stop()
+			pending.timer:close()
+		end
 		if pending.callback then
 			pending.callback(message.error, message.payload or {}, message)
 		end
@@ -186,6 +213,10 @@ function Client:_fail_all(err)
 	local pending = self.pending
 	self.pending = {}
 	for _, request in pairs(pending) do
+		if request.timer and not request.timer:is_closing() then
+			request.timer:stop()
+			request.timer:close()
+		end
 		if not request.done and request.callback then
 			request.done = true
 			request.callback(err, {}, nil)
@@ -222,7 +253,7 @@ function Client:request(request_type, payload, context, callback)
 			message[field] = context[field]
 		end
 	end
-	self.pending[id] = { callback = callback, done = false }
+	self.pending[id] = { callback = callback, done = false, timer = nil }
 	local encoded_ok, encoded = pcall(vim.json.encode, message)
 	if not encoded_ok then
 		self.pending[id] = nil
@@ -243,20 +274,28 @@ function Client:request(request_type, payload, context, callback)
 		or (config.options.sidecar and config.options.sidecar.request_timeout_ms)
 		or 30000
 	if timeout > 0 then
-		vim.defer_fn(function()
-			local pending = self.pending[id]
-			if pending and not pending.done then
-				self.pending[id] = nil
-				pending.done = true
-				if pending.callback then
-					pending.callback(
-						structured_error("request_timeout", string.format("%s timed out", request_type), true),
-						{},
-						nil
-					)
+		local timer = vim.uv.new_timer()
+		self.pending[id].timer = timer
+		timer:start(timeout, 0, function()
+			vim.schedule(function()
+				local pending = self.pending[id]
+				if pending and not pending.done then
+					self.pending[id] = nil
+					pending.done = true
+					if pending.timer and not pending.timer:is_closing() then
+						pending.timer:stop()
+						pending.timer:close()
+					end
+					if pending.callback then
+						pending.callback(
+							structured_error("request_timeout", string.format("%s timed out", request_type), true),
+							{},
+							nil
+						)
+					end
 				end
-			end
-		end, timeout)
+			end)
+		end)
 	end
 	return id
 end

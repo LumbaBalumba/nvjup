@@ -52,13 +52,13 @@ local function renderer_command()
 	return { sidecar[1], vim.fs.joinpath(rpc.plugin_root(), "python", "nvjup_plotly_renderer_main.py") }
 end
 
-local function refresh(state)
+local function refresh(state, cell_id)
 	if state and state.buf and vim.api.nvim_buf_is_valid(state.buf) then
-		vim.schedule(function()
-			if vim.api.nvim_buf_is_valid(state.buf) then
-				require("nvjup.render").render(state)
-			end
-		end)
+		if cell_id then
+			require("nvjup.render").request_cell(state, cell_id, 16)
+		else
+			require("nvjup.render").request(state)
+		end
 	end
 end
 
@@ -96,8 +96,8 @@ local function interactive_payload(item)
 end
 
 local function blocked_copy(item, status)
-	local copy = vim.deepcopy(item)
-	copy.data = type(copy.data) == "table" and copy.data or {}
+	local copy = vim.tbl_extend("force", {}, item)
+	copy.data = type(item.data) == "table" and vim.tbl_extend("force", {}, item.data) or {}
 	copy.data[PLOTLY_MIME] = nil
 	copy.data[BOKEH_EXEC_MIME] = nil
 	copy.data[BOKEH_LOAD_MIME] = nil
@@ -171,7 +171,12 @@ local function store_frame(state, entry, payload)
 	entry.push_frames = payload.push_frames == true or entry.push_frames == true
 	entry.error = nil
 	entry.notified = nil
-	refresh(state)
+	local cell = state and state.cell_by_id and state:cell_by_id(entry.cell_id) or nil
+	if cell then
+		cell.interactive_frame_generation = (cell.interactive_frame_generation or 0) + 1
+		cell.interactive_render_cache = nil
+	end
+	refresh(state, entry.cell_id)
 	update_focus(entry)
 	return true
 end
@@ -399,13 +404,26 @@ function M.prepare_cell(state, cell)
 		return cell, {}
 	end
 
-	local copy = vim.deepcopy(cell)
-	-- The copy can substitute trust placeholders or renderer frames and must not
-	-- reuse the source cell's output-segment cache.
+	local trust_status = trust.status(state, cell)
+	local prepared = cell.interactive_render_cache
+	if
+		prepared
+		and prepared.output_revision == cell.output_revision
+		and prepared.trust_status == trust_status
+		and prepared.frame_generation == (cell.interactive_frame_generation or 0)
+	then
+		return prepared.cell, prepared.seen
+	end
+	local copy = vim.tbl_extend("force", {}, cell)
+	copy.outputs = {}
+	for index, item in ipairs(cell.outputs or {}) do
+		copy.outputs[index] = item
+	end
+	-- The overlay substitutes trust placeholders or renderer frames without
+	-- copying large MIME trees. It must not reuse the source segment cache.
 	copy.output_revision = nil
 	copy.output_render_cache = nil
 	local seen = {}
-	local trust_status = trust.status(state, cell)
 	for output_index, item in ipairs(cell.outputs or {}) do
 		local backend, figure = interactive_payload(item)
 		if backend then
@@ -414,8 +432,13 @@ function M.prepare_cell(state, cell)
 			else
 				local cache_key = key(state, cell, output_index)
 				seen[cache_key] = true
-				local hash, encoded = figure_hash(backend, figure)
 				local entry = cache[cache_key]
+				local hash, encoded
+				if entry and entry.output_revision == cell.output_revision and entry.figure == figure then
+					hash = entry.hash
+				else
+					hash, encoded = figure_hash(backend, figure)
+				end
 				if not hash then
 					entry = { error = tostring(encoded), figure_id = figure_id(state, cell, output_index) }
 					cache[cache_key] = entry
@@ -432,21 +455,35 @@ function M.prepare_cell(state, cell)
 						output_index = output_index,
 						backend = backend,
 						figure = figure,
+						output_revision = cell.output_revision,
 					}
 					cache[cache_key] = entry
 					request_open(state, entry)
+				else
+					entry.output_revision = cell.output_revision
+					entry.figure = figure
 				end
 				if entry.png then
-					copy.outputs[output_index].data["image/png"] = entry.png
-					copy.outputs[output_index].metadata = vim.tbl_deep_extend(
+					local item_copy = vim.tbl_extend("force", {}, item)
+					item_copy.data = vim.tbl_extend("force", {}, item.data or {}, { ["image/png"] = entry.png })
+					item_copy.metadata = vim.tbl_deep_extend(
 						"force",
-						copy.outputs[output_index].metadata or {},
+						{},
+						item.metadata or {},
 						{ ["image/png"] = { width = entry.width, height = entry.height } }
 					)
+					copy.outputs[output_index] = item_copy
 				end
 			end
 		end
 	end
+	cell.interactive_render_cache = {
+		output_revision = cell.output_revision,
+		trust_status = trust_status,
+		frame_generation = cell.interactive_frame_generation or 0,
+		cell = copy,
+		seen = seen,
+	}
 	return copy, seen
 end
 

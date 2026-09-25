@@ -85,6 +85,38 @@ test("performs bounded local filesystem operations", function()
 	assert(vim.uv.fs_stat(base) == nil)
 end)
 
+test("runs recursive local copies and deletion asynchronously", function()
+	local base = vim.fn.tempname()
+	local source = vim.fs.joinpath(base, "source")
+	assert(local_fs.mkdir(source))
+	for index = 1, 50 do
+		assert(local_fs.write(vim.fs.joinpath(source, "file-" .. index), tostring(index)))
+	end
+	local target = vim.fs.joinpath(base, "target")
+	local copied, copy_error
+	local_fs.copy_async(source, target, 100, function(ok, err)
+		copied, copy_error = ok, err
+	end)
+	assert(
+		vim.wait(5000, function()
+			return copied ~= nil or copy_error ~= nil
+		end, 5),
+		copy_error
+	)
+	assert(copied and local_fs.read(vim.fs.joinpath(target, "file-50"), 32) == "50")
+	local deleted, delete_error
+	local_fs.delete_async(base, function(ok, err)
+		deleted, delete_error = ok, err
+	end)
+	assert(
+		vim.wait(5000, function()
+			return deleted ~= nil or delete_error ~= nil
+		end, 5),
+		delete_error
+	)
+	assert(deleted and not vim.uv.fs_stat(base))
+end)
+
 test("resolves bounded remote file transport options", function()
 	vim.env.NVJUP_STAGE8_TOKEN = "stage8-secret"
 	config.options.kernel.remote = {
@@ -282,12 +314,25 @@ test("routes remote file RPC without starting a kernel", function()
 	client:upload("uploaded.bin", "a\0b", function(err)
 		assert(err == nil)
 	end)
+	client:download_to("large.bin", "/tmp/nvjup-large.bin", function(err)
+		assert(err == nil)
+	end)
+	client:upload_from("large-upload.bin", "/tmp/nvjup-source.bin", function(err)
+		assert(err == nil)
+	end)
+	client:copy("large.bin", "large-copy.bin", function(err)
+		assert(err == nil)
+	end)
 	local by_type = {}
 	for _, request in ipairs(requests) do
 		by_type[request.type] = request
 	end
 	assert(by_type["remote.files.list"].payload.remote.token == "secret")
 	assert(by_type["remote.files.upload"].payload.content == vim.base64.encode("a\0b"))
+	assert(by_type["remote.files.download_to"].payload.content == nil)
+	assert(by_type["remote.files.download_to"].payload.local_path == "/tmp/nvjup-large.bin")
+	assert(by_type["remote.files.upload_from"].payload.local_path == "/tmp/nvjup-source.bin")
+	assert(by_type["remote.files.copy"].payload.new_path == "large-copy.bin")
 	for _, request in ipairs(requests) do
 		assert(request.type ~= "kernel.start")
 	end

@@ -188,6 +188,11 @@ test("executes immutable cell snapshots sequentially and persists outputs", func
 		name = "stdout",
 		text = "first output\n",
 	}, first)
+	client:emit("execution.stream", {
+		execution_id = first.payload.execution_id,
+		name = "stdout",
+		text = "",
+	}, first)
 	client:emit("execution.display", {
 		execution_id = first.payload.execution_id,
 		output_type = "execute_result",
@@ -204,13 +209,15 @@ test("executes immutable cell snapshots sequentially and persists outputs", func
 	assert(second.context.cell_id == cells[2].id)
 	terminal(client, second, "completed", 8)
 	assert(cells[1].execution_count == 7)
-	assert(cells[1].outputs[1].text == "first output\n")
+	assert(type(cells[1].outputs[1].text) == "table")
+	assert(table.concat(cells[1].outputs[1].text) == "first output\n")
 	assert(cells[1].outputs[2].data["text/plain"] == "42")
 	local path = vim.fn.tempname() .. ".ipynb"
 	assert(state:save(path))
 	local document = vim.json.decode(assert(io.open(path, "rb")):read("*a"))
 	assert(document.cells[2].execution_count == 7)
-	assert(document.cells[2].outputs[1].text == "first output\n")
+	assert(type(document.cells[2].outputs[1].text) == "table")
+	assert(table.concat(document.cells[2].outputs[1].text) == "first output\n")
 	vim.fs.rm(path, { force = true })
 	close_fixture(state)
 end)
@@ -421,6 +428,22 @@ test("exposes interrupt, restart, status, commands, and execution mappings", fun
 end)
 
 kernel._set_client_factory(nil)
+
+test("cancels RPC timeout handles after an immediate response", function()
+	local client = rpc.Client.new({ command = { "true" } })
+	client.alive = true
+	client.process = {
+		is_closing = function()
+			return false
+		end,
+		write = function() end,
+	}
+	local id = assert(client:request("sidecar.ping", {}, { timeout_ms = 60000 }, function() end))
+	local timer = assert(client.pending[id].timer)
+	client:_dispatch({ kind = "response", id = id, payload = {} })
+	assert(client.pending[id] == nil)
+	assert(timer:is_closing())
+end)
 
 if #failures > 0 then
 	print(table.concat(failures, "\n\n"))

@@ -111,6 +111,22 @@ local function clients_for(document, method)
 	return clients
 end
 
+local function schedule_refresh(session, delay)
+	if session.refresh_timer and not session.refresh_timer:is_closing() then
+		session.refresh_timer:stop()
+	else
+		session.refresh_timer = vim.uv.new_timer()
+	end
+	session.refresh_timer:start(delay or 100, 0, function()
+		vim.schedule(function()
+			if vim.api.nvim_buf_is_valid(session.state.buf) then
+				M.publish_diagnostics(session.state)
+				M.refresh_semantic_tokens(session.state)
+			end
+		end)
+	end)
+end
+
 local function setup_document_autocmd(session, document)
 	if session.documents[document.buf] then
 		return
@@ -119,22 +135,13 @@ local function setup_document_autocmd(session, document)
 	vim.api.nvim_create_autocmd("DiagnosticChanged", {
 		buffer = document.buf,
 		callback = function()
-			vim.schedule(function()
-				if vim.api.nvim_buf_is_valid(session.state.buf) then
-					M.publish_diagnostics(session.state)
-				end
-			end)
+			schedule_refresh(session, 50)
 		end,
 	})
 	vim.api.nvim_create_autocmd("LspAttach", {
 		buffer = document.buf,
 		callback = function()
-			vim.defer_fn(function()
-				if vim.api.nvim_buf_is_valid(session.state.buf) then
-					M.publish_diagnostics(session.state)
-					M.refresh_semantic_tokens(session.state)
-				end
-			end, 50)
+			schedule_refresh(session, 50)
 		end,
 	})
 end
@@ -193,13 +200,7 @@ function M.update(state, manager, changed)
 			vim.diagnostic.reset(nil, document.buf)
 		end
 		vim.diagnostic.reset(state.lsp_diagnostic_ns, state.buf)
-		vim.api.nvim_buf_clear_namespace(state.buf, state.lsp_semantic_ns, 0, -1)
-		vim.defer_fn(function()
-			if vim.api.nvim_buf_is_valid(state.buf) then
-				M.publish_diagnostics(state)
-				M.refresh_semantic_tokens(state)
-			end
-		end, 100)
+		schedule_refresh(session, 100)
 	end
 end
 
@@ -962,56 +963,85 @@ function M.refresh_semantic_tokens(state)
 		return
 	end
 	local manager = shadow.get(state)
-	vim.api.nvim_buf_clear_namespace(state.buf, state.lsp_semantic_ns, 0, -1)
+	local session = session_for(state)
+	for _, request in ipairs(session.semantic_requests or {}) do
+		pcall(request.client.cancel_request, request.client, request.id)
+	end
+	session.semantic_requests = {}
+	session.semantic_generation = (session.semantic_generation or 0) + 1
+	local generation = session.semantic_generation
 	local version = manager.version
-	for _, document in pairs(manager.documents) do
-		for _, client in ipairs(clients_for(document, "textDocument/semanticTokens/full")) do
-			client:request("textDocument/semanticTokens/full", {
-				textDocument = { uri = document.uri },
-			}, function(err, result)
-				if err or not result or not result.data or manager.version ~= version then
-					return
-				end
-				local provider = client.server_capabilities.semanticTokensProvider or {}
-				local legend = provider.legend or {}
-				local token_types = legend.tokenTypes or {}
-				local line, character = 0, 0
-				for index = 1, #result.data, 5 do
-					local delta_line = result.data[index]
-					local delta_start = result.data[index + 1]
-					local length = result.data[index + 2]
-					local token_type = token_types[(result.data[index + 3] or 0) + 1]
-					line = line + delta_line
-					character = delta_line == 0 and (character + delta_start) or delta_start
-					if token_type then
-						local start_position = manager:shadow_to_notebook(
-							document,
-							{ line = line, character = character },
-							client.offset_encoding
+	local pending = 0
+	local responses = {}
+
+	local function finish()
+		if pending ~= 0 or generation ~= session.semantic_generation or manager.version ~= version then
+			return
+		end
+		vim.api.nvim_buf_clear_namespace(state.buf, state.lsp_semantic_ns, 0, -1)
+		for _, response in ipairs(responses) do
+			local result, document, client = response.result, response.document, response.client
+			local provider = client.server_capabilities.semanticTokensProvider or {}
+			local token_types = (provider.legend or {}).tokenTypes or {}
+			local line, character = 0, 0
+			for index = 1, #result.data, 5 do
+				local delta_line = result.data[index]
+				local delta_start = result.data[index + 1]
+				local length = result.data[index + 2]
+				local token_type = token_types[(result.data[index + 3] or 0) + 1]
+				line = line + delta_line
+				character = delta_line == 0 and (character + delta_start) or delta_start
+				if token_type then
+					local start_position = manager:shadow_to_notebook(
+						document,
+						{ line = line, character = character },
+						client.offset_encoding
+					)
+					local end_position = manager:shadow_to_notebook(
+						document,
+						{ line = line, character = character + length },
+						client.offset_encoding
+					)
+					if start_position and end_position and start_position.cell_id == end_position.cell_id then
+						vim.api.nvim_buf_set_extmark(
+							state.buf,
+							state.lsp_semantic_ns,
+							start_position.row,
+							start_position.col,
+							{
+								end_row = end_position.row,
+								end_col = end_position.col,
+								hl_group = semantic_highlight(token_type, document.lang),
+								priority = 125,
+							}
 						)
-						local end_position = manager:shadow_to_notebook(
-							document,
-							{ line = line, character = character + length },
-							client.offset_encoding
-						)
-						if start_position and end_position and start_position.cell_id == end_position.cell_id then
-							vim.api.nvim_buf_set_extmark(
-								state.buf,
-								state.lsp_semantic_ns,
-								start_position.row,
-								start_position.col,
-								{
-									end_row = end_position.row,
-									end_col = end_position.col,
-									hl_group = semantic_highlight(token_type, document.lang),
-									priority = 125,
-								}
-							)
-						end
 					end
 				end
-			end, document.buf)
+			end
 		end
+	end
+
+	for _, document in pairs(manager.documents) do
+		for _, client in ipairs(clients_for(document, "textDocument/semanticTokens/full")) do
+			pending = pending + 1
+			local sent, request_id = client:request("textDocument/semanticTokens/full", {
+				textDocument = { uri = document.uri },
+			}, function(err, result)
+				pending = pending - 1
+				if not err and result and result.data and generation == session.semantic_generation then
+					table.insert(responses, { result = result, document = document, client = client })
+				end
+				finish()
+			end, document.buf)
+			if sent and request_id then
+				table.insert(session.semantic_requests, { client = client, id = request_id })
+			elseif not sent then
+				pending = pending - 1
+			end
+		end
+	end
+	if pending == 0 and #responses > 0 then
+		finish()
 	end
 end
 
@@ -1045,6 +1075,13 @@ function M.detach(state)
 	end
 	vim.diagnostic.reset(state.lsp_diagnostic_ns, state.buf)
 	vim.api.nvim_buf_clear_namespace(state.buf, state.lsp_semantic_ns, 0, -1)
+	if session.refresh_timer and not session.refresh_timer:is_closing() then
+		session.refresh_timer:stop()
+		session.refresh_timer:close()
+	end
+	for _, request in ipairs(session.semantic_requests or {}) do
+		pcall(request.client.cancel_request, request.client, request.id)
+	end
 	sessions[state.buf] = nil
 end
 
