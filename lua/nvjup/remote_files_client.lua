@@ -13,7 +13,9 @@ end
 function Client.new(state, remote_options)
 	return setmetatable({
 		state = state,
-		remote_options = remote_options,
+		-- Explicit probe candidates (notably freshly provisioned Colab
+		-- profiles) need the same bounded defaults as configured sessions.
+		remote_options = remote_options and remote.normalize(state, remote_options) or nil,
 		ready = false,
 		starting = false,
 		waiters = {},
@@ -94,8 +96,9 @@ function Client:request_type(request_type, payload, callback)
 			return
 		end
 		payload = vim.tbl_extend("force", payload or {}, { remote = options })
+		local timeout_seconds = math.max(1, math.min(tonumber(options.file_timeout_seconds) or 60, 300))
 		self.client:request(request_type, payload, {
-			timeout_ms = options.file_timeout_seconds * 1000 + 5000,
+			timeout_ms = timeout_seconds * 1000 + 5000,
 		}, callback)
 	end)
 end

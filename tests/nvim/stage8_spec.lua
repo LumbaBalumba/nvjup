@@ -1088,8 +1088,8 @@ test("routes remote file RPC without starting a kernel", function()
 			self.alive = true
 			return true
 		end
-		function fake:request(request_type, payload, _, callback)
-			table.insert(requests, { type = request_type, payload = payload })
+		function fake:request(request_type, payload, request_options, callback)
+			table.insert(requests, { type = request_type, payload = payload, options = request_options })
 			if request_type == "sidecar.hello" then
 				callback(nil, { capabilities = { requests = { "remote.server.probe", "remote.files.list" } } })
 			elseif request_type == "remote.server.probe" then
@@ -1113,8 +1113,14 @@ test("routes remote file RPC without starting a kernel", function()
 		end
 		return fake
 	end)
-	config.options.kernel.remote = { url = "https://example.test", token = "secret" }
-	local client = remote_files_client.new({ path = "/tmp/test.ipynb" })
+	config.options.kernel.remote = false
+	-- Fresh Colab profiles contain connection identity but intentionally omit
+	-- configured file bounds; the client must normalize them before probing.
+	local client = remote_files_client.new({ path = "/tmp/test.ipynb" }, {
+		url = "https://example.test",
+		token = "secret",
+		provider = "colab",
+	})
 	local probe
 	client:probe(function(err, payload)
 		assert(err == nil)
@@ -1150,6 +1156,8 @@ test("routes remote file RPC without starting a kernel", function()
 		by_type[request.type] = request
 	end
 	assert(by_type["remote.files.list"].payload.remote.token == "secret")
+	assert(by_type["remote.files.list"].payload.remote.file_timeout_seconds == 60)
+	assert(by_type["remote.files.list"].options.timeout_ms == 65000)
 	assert(by_type["remote.files.upload"].payload.content == vim.base64.encode("a\0b"))
 	assert(by_type["remote.files.download_to"].payload.content == nil)
 	assert(by_type["remote.files.download_to"].payload.local_path == "/tmp/nvjup-large.bin")

@@ -76,6 +76,10 @@ function M.enabled(state)
 	return configured(state) ~= nil
 end
 
+function M.normalize(state, options)
+	return normalized(state, options)
+end
+
 function M.resolve(state)
 	return normalized(state, configured(state))
 end
