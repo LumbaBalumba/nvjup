@@ -229,7 +229,11 @@ When available, nvjup projects only rendered Markdown-cell ranges into `render-m
 
 ```lua
 require("nvjup").setup({
-  render = { markdown = true },
+  render = {
+    markdown = true,
+    full_width = true,
+    markdown_latex_font_size = "normalsize",
+  },
   integrations = {
     render_markdown = true,
     snacks = true,
@@ -237,7 +241,7 @@ require("nvjup").setup({
 })
 ```
 
-Use `:checkhealth nvjup` to verify the three parsers, `render-markdown.nvim`, Snacks, and `pdflatex`.
+Cell frames span the full text area by default, including wrapped source and extra display-math rows. `markdown_latex_font_size = "normalsize"` keeps rendered formulas close to the terminal text size; any standard LaTeX size name can be configured. Use `:checkhealth nvjup` to verify the three parsers, `render-markdown.nvim`, Snacks, and `pdflatex`.
 
 ## Rich static output configuration
 

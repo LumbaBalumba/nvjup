@@ -54,14 +54,21 @@ local function define_highlights()
 end
 
 local function window_width(buf)
-	local width = config.options.border_width
-	for _, win in ipairs(vim.fn.win_findbuf(buf)) do
-		if vim.api.nvim_win_is_valid(win) then
-			width = math.min(width, math.max(24, vim.api.nvim_win_get_width(win) - 2))
-			break
-		end
+	local windows = vim.fn.win_findbuf(buf)
+	local win = vim.api.nvim_get_current_buf() == buf and vim.api.nvim_get_current_win() or windows[1]
+	if not win or not vim.api.nvim_win_is_valid(win) then
+		return math.max(24, tonumber(config.options.border_width) or 88)
 	end
-	return width
+	local info = vim.fn.getwininfo(win)[1] or {}
+	local available = math.max(24, vim.api.nvim_win_get_width(win) - (info.textoff or 0))
+	if config.options.render.full_width == false then
+		return math.min(tonumber(config.options.border_width) or 88, available)
+	end
+	return available
+end
+
+function M.content_width(buf)
+	return window_width(buf)
 end
 
 local language_labels = {
@@ -214,7 +221,7 @@ function M.configure_window(win)
 	vim.wo[win].linebreak = true
 	vim.wo[win].breakindent = true
 	vim.wo[win].breakindentopt = "min:2"
-	vim.wo[win].showbreak = " "
+	vim.wo[win].showbreak = "  "
 end
 
 function M.render(state)
@@ -272,7 +279,7 @@ function M.render(state)
 			-- second border to window column zero and repeat it on every visual row.
 			-- breakindentopt=min:2 reserves the same two columns on continuations.
 			vim.api.nvim_buf_set_extmark(state.buf, state.render_ns, row, 0, {
-				virt_text = { { "│ ", "NvJupBorder" } },
+				virt_text = { { "│", "NvJupBorder" } },
 				virt_text_win_col = 0,
 				virt_text_repeat_linebreak = true,
 				hl_mode = "combine",

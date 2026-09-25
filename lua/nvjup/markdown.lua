@@ -79,14 +79,67 @@ local function attach_render_markdown(state)
 	return state.markdown_render_markdown
 end
 
-local function install_snacks_layout()
+local function content_width(buf)
+	local ok, render = pcall(require, "nvjup.render")
+	if ok and type(render.content_width) == "function" then
+		return render.content_width(buf)
+	end
+	local wins = vim.fn.win_findbuf(buf)
+	return math.max(24, wins[1] and vim.api.nvim_win_get_width(wins[1]) or 88)
+end
+
+local function virtual_line_width(line)
+	local width = 0
+	for _, chunk in ipairs(line) do
+		width = width + vim.fn.strdisplaywidth(chunk[1] or "")
+	end
+	return width
+end
+
+function M.frame_virtual_line(buf, line)
+	table.insert(line, 1, { "│ ", "NvJupBorder" })
+	if config.options.render.right_border then
+		local padding = math.max(0, content_width(buf) - virtual_line_width(line) - 1)
+		if padding > 0 then
+			line[#line + 1] = { string.rep(" ", padding) }
+		end
+		line[#line + 1] = { "│", "NvJupBorder" }
+	end
+	return line
+end
+
+local function install_snacks_layout(snacks)
 	if snacks_layout_installed then
 		return
 	end
 	local ok, placement = pcall(require, "snacks.image.placement")
-	if not ok or type(placement._render) ~= "function" then
+	local ok_doc, doc = pcall(require, "snacks.image.doc")
+	if not ok or not ok_doc or type(placement._render) ~= "function" then
 		return
 	end
+
+	local original_state = placement.state
+	if type(original_state) == "function" then
+		placement.state = function(self)
+			if
+				self.opts
+				and self.opts.type == "math"
+				and vim.api.nvim_buf_is_valid(self.buf)
+				and vim.bo[self.buf].filetype == "nvjup"
+			then
+				local original_max_width = self.opts.max_width
+				self.opts.max_width = math.min(original_max_width or math.huge, content_width(self.buf) - 3)
+				local success, result = pcall(original_state, self)
+				self.opts.max_width = original_max_width
+				if not success then
+					error(result)
+				end
+				return result
+			end
+			return original_state(self)
+		end
+	end
+
 	local original_render = placement._render
 	placement._render = function(self, extmarks)
 		if
@@ -100,15 +153,27 @@ local function install_snacks_layout()
 					extmark.virt_text_win_col = extmark.virt_text_win_col + 2
 				end
 				for _, virtual_line in ipairs(extmark.virt_lines or {}) do
-					if virtual_line[1] then
-						virtual_line[1][1] = "  " .. virtual_line[1][1]
-					else
-						table.insert(virtual_line, 1, { "  " })
-					end
+					M.frame_virtual_line(self.buf, virtual_line)
 				end
 			end
 		end
 		return original_render(self, extmarks)
+	end
+
+	local original_latex = doc.transforms and doc.transforms.latex
+	if type(original_latex) == "function" then
+		doc.transforms.latex = function(img, ctx)
+			local latex = snacks.image.config.math.latex
+			local original_font_size = latex.font_size
+			if vim.bo[ctx.buf].filetype == "nvjup" then
+				latex.font_size = config.options.render.markdown_latex_font_size or "normalsize"
+			end
+			local success, err = pcall(original_latex, img, ctx)
+			latex.font_size = original_font_size
+			if not success then
+				error(err)
+			end
+		end
 	end
 	snacks_layout_installed = true
 end
@@ -147,7 +212,7 @@ local function attach_snacks(state)
 	if not ok_snacks or not snacks.image or snacks.image.config.enabled == false then
 		return false
 	end
-	install_snacks_layout()
+	install_snacks_layout(snacks)
 	install_snacks_inline_factory()
 	pcall(snacks.image.doc.attach, state.buf)
 	state.markdown_snacks = true

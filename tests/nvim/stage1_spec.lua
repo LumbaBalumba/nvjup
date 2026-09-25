@@ -149,7 +149,7 @@ test("reopening a loaded notebook does not collide with its shadow buffer", func
 	close_fixture(reopened)
 end)
 
-test("renders one concealed marker and two border anchors per cell", function()
+test("renders full-width unbroken cell borders", function()
 	local state = open_fixture("01_markdown_code.ipynb")
 	render.render(state)
 	local marker_marks = details(state, state.marker_ns)
@@ -164,6 +164,37 @@ test("renders one concealed marker and two border anchors per cell", function()
 	assert(count_where(render_marks, function(item)
 		return item.virt_lines and not item.virt_lines_above
 	end) >= #state.cells)
+
+	local source_rows = 0
+	for _, cell in ipairs(state.cells) do
+		source_rows = source_rows + cell.range.end_row - cell.range.start_row + 1
+	end
+	assert(count_where(render_marks, function(item)
+		return item.virt_text_pos == "right_align" and item.virt_text_repeat_linebreak
+	end) == source_rows)
+
+	local expected_width = render.content_width(state.buf)
+	for _, mark in ipairs(render_marks) do
+		local item = mark[4]
+		if item.virt_lines then
+			local border = item.virt_lines[1]
+			local text = table.concat(vim.tbl_map(function(chunk)
+				return chunk[1]
+			end, border))
+			if text:find("╭", 1, true) or text:find("╰", 1, true) then
+				assert(vim.fn.strdisplaywidth(text) == expected_width)
+			end
+		end
+	end
+
+	local formula_line = { { "math", "SnacksImageMath" } }
+	markdown.frame_virtual_line(state.buf, formula_line)
+	assert(formula_line[1][1] == "│ ")
+	assert(formula_line[#formula_line][1] == "│")
+	local formula_text = table.concat(vim.tbl_map(function(chunk)
+		return chunk[1]
+	end, formula_line))
+	assert(vim.fn.strdisplaywidth(formula_text) == expected_width)
 	close_fixture(state)
 end)
 
@@ -179,7 +210,7 @@ test("wraps long source lines and repeats both borders on visual rows", function
 	assert(vim.wo.linebreak)
 	assert(vim.wo.breakindent)
 	assert(vim.wo.breakindentopt:find("min:2", 1, true))
-	assert(vim.wo.showbreak == " ")
+	assert(vim.wo.showbreak == "  ")
 
 	local repeated_left = false
 	local repeated_right = false

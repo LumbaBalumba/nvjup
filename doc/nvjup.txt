@@ -37,11 +37,13 @@ Options include:
 
 >lua
   require("nvjup").setup({
-    border_width = 88,
+    border_width = 88, -- fixed-width fallback and output pager width
     render = {
       outputs = true,
       max_output_lines = 12,
       markdown = true,
+      full_width = true,
+      markdown_latex_font_size = "normalsize",
       right_border = true,
       images = {
         enabled = true,
@@ -190,8 +192,10 @@ its active user configuration. Snacks.image uses the same markdown,
 markdown_inline, and latex Tree-sitter projection to render $...$ and $$...$$;
 the image placement conceals the original formula. Configure these optional
 adapters with integrations.render_markdown and integrations.snacks. LaTeX
-rendering also needs pdflatex and ImageMagick. :checkhealth nvjup reports all
-components.
+rendering also needs pdflatex and ImageMagick. Cell frames use the full window
+text area and continue across wrapped and display-math rows. The default
+markdown_latex_font_size="normalsize" keeps formulas near the terminal text
+size. :checkhealth nvjup reports all components.
 
 When nvim-cmp is installed, nvjup adds a buffer-local `nvjup` source because
 the ordinary `nvim_lsp` source cannot see clients attached to hidden shadow
