@@ -345,7 +345,8 @@ Disconnecting nvjup does not stop the VM. Reopen the UI for
 status/reconnect/disconnect, or use
 :NvJupRemoteStatus and :NvJupRemoteDisconnect. Static `kernel.remote`
 configuration remains optional. Remote channels use authenticated REST and
-bounded WebSocket v1. See docs/stage7.md and docs/stage8.md.
+bounded WebSockets: v1 binary framing for ordinary Jupyter, and the default JSON
+framing required by Colab's managed proxy. See docs/stage7.md and docs/stage8.md.
 
 ==============================================================================
 10. REMOTE JUPYTER FILES                              *nvjup-remote-files*

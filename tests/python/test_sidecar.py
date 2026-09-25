@@ -37,13 +37,20 @@ from nvjup_sidecar.server import Execution, KernelSession, SidecarServer  # noqa
 
 
 class _RemoteResponse:
-    def __init__(self, payload: bytes = b"{}", status: int = 200) -> None:
+    def __init__(
+        self,
+        payload: bytes = b"{}",
+        status: int = 200,
+        protocol: str | None = WS_PROTOCOL,
+    ) -> None:
         self.status = status
         self._payload = payload
         self.content_length = len(payload)
         self.content = self
-        self.protocol = WS_PROTOCOL
+        self.protocol = protocol
         self.closed = False
+        self.sent_bytes: list[bytes] = []
+        self.sent_text: list[str] = []
 
     async def __aenter__(self) -> _RemoteResponse:
         return self
@@ -62,6 +69,12 @@ class _RemoteResponse:
 
     async def close(self) -> None:
         self.closed = True
+
+    async def send_bytes(self, value: bytes) -> None:
+        self.sent_bytes.append(value)
+
+    async def send_str(self, value: str) -> None:
+        self.sent_text.append(value)
 
     async def iter_chunked(self, _size: int) -> Any:
         if self._payload:
@@ -89,7 +102,10 @@ class _RemoteHTTP:
 
     async def ws_connect(self, url: str, **kwargs: Any) -> _RemoteResponse:
         self.calls.append(("WS", url, kwargs))
-        return _RemoteResponse()
+        protocols = kwargs.get("protocols") or ()
+        return _RemoteResponse(
+            protocol=WS_PROTOCOL if WS_PROTOCOL in protocols else None
+        )
 
     async def close(self) -> None:
         self.closed = True
@@ -155,6 +171,16 @@ def test_colab_transport_applies_proxy_auth_without_jupyter_authorization() -> N
         assert "colab-runtime-proxy-token=proxy-secret" in url
         assert ws["headers"]["X-Colab-Runtime-Proxy-Token"] == "proxy-secret"
         assert "Authorization" not in ws["headers"]
+        assert ws["protocols"] == ()
+        assert client.v1_protocol is False
+
+        websocket = client.ws
+        assert websocket is not None
+        await client._send("shell", "kernel_info_request", {})
+        assert websocket.sent_bytes == []
+        message = json.loads(websocket.sent_text[-1])
+        assert message["channel"] == "shell"
+        assert message["header"]["msg_type"] == "kernel_info_request"
         await client.close()
 
     asyncio.run(exercise())

@@ -189,6 +189,7 @@ class RemoteKernelClient:
             for channel in ("shell", "iopub", "stdin", "control")
         }
         self.last_input_request: dict[str, Any] | None = None
+        self.v1_protocol = manager.provider != COLAB_PROVIDER
         self.closed = False
 
     async def connect(self) -> None:
@@ -215,7 +216,11 @@ class RemoteKernelClient:
             self.ws = await self.manager.http.ws_connect(
                 url,
                 headers=headers,
-                protocols=(WS_PROTOCOL,),
+                # Colab's managed Jupyter proxy uses the legacy/default JSON
+                # channel framing and does not negotiate Jupyter WebSocket v1.
+                protocols=(
+                    () if self.manager.provider == COLAB_PROVIDER else (WS_PROTOCOL,)
+                ),
                 heartbeat=30,
                 max_msg_size=MAX_MESSAGE_BYTES,
                 ssl=self.manager.verify_ssl,
@@ -224,7 +229,8 @@ class RemoteKernelClient:
             if self.manager.provider == COLAB_PROVIDER:
                 raise RuntimeError(_redact_token(exc, self.manager.token)) from None
             raise
-        if self.ws.protocol != WS_PROTOCOL:
+        self.v1_protocol = self.ws.protocol == WS_PROTOCOL
+        if self.manager.provider != COLAB_PROVIDER and not self.v1_protocol:
             await self.ws.close()
             self.ws = None
             raise RuntimeError(
@@ -299,6 +305,15 @@ class RemoteKernelClient:
             "version": "5.3",
         }
 
+    async def _send_wire(self, message: dict[str, Any], channel: str) -> None:
+        if not self.ws:
+            raise RuntimeError("remote kernel WebSocket is closed")
+        if self.v1_protocol:
+            await self.ws.send_bytes(_serialize_v1(message, channel))
+            return
+        default_message = {**message, "channel": channel}
+        await self.ws.send_str(json.dumps(default_message, ensure_ascii=False))
+
     async def _send(
         self,
         channel: str,
@@ -317,7 +332,7 @@ class RemoteKernelClient:
             "buffers": [],
         }
         try:
-            await self.ws.send_bytes(_serialize_v1(message, channel))
+            await self._send_wire(message, channel)
         except Exception as exc:
             if self.manager.provider == COLAB_PROVIDER:
                 raise RuntimeError(_redact_token(exc, self.manager.token)) from None
@@ -335,17 +350,15 @@ class RemoteKernelClient:
             header = self._header(message_type, self.session_id)
             header["msg_id"] = message_id
             try:
-                await self.ws.send_bytes(
-                    _serialize_v1(
-                        {
-                            "header": header,
-                            "parent_header": {},
-                            "metadata": {},
-                            "content": content,
-                            "buffers": [],
-                        },
-                        channel,
-                    )
+                await self._send_wire(
+                    {
+                        "header": header,
+                        "parent_header": {},
+                        "metadata": {},
+                        "content": content,
+                        "buffers": [],
+                    },
+                    channel,
                 )
             except Exception as exc:
                 if self.manager.provider == COLAB_PROVIDER:

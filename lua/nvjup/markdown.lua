@@ -7,6 +7,8 @@ local snacks_inline = {}
 local language_registered = false
 local snacks_layout_installed = false
 local snacks_inline_factory_installed = false
+local render_markdown_layout_installed = false
+local CONTENT_PREFIX_WIDTH = 2
 
 local function enabled()
 	return config.options.render.markdown ~= false
@@ -58,6 +60,34 @@ local function register_language()
 	return true
 end
 
+local function install_render_markdown_layout()
+	if render_markdown_layout_installed then
+		return
+	end
+	local ok, marks = pcall(require, "render-markdown.lib.marks")
+	if not ok or type(marks.add) ~= "function" then
+		return
+	end
+	local original_add = marks.add
+	marks.add = function(self, mark_config, conceal, start_row, start_col, options)
+		local context = rawget(self, "context")
+		local buf = context and context.buf
+		if
+			type(options) == "table"
+			and type(options.virt_text_win_col) == "number"
+			and type(buf) == "number"
+			and vim.api.nvim_buf_is_valid(buf)
+			and vim.bo[buf].filetype == "nvjup"
+		then
+			options = vim.tbl_extend("force", {}, options, {
+				virt_text_win_col = options.virt_text_win_col + CONTENT_PREFIX_WIDTH,
+			})
+		end
+		return original_add(self, mark_config, conceal, start_row, start_col, options)
+	end
+	render_markdown_layout_installed = true
+end
+
 local function attach_render_markdown(state)
 	if config.options.integrations.render_markdown == false then
 		return false
@@ -67,6 +97,7 @@ local function attach_render_markdown(state)
 	if not pcall(require, "render-markdown") then
 		return false
 	end
+	install_render_markdown_layout()
 	local ok_state, render_state = pcall(require, "render-markdown.state")
 	local ok_manager, manager = pcall(require, "render-markdown.core.manager")
 	if not ok_state or not ok_manager or type(render_state.file_types) ~= "table" then

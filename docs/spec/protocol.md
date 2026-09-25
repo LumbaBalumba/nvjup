@@ -67,9 +67,10 @@ selects an owned Jupyter Server kernel and contains `url`, an optional `token`,
 optional `provider`. `provider = "colab"` switches REST, Contents, and WebSocket
 authentication to Colab runtime-proxy query parameters and headers; ordinary
 Jupyter behavior remains the default. Credentials are transported only to the
-sidecar and never echoed in responses or events. Remote channels must negotiate
-`v1.kernel.websocket.jupyter.org`; legacy
-unbounded framing is rejected. Existing-kernel attachment is not part of v1.
+sidecar and never echoed in responses or events. Ordinary remote channels must
+negotiate `v1.kernel.websocket.jupyter.org`. Colab's managed proxy does not
+negotiate that subprotocol, so Colab channels use its bounded default JSON
+framing instead. Existing-kernel attachment is not part of v1.
 
 Execution:
 

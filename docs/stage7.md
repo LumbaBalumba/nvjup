@@ -65,7 +65,7 @@ require("nvjup.statusline").get(0)
 
 ## Remote Jupyter Server
 
-Remote transport creates an owned kernel through the Jupyter Server REST API. Kernel channels use the negotiated `v1.kernel.websocket.jupyter.org` binary protocol and feed the same normalized nvjup RPC/event surface as local ZeroMQ kernels.
+Remote transport creates an owned kernel through the Jupyter Server REST API. Ordinary Jupyter channels use the negotiated `v1.kernel.websocket.jupyter.org` binary protocol. Google Colab's managed proxy does not negotiate that subprotocol, so Colab uses its default JSON WebSocket framing. Both are bounded and feed the same normalized nvjup RPC/event surface as local ZeroMQ kernels.
 
 ### UI-only connection
 
