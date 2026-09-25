@@ -57,6 +57,17 @@ Options include:
         max_bytes = 10 * 1024 * 1024,
         max_pixels = 16 * 1024 * 1024,
         conversion_timeout_ms = 10000,
+        animations = {
+          enabled = true,
+          max_bytes = 64 * 1024 * 1024,
+          max_frames = 240,
+          max_total_pixels = 32 * 1024 * 1024,
+          max_duration_seconds = 60,
+          max_fps = 30,
+          max_width_px = 1280,
+          max_height_px = 960,
+          conversion_timeout_ms = 30000,
+        },
       },
     },
     treesitter = {
@@ -207,8 +218,13 @@ the image placement conceals the original formula. Configure these optional
 adapters with integrations.render_markdown and integrations.snacks. LaTeX
 rendering also needs pdflatex and ImageMagick. The projected Markdown byte
 count, not the physical .ipynb size with saved outputs, controls
-markdown_max_bytes. Cell frames use the full window text area and continue
-across wrapped and display-math rows. The default
+markdown_max_bytes. Matplotlib `to_jshtml()` animations are decoded without
+executing their generated JavaScript and sent as bounded native Kitty animation
+frames. Embedded HTML5 video and GIF animation additionally require ffmpeg.
+Loaded and remote animations follow the same explicit interactive trust policy
+as Plotly/Bokeh; fresh local execution receives revision-scoped trust. Cell
+frames use the full window text area and continue across wrapped and
+display-math rows. The default
 markdown_latex_font_size="normalsize" keeps formulas near the terminal text
 size. :checkhealth nvjup reports all components.
 

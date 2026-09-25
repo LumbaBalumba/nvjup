@@ -116,6 +116,11 @@ function M.check()
 	else
 		vim.health.warn("no SVG rasterizer is available")
 	end
+	if capabilities.ffmpeg then
+		vim.health.ok("ffmpeg is available for Matplotlib animation playback")
+	else
+		vim.health.info("ffmpeg is unavailable; HTML5/GIF animations use a text fallback")
+	end
 	vim.health.info("selected image backend: " .. capabilities.backend)
 
 	vim.health.start("nvjup interactive renderer")

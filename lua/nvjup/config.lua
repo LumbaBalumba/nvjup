@@ -21,6 +21,17 @@ M.defaults = {
 			max_bytes = 10 * 1024 * 1024,
 			max_pixels = 16 * 1024 * 1024,
 			conversion_timeout_ms = 10000,
+			animations = {
+				enabled = true,
+				max_bytes = 64 * 1024 * 1024,
+				max_frames = 240,
+				max_total_pixels = 32 * 1024 * 1024,
+				max_duration_seconds = 60,
+				max_fps = 30,
+				max_width_px = 1280,
+				max_height_px = 960,
+				conversion_timeout_ms = 30000,
+			},
 		},
 	},
 	treesitter = {

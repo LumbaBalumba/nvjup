@@ -171,6 +171,15 @@ test("sanitizes active HTML instead of executing it", function()
 	assert(not text:find("alert", 1, true))
 end)
 
+test("bounds chunked animation MIME before concatenation", function()
+	local previous = config.options.render.images.animations.max_bytes
+	config.options.render.images.animations.max_bytes = 8
+	assert(image.is_animation_bundle({ ["video/mp4"] = { "AAAA", "BBBB" } }))
+	assert(not image.is_animation_bundle({ ["video/mp4"] = { "AAAA", "BBBB", "C" } }))
+	assert(not image.is_animation_bundle({ ["video/mp4"] = "", ["image/gif"] = {} }))
+	config.options.render.images.animations.max_bytes = previous
+end)
+
 test("extracts one preferred static image from each MIME bundle", function()
 	local descriptors = image.descriptors({
 		outputs = {
@@ -268,6 +277,228 @@ test("renders PNG through Kitty Unicode placeholders and cleans it up", function
 	assert(writes[#writes]:find("a=d,d=I", 1, true))
 	config.options.render.images.backend = previous
 	image._set_test_writer(nil)
+end)
+
+test("plays trusted Matplotlib JSHTML frames through Kitty animation commands", function()
+	local writes = {}
+	image._set_test_writer(function(value)
+		table.insert(writes, value)
+		return true
+	end)
+	local previous_backend = config.options.render.images.backend
+	local previous_trust = config.options.interactive.require_trust
+	config.options.render.images.backend = "kitty"
+	config.options.interactive.require_trust = false
+	local first = "iVBORw0KGgoAAAANSUhEUgAAAAQAAAADCAYAAAC09K7GAAAAEklEQVR42mPwKdrwHxkzEBQAANiRHR2gDahVAAAAAElFTkSuQmCC"
+	local second = first
+	local html = table.concat({
+		"<script>function Animation(frames, img_id, slider_id, interval, loop_select_id) {}",
+		'var frames = new Array(2); frames[0] = "data:image/png;base64,' .. first .. '";',
+		'frames[1] = "data:image/png;base64,' .. second:sub(1, 32) .. "\\\n" .. second:sub(33) .. '";',
+		"new Animation(frames, img_id, slider_id, 120.0, loop_select_id);</script>",
+	})
+	local state = { buf = vim.api.nvim_get_current_buf() }
+	local cell = {
+		id = "stage4-js-animation",
+		outputs = { { output_type = "display_data", data = { ["text/html"] = html }, metadata = {} } },
+	}
+	local virtual_lines, seen = image.render(state, cell, 80)
+	assert(#virtual_lines > 1)
+	assert(next(seen) ~= nil)
+	assert(vim.wait(2000, function()
+		return table.concat(writes):find("a=a,i=", 1, true) ~= nil
+			and table.concat(writes):find("s=3,v=1", 1, true) ~= nil
+	end, 5))
+	local commands = table.concat(writes)
+	assert(commands:find("a=f,f=100", 1, true))
+	assert(commands:find("z=120", 1, true))
+	image.finish_render(state, {})
+	config.options.render.images.backend = previous_backend
+	config.options.interactive.require_trust = previous_trust
+	image._set_test_writer(nil)
+end)
+
+test("bounds cumulative decoded pixels across animation frames", function()
+	image._set_test_writer(function()
+		return true
+	end)
+	local previous_backend = config.options.render.images.backend
+	local previous_trust = config.options.interactive.require_trust
+	local previous_pixels = config.options.render.images.animations.max_total_pixels
+	config.options.render.images.backend = "kitty"
+	config.options.interactive.require_trust = false
+	config.options.render.images.animations.max_total_pixels = 20
+	local png = "iVBORw0KGgoAAAANSUhEUgAAAAQAAAADCAYAAAC09K7GAAAAEklEQVR42mPwKdrwHxkzEBQAANiRHR2gDahVAAAAAElFTkSuQmCC"
+	local html = "<script>function Animation(frames, img_id, slider_id, interval, loop_select_id) {}"
+		.. 'frames[0]="data:image/png;base64,'
+		.. png
+		.. '";frames[1]="data:image/png;base64,'
+		.. png
+		.. '";new Animation(frames, img_id, slider_id, 100, loop_select_id);</script>'
+	local state = { buf = vim.api.nvim_get_current_buf() }
+	local cell = {
+		id = "stage4-pixel-budget-animation",
+		outputs = { { output_type = "display_data", data = { ["text/html"] = html }, metadata = {} } },
+	}
+	local lines = image.render(state, cell, 80)
+	assert(lines[1][1][1]:find("total pixel limit", 1, true), vim.inspect(lines))
+	image.finish_render(state, {})
+	config.options.render.images.backend = previous_backend
+	config.options.interactive.require_trust = previous_trust
+	config.options.render.images.animations.max_total_pixels = previous_pixels
+	image._set_test_writer(nil)
+end)
+
+test("rejects Matplotlib JSHTML frames with inconsistent dimensions", function()
+	image._set_test_writer(function()
+		return true
+	end)
+	local previous_backend = config.options.render.images.backend
+	local previous_trust = config.options.interactive.require_trust
+	config.options.render.images.backend = "kitty"
+	config.options.interactive.require_trust = false
+	local first = "iVBORw0KGgoAAAANSUhEUgAAAAQAAAADCAYAAAC09K7GAAAAEklEQVR42mPwKdrwHxkzEBQAANiRHR2gDahVAAAAAElFTkSuQmCC"
+	local second =
+		"iVBORw0KGgoAAAANSUhEUgAAAAIAAAACCAYAAABytg0kAAAAEUlEQVR42mO4Y6T/H4QZYAwAT7YI8XsRX9YAAAAASUVORK5CYII="
+	local html = "<script>function Animation(frames, img_id, slider_id, interval, loop_select_id) {}"
+		.. 'frames[0]="data:image/png;base64,'
+		.. first
+		.. '";frames[1]="data:image/png;base64,'
+		.. second
+		.. '";new Animation(frames, img_id, slider_id, 100, loop_select_id);</script>'
+	local state = { buf = vim.api.nvim_get_current_buf() }
+	local cell = {
+		id = "stage4-invalid-animation",
+		outputs = { { output_type = "display_data", data = { ["text/html"] = html }, metadata = {} } },
+	}
+	local lines = image.render(state, cell, 80)
+	assert(lines[1][1][1]:find("inconsistent dimensions", 1, true), vim.inspect(lines))
+	image.finish_render(state, {})
+	config.options.render.images.backend = previous_backend
+	config.options.interactive.require_trust = previous_trust
+	image._set_test_writer(nil)
+end)
+
+test("decodes embedded Matplotlib HTML5 video into bounded Kitty frames", function()
+	assert(vim.fn.executable("ffmpeg") == 1)
+	local path = vim.fn.tempname() .. ".mp4"
+	local generated = vim.system({
+		"ffmpeg",
+		"-nostdin",
+		"-v",
+		"error",
+		"-f",
+		"lavfi",
+		"-i",
+		"testsrc=size=64x48:rate=2:duration=1",
+		"-c:v",
+		"mpeg4",
+		"-pix_fmt",
+		"yuv420p",
+		"-y",
+		path,
+	}):wait(10000)
+	assert(generated.code == 0, generated.stderr)
+	local file = assert(io.open(path, "rb"))
+	local video = file:read("*a")
+	file:close()
+	os.remove(path)
+	local writes = {}
+	image._set_test_writer(function(value)
+		table.insert(writes, value)
+		return true
+	end)
+	local previous_backend = config.options.render.images.backend
+	local previous_trust = config.options.interactive.require_trust
+	config.options.render.images.backend = "kitty"
+	config.options.interactive.require_trust = false
+	local state = { buf = vim.api.nvim_get_current_buf() }
+	local cell = {
+		id = "stage4-video-animation",
+		outputs = {
+			{
+				output_type = "display_data",
+				data = {
+					["text/html"] = '<video controls><source src="data:video/mp4;base64,'
+						.. vim.base64.encode(video)
+						.. '" type="video/mp4"></video>',
+				},
+				metadata = {},
+			},
+		},
+	}
+	local lines = image.render(state, cell, 80)
+	assert(#lines == 1 and lines[1][1][1]:find("rendering", 1, true))
+	assert(vim.wait(15000, function()
+		local commands = table.concat(writes)
+		return commands:find("a=f,f=100", 1, true) ~= nil and commands:find("s=3,v=1", 1, true) ~= nil
+	end, 10))
+	image.finish_render(state, {})
+	config.options.render.images.backend = previous_backend
+	config.options.interactive.require_trust = previous_trust
+	image._set_test_writer(nil)
+end)
+
+test("cancels superseded animation decoder processes", function()
+	local directory = vim.fn.tempname() .. "-animation-tools"
+	assert(vim.uv.fs_mkdir(directory, 448))
+	local marker = vim.fs.joinpath(directory, "ffmpeg-state")
+	local ffprobe = vim.fs.joinpath(directory, "ffprobe")
+	local ffmpeg = vim.fs.joinpath(directory, "ffmpeg")
+	vim.fn.writefile({
+		"#!/bin/sh",
+		'printf \'%s\' \'{"streams":[{"avg_frame_rate":"2/1"}],"format":{"duration":"1"}}\'',
+	}, ffprobe)
+	vim.fn.writefile({
+		"#!/usr/bin/env python3",
+		"import os, pathlib, signal, time",
+		"marker = pathlib.Path(" .. string.format("%q", marker) .. ")",
+		"def ignore_term(*_args):",
+		"    marker.write_text(f'ignored:{os.getpid()}')",
+		"signal.signal(signal.SIGTERM, ignore_term)",
+		"signal.signal(signal.SIGINT, ignore_term)",
+		"marker.write_text(f'started:{os.getpid()}')",
+		"time.sleep(30)",
+	}, ffmpeg)
+	assert(vim.uv.fs_chmod(ffprobe, 448))
+	assert(vim.uv.fs_chmod(ffmpeg, 448))
+	local previous_path = vim.env.PATH
+	local previous_backend = config.options.render.images.backend
+	local previous_trust = config.options.interactive.require_trust
+	vim.env.PATH = directory .. ":" .. previous_path
+	config.options.render.images.backend = "kitty"
+	config.options.interactive.require_trust = false
+	image._set_test_writer(function()
+		return true
+	end)
+	local state = { buf = vim.api.nvim_get_current_buf() }
+	local cell = {
+		id = "stage4-cancel-animation",
+		outputs = { { output_type = "display_data", data = { ["video/mp4"] = "AAAA" }, metadata = {} } },
+	}
+	local _, seen = image.render(state, cell, 80)
+	local key = next(seen)
+	assert(key)
+	assert(vim.wait(3000, function()
+		return vim.uv.fs_stat(marker) ~= nil
+	end, 5))
+	local entry = assert(image._placements[key])
+	assert(type(entry.cancel) == "function")
+	image.finish_render(state, {})
+	assert(entry.cancelled and entry.cancel == nil)
+	assert(vim.wait(3000, function()
+		return vim.uv.fs_stat(marker) and table.concat(vim.fn.readfile(marker)):find("ignored:", 1, true) ~= nil
+	end, 5))
+	local pid = tonumber(table.concat(vim.fn.readfile(marker)):match("ignored:(%d+)"))
+	assert(pid)
+	assert(vim.wait(3000, function()
+		return vim.uv.kill(pid, 0) == nil
+	end, 5))
+	image._set_test_writer(nil)
+	vim.env.PATH = previous_path
+	config.options.render.images.backend = previous_backend
+	config.options.interactive.require_trust = previous_trust
+	vim.fn.delete(directory, "rf")
 end)
 
 test("allocates and cleans more than 255 distinct Kitty image IDs", function()

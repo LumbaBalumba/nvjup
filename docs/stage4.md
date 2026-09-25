@@ -1,6 +1,6 @@
-# Stage 4: rich static outputs
+# Stage 4: rich outputs
 
-Stage 4 adds safe static MIME rendering without changing nbformat persistence or executing notebook-provided browser content.
+Stage 4 adds safe static and animated MIME rendering without changing nbformat persistence or executing notebook-provided browser content.
 
 ## Supported output families
 
@@ -11,11 +11,12 @@ Stage 4 adds safe static MIME rendering without changing nbformat persistence or
 - PNG through Kitty's Unicode-placeholder graphics protocol;
 - JPEG and the first PDF page through ImageMagick-to-PNG conversion;
 - sanitized SVG through `rsvg-convert`, with ImageMagick fallback;
-- chafa symbol rendering when a compatible Kitty terminal is unavailable;
+- native Kitty playback for Matplotlib `to_jshtml()`, embedded HTML5 MP4, and GIF animations;
+- chafa first-frame rendering when a compatible Kitty terminal is unavailable;
 - bounded textual image diagnostics when neither graphics backend is available;
 - explicit non-executing Plotly/Bokeh placeholders for later stages.
 
-A MIME bundle chooses one preferred static image in this order: PNG, JPEG, SVG, PDF. Outputs retain their notebook order. Unknown MIME values remain untouched in the document and receive a visible unsupported-MIME diagnostic.
+A MIME bundle chooses a recognized animation first, then one preferred static image in this order: PNG, JPEG, SVG, PDF. Outputs retain their notebook order. Unknown MIME values remain untouched in the document and receive a visible unsupported-MIME diagnostic.
 
 ## Kitty rendering
 
@@ -27,6 +28,8 @@ a=p,U=1,i=<id>,p=1,c=<cols>,r=<rows>,q=2
 ```
 
 The second command creates an explicit virtual placement. Extmark virtual lines contain U+10EEEE placeholders with Kitty row/column diacritics, and a per-image foreground highlight encodes the 24-bit image ID. This makes placement viewport-aware: terminal images follow Neovim redraw, scrolling, resize, folds, and window visibility because the placement is anchored to rendered placeholder cells rather than absolute screen coordinates.
+
+Matplotlib JSHTML PNG frames are extracted without evaluating JavaScript. HTML5 MP4 and GIF inputs are converted asynchronously with `ffmpeg`; frames use Kitty's `a=f` transport and terminal-driven `a=a` playback. Uploads yield between bounded frame batches, and superseded conversions are cancelled.
 
 No Kitty remote-control socket or `allow_remote_control` setting is used. tmux escape passthrough is wrapped when `$TMUX` is present.
 
@@ -45,13 +48,13 @@ Headless Neovim never writes graphics escapes merely because it inherited `KITTY
 
 ## Conversion and security
 
-PNG is validated and transmitted directly. Other static formats are written to private temporary files and converted asynchronously. Safe SVG prefers `rsvg-convert` with explicit maximum dimensions; JPEG/PDF and the SVG fallback use ImageMagick. Conversion has configurable time, input-byte, source-pixel, ImageMagick memory, map, disk, and output-dimension limits. Temporary files are removed after success, failure, timeout, or supersession.
+PNG is validated and transmitted directly. Other static formats are written to private temporary files and converted asynchronously. Safe SVG prefers `rsvg-convert` with explicit maximum dimensions; JPEG/PDF and the SVG fallback use ImageMagick. Animation input, retained memory, frame stream bytes, frame count, per-frame and cumulative pixels, duration, FPS, dimensions, and conversion time are independently bounded. `ffmpeg` writes PNG frames through a capped pipe rather than an unbounded temporary directory. Temporary inputs and running converters are removed or cancelled after success, failure, timeout, replacement, or detach.
 
 Stream text applies terminal carriage-return overwrite semantics. This lets tqdm and similar progress bars update one virtual line while execution is running instead of displaying every historical frame.
 
 SVG is rejected before conversion if it contains declarations/entities, scripts, event handlers, `foreignObject`, iframe/object/embed, `href`/`src`, JavaScript/file URLs, CSS `url()`, or imports. This deliberately rejects some legitimate linked SVGs rather than allowing ImageMagick to resolve external resources.
 
-HTML is never loaded into a browser or evaluated. `render.max_html_bytes` is checked before sanitization, and oversized payloads retain their lossless notebook data while displaying a bounded placeholder plus `text/plain` fallback. Smaller HTML is sanitized once: scripts, styles, iframe, and object blocks are removed; remaining tags become escaped terminal text. Tables are parsed into bounded Unicode grids. `render.max_text_bytes` similarly bounds stream and textual MIME processing before line splitting. Interactive trust and sandboxed HTML/JavaScript remain Stage 6 work.
+HTML is never loaded into a browser or evaluated. Matplotlib JSHTML and HTML5 video are recognized structurally and decoded only after interactive trust succeeds. Other HTML follows `render.max_html_bytes`, retains oversized payloads losslessly, and is sanitized into terminal text or tables. `render.max_text_bytes` similarly bounds stream and textual MIME processing before line splitting.
 
 ## Full-output pager
 
@@ -84,12 +87,23 @@ require("nvjup").setup({
       max_bytes = 10 * 1024 * 1024,
       max_pixels = 16 * 1024 * 1024,
       conversion_timeout_ms = 10000,
+      animations = {
+        enabled = true,
+        max_bytes = 64 * 1024 * 1024,
+        max_frames = 240,
+        max_total_pixels = 32 * 1024 * 1024,
+        max_duration_seconds = 60,
+        max_fps = 30,
+        max_width_px = 1280,
+        max_height_px = 960,
+        conversion_timeout_ms = 30000,
+      },
     },
   },
 })
 ```
 
-`:checkhealth nvjup` reports the selected image backend and availability of Kitty-compatible graphics, chafa, and ImageMagick.
+`:checkhealth nvjup` reports the selected image backend and availability of Kitty-compatible graphics, chafa, ImageMagick, and ffmpeg.
 
 ## Validation
 
@@ -103,8 +117,9 @@ require("nvjup").setup({
 - chunked Kitty transmission and explicit virtual placement;
 - Unicode placeholder generation and cleanup;
 - asynchronous SVG rasterization;
+- JSHTML and real MP4 animation conversion, Kitty frame commands, dimension checks, and converter cancellation;
 - text fallback;
 - full-output pager behavior;
 - rendering order and notebook command/keymap integration.
 
-The Docker image includes ImageMagick, `rsvg-convert`, and chafa. Headless CI verifies protocol bytes and placeholder structure, not terminal pixels. Run `./scripts/test-kitty-images` for host visual validation in an isolated Kitty/Ghostty UI.
+The Docker image includes ImageMagick, `rsvg-convert`, chafa, and ffmpeg. Headless CI verifies protocol bytes and placeholder structure, not terminal pixels. Run `./scripts/test-kitty-images` for host visual validation in an isolated Kitty/Ghostty UI.

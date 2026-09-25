@@ -1,4 +1,5 @@
 local config = require("nvjup.config")
+local trust = require("nvjup.trust")
 
 local M = {}
 
@@ -174,19 +175,72 @@ local function image_options()
 	return config.options.render.images or {}
 end
 
-local function normalize_data(value)
-	if type(value) == "table" then
-		return table.concat(value, "")
+local function animation_options()
+	return image_options().animations or {}
+end
+
+local function normalize_data(value, maximum)
+	if type(value) == "string" then
+		if maximum and #value > maximum then
+			return nil
+		end
+		return value
 	end
-	return type(value) == "string" and value or nil
+	if type(value) ~= "table" then
+		return nil
+	end
+	local size = 0
+	for _, chunk in ipairs(value) do
+		if type(chunk) ~= "string" then
+			return nil
+		end
+		size = size + #chunk
+		if maximum and size > maximum then
+			return nil
+		end
+	end
+	return table.concat(value, "")
+end
+
+local function animation_html_kind(value)
+	if type(value) ~= "string" then
+		return nil
+	end
+	if value:find("<video", 1, true) and value:find("data:video/mp4;base64,", 1, true) then
+		return "video"
+	end
+	if
+		value:find("function Animation(", 1, true)
+		and value:find("new Animation(frames", 1, true)
+		and value:find("data:image/png;base64,", 1, true)
+	then
+		return "frames"
+	end
+	return nil
+end
+
+local function is_animation_bundle(data)
+	if type(data) ~= "table" or animation_options().enabled == false then
+		return false
+	end
+	local maximum = tonumber(animation_options().max_bytes) or (64 * 1024 * 1024)
+	local video = normalize_data(data["video/mp4"], maximum)
+	local gif = normalize_data(data["image/gif"], maximum)
+	if (video and video ~= "") or (gif and gif ~= "") then
+		return true
+	end
+	return animation_html_kind(normalize_data(data["text/html"], maximum)) ~= nil
 end
 
 local function descriptor_hash(descriptor)
 	local metadata = type(descriptor.metadata) == "table" and descriptor.metadata[descriptor.mime] or nil
 	local width = type(metadata) == "table" and tonumber(metadata.width) or nil
 	local height = type(metadata) == "table" and tonumber(metadata.height) or nil
-	local rendering_metadata =
-		table.concat({ width and tostring(width) or "", height and tostring(height) or "" }, "\0")
+	local rendering_metadata = table.concat({
+		width and tostring(width) or "",
+		height and tostring(height) or "",
+		descriptor.trust_status or "",
+	}, "\0")
 	local identity = table.concat({
 		tostring(#descriptor.mime),
 		descriptor.mime,
@@ -283,10 +337,43 @@ local function encode_transmit(image_id, png_base64, rows, cols)
 	return table.concat(commands)
 end
 
+local function encode_animation_frame(image_id, png_base64, gap_ms)
+	local commands = {}
+	local position = 1
+	local first = true
+	while position <= #png_base64 do
+		local stop = math.min(position + KITTY_CHUNK - 1, #png_base64)
+		local chunk = png_base64:sub(position, stop)
+		local more = stop < #png_base64 and 1 or 0
+		if first then
+			table.insert(
+				commands,
+				string.format("\27_Ga=f,f=100,i=%d,q=2,z=%d,m=%d;%s\27\\", image_id, gap_ms, more, chunk)
+			)
+			first = false
+		else
+			table.insert(commands, string.format("\27_Ga=f,m=%d,q=2;%s\27\\", more, chunk))
+		end
+		position = stop + 1
+	end
+	return table.concat(commands)
+end
+
 local function delete_image(image_id)
 	tty_write(string.format("\27_Ga=d,d=I,i=%d,q=2\27\\", image_id))
 	allocated_image_ids[image_id] = nil
 	retiring_image_ids[image_id] = nil
+end
+
+local function cancel_entry(entry)
+	if not entry then
+		return
+	end
+	entry.cancelled = true
+	if entry.cancel then
+		entry.cancel()
+		entry.cancel = nil
+	end
 end
 
 local function retire_image(image_id)
@@ -515,35 +602,200 @@ local function refresh_when_ready(state, entry)
 	end
 end
 
-local function run_bounded(command, callback)
-	local timeout = image_options().conversion_timeout_ms or 10000
+local function run_bounded(command, callback, timeout_override)
+	local timeout = timeout_override or image_options().conversion_timeout_ms or 10000
 	local completed = false
+	local timed_out = false
+	local terminating = false
 	local handle
 	local timer = vim.uv.new_timer()
-	local function finish(result, timed_out)
+	local function close_timer()
+		if timer then
+			timer:stop()
+			if not timer:is_closing() then
+				timer:close()
+			end
+			timer = nil
+		end
+	end
+	local function terminate()
+		if terminating then
+			return
+		end
+		terminating = true
+		if handle then
+			pcall(handle.kill, handle, 15)
+			vim.defer_fn(function()
+				pcall(handle.kill, handle, 9)
+			end, 500)
+		end
+	end
+	local function finish(result)
 		if completed then
 			return
 		end
 		completed = true
-		if timer then
-			timer:stop()
-			timer:close()
+		close_timer()
+		if timed_out then
+			result = { code = 124, stderr = "conversion timed out" }
 		end
 		callback(result, timed_out)
 	end
 	handle = vim.system(command, { text = true }, function(result)
 		vim.schedule(function()
-			finish(result, false)
+			finish(result)
 		end)
 	end)
 	timer:start(timeout, 0, function()
-		if handle then
-			pcall(handle.kill, handle, 15)
-		end
-		vim.schedule(function()
-			finish({ code = 124, stderr = "conversion timed out" }, true)
-		end)
+		timed_out = true
+		vim.schedule(terminate)
 	end)
+	return function()
+		if completed then
+			return
+		end
+		completed = true
+		close_timer()
+		terminate()
+	end
+end
+
+local function run_bounded_binary(command, maximum, callback, timeout)
+	local stdout = vim.uv.new_pipe(false)
+	local stderr = vim.uv.new_pipe(false)
+	local timer = vim.uv.new_timer()
+	local chunks = {}
+	local size = 0
+	local errors = {}
+	local error_size = 0
+	local completed = false
+	local cancelled = false
+	local exited = false
+	local stdout_done = false
+	local stderr_done = false
+	local exit_code = 1
+	local exit_signal = 0
+	local timed_out = false
+	local terminating = false
+	local handle
+	local function close(value)
+		if value and not value:is_closing() then
+			value:close()
+		end
+	end
+	local function stop_timer()
+		if timer then
+			timer:stop()
+			close(timer)
+			timer = nil
+		end
+	end
+	local function terminate()
+		if terminating then
+			return
+		end
+		terminating = true
+		if handle and not handle:is_closing() then
+			pcall(handle.kill, handle, 15)
+			vim.defer_fn(function()
+				if handle and not handle:is_closing() then
+					pcall(handle.kill, handle, 9)
+				end
+			end, 500)
+		end
+	end
+	local function maybe_finish()
+		if completed or not (exited and stdout_done and stderr_done) then
+			return
+		end
+		completed = true
+		stop_timer()
+		close(handle)
+		if cancelled then
+			chunks = {}
+			return
+		end
+		local output = exit_code == 0 and table.concat(chunks) or nil
+		chunks = {}
+		callback({
+			code = timed_out and 124 or exit_code,
+			signal = exit_signal,
+			stdout = output,
+			stderr = table.concat(errors),
+			overflow = size > maximum,
+		})
+	end
+	local args = {}
+	for index = 2, #command do
+		table.insert(args, command[index])
+	end
+	handle = vim.uv.spawn(command[1], {
+		args = args,
+		stdio = { nil, stdout, stderr },
+	}, function(code, signal)
+		exit_code = code
+		exit_signal = signal
+		exited = true
+		vim.schedule(maybe_finish)
+	end)
+	if not handle then
+		stdout_done, stderr_done, exited = true, true, true
+		exit_code = 127
+		close(stdout)
+		close(stderr)
+		vim.schedule(maybe_finish)
+	else
+		stdout:read_start(function(err, data)
+			if err then
+				table.insert(errors, tostring(err))
+			end
+			if data then
+				size = size + #data
+				if size <= maximum then
+					table.insert(chunks, data)
+				else
+					terminate()
+				end
+			else
+				stdout_done = true
+				close(stdout)
+				vim.schedule(maybe_finish)
+			end
+		end)
+		stderr:read_start(function(err, data)
+			if err and error_size < 16384 then
+				table.insert(errors, tostring(err))
+			end
+			if data and error_size < 16384 then
+				local retained = data:sub(1, 16384 - error_size)
+				error_size = error_size + #retained
+				table.insert(errors, retained)
+			elseif not data then
+				stderr_done = true
+				close(stderr)
+				vim.schedule(maybe_finish)
+			end
+		end)
+	end
+	timer:start(timeout, 0, function()
+		timed_out = true
+		terminate()
+	end)
+	return function()
+		if completed or cancelled then
+			return
+		end
+		cancelled = true
+		stop_timer()
+		terminate()
+		pcall(stdout.read_stop, stdout)
+		pcall(stderr.read_stop, stderr)
+		stdout_done, stderr_done = true, true
+		close(stdout)
+		close(stderr)
+		chunks = {}
+		maybe_finish()
+	end
 end
 
 local function convert_to_png(state, entry, descriptor, bytes)
@@ -591,7 +843,9 @@ local function convert_to_png(state, entry, descriptor, bytes)
 			destination,
 		}
 	end
-	run_bounded(command, function(result, timed_out)
+	local cancel
+	cancel = run_bounded(command, function(result, timed_out)
+		entry.cancel = nil
 		local png = result.code == 0 and read_bytes(destination) or nil
 		pcall(os.remove, input)
 		pcall(os.remove, destination)
@@ -610,6 +864,11 @@ local function convert_to_png(state, entry, descriptor, bytes)
 		end
 		refresh_when_ready(state, entry)
 	end)
+	entry.cancel = function()
+		cancel()
+		pcall(os.remove, input)
+		pcall(os.remove, destination)
+	end
 end
 
 local function prepare_chafa(state, entry, descriptor, bytes, limits)
@@ -632,7 +891,9 @@ local function prepare_chafa(state, entry, descriptor, bytes, limits)
 		limits.max_width or options.max_width or 64,
 		limits.max_height or options.max_height or 24
 	)
-	run_bounded({ "chafa", "--format", "symbols", "--animate=off", "--size", size, input }, function(result)
+	local cancel
+	cancel = run_bounded({ "chafa", "--format", "symbols", "--animate=off", "--size", size, input }, function(result)
+		entry.cancel = nil
 		pcall(os.remove, input)
 		if placements[entry.key] ~= entry then
 			return
@@ -647,9 +908,506 @@ local function prepare_chafa(state, entry, descriptor, bytes, limits)
 		end
 		refresh_when_ready(state, entry)
 	end)
+	entry.cancel = function()
+		cancel()
+		pcall(os.remove, input)
+	end
+end
+
+local function animation_number(name, default)
+	local value = tonumber(animation_options()[name])
+	return value and value > 0 and value or default
+end
+
+local function extract_embedded_payload(html, prefix)
+	local start = html:find(prefix, 1, true)
+	if not start then
+		return nil
+	end
+	local payload_start = start + #prefix
+	local double_quote = html:find('"', payload_start, true)
+	local single_quote = html:find("'", payload_start, true)
+	local payload_end
+	if double_quote and single_quote then
+		payload_end = math.min(double_quote, single_quote)
+	else
+		payload_end = double_quote or single_quote
+	end
+	return payload_end and html:sub(payload_start, payload_end - 1) or nil
+end
+
+local function bounded_animation_bytes(value)
+	local maximum = animation_number("max_bytes", 64 * 1024 * 1024)
+	local encoded_limit = math.ceil(maximum / 3) * 4
+	if type(value) ~= "string" or #value > encoded_limit + math.ceil(encoded_limit / 10) + 4096 then
+		return nil, string.format("animation exceeds %d byte limit", maximum)
+	end
+	local normalized = normalize_base64(value)
+	if not normalized then
+		return nil, "invalid base64 animation data"
+	end
+	if #normalized > encoded_limit + 4 then
+		return nil, string.format("animation exceeds %d byte limit", maximum)
+	end
+	local decoded = decode_base64(normalized)
+	if not decoded then
+		return nil, "invalid base64 animation data"
+	end
+	if #decoded > maximum then
+		return nil, string.format("animation exceeds %d byte limit", maximum)
+	end
+	return decoded
+end
+
+local function parse_jshtml_frames(html)
+	local maximum = animation_number("max_bytes", 64 * 1024 * 1024)
+	local max_frames = math.floor(animation_number("max_frames", 240))
+	local max_pixels = image_options().max_pixels or (16 * 1024 * 1024)
+	local max_total_pixels = animation_number("max_total_pixels", 32 * 1024 * 1024)
+	local max_fps = animation_number("max_fps", 30)
+	local max_duration_ms = animation_number("max_duration_seconds", 60) * 1000
+	local encoded_limit = math.ceil(maximum / 3) * 4
+	if #html > encoded_limit + math.ceil(encoded_limit / 10) + 2 * 1024 * 1024 then
+		return nil, nil, string.format("animation exceeds %d byte limit", maximum)
+	end
+	local interval = tonumber(html:match("new%s+Animation%s*%(%s*frames%s*,%s*[%w_]+%s*,%s*[%w_]+%s*,%s*([%d%.]+)"))
+		or 100
+	local gap_ms = math.max(math.ceil(1000 / max_fps), math.min(10000, math.floor(interval + 0.5)))
+	local frames = {}
+	local decoded_total = 0
+	local total_pixels = 0
+	local retained_total = #html
+	local largest_encoded_frame = 0
+	local canvas_width, canvas_height
+	local prefix = "data:image/png;base64,"
+	local position = 1
+	while true do
+		local start = html:find(prefix, position, true)
+		if not start then
+			break
+		end
+		local payload_start = start + #prefix
+		local stop = html:find('"', payload_start, true)
+		if not stop then
+			return nil, nil, "invalid Matplotlib JS animation frame"
+		end
+		local payload = html:sub(payload_start, stop - 1):gsub("\\\r\n", ""):gsub("\\\n", "")
+		local normalized = normalize_base64(payload)
+		local bytes = normalized and decode_base64(normalized) or nil
+		if not bytes or bytes:sub(1, 8) ~= "\137PNG\r\n\26\n" then
+			return nil, nil, "invalid Matplotlib JS animation frame"
+		end
+		local width, height = png_dimensions(bytes)
+		if not width or not height or width <= 0 or height <= 0 then
+			return nil, nil, "invalid Matplotlib JS animation frame dimensions"
+		end
+		if width * height > max_pixels then
+			return nil, nil, string.format("animation frame exceeds %d pixel limit", max_pixels)
+		end
+		total_pixels = total_pixels + width * height
+		if total_pixels > max_total_pixels then
+			return nil, nil, string.format("animation exceeds %d total pixel limit", max_total_pixels)
+		end
+		if canvas_width and (width ~= canvas_width or height ~= canvas_height) then
+			return nil, nil, "Matplotlib animation frames have inconsistent dimensions"
+		end
+		canvas_width, canvas_height = canvas_width or width, canvas_height or height
+		decoded_total = decoded_total + #bytes
+		if decoded_total > maximum then
+			return nil, nil, string.format("animation exceeds %d byte limit", maximum)
+		end
+		if retained_total + #bytes > maximum then
+			return nil, nil, string.format("animation peak data exceeds %d byte limit", maximum)
+		end
+		local canonical = vim.base64.encode(bytes)
+		largest_encoded_frame = math.max(largest_encoded_frame, #canonical)
+		retained_total = retained_total + #canonical + (#frames == 0 and #bytes or 0)
+		if retained_total + 2 * largest_encoded_frame > maximum then
+			return nil, nil, string.format("animation retained data exceeds %d byte limit", maximum)
+		end
+		table.insert(frames, { bytes = #frames == 0 and bytes or nil, base64 = canonical })
+		if #frames > max_frames then
+			return nil, nil, string.format("animation exceeds %d frame limit", max_frames)
+		end
+		position = stop + 1
+	end
+	if #frames == 0 then
+		return nil, nil, "Matplotlib JS animation contains no frames"
+	end
+	if #frames * gap_ms > max_duration_ms then
+		return nil, nil, string.format("animation exceeds %.0f second limit", max_duration_ms / 1000)
+	end
+	frames.total_pixels = total_pixels
+	return frames, gap_ms
+end
+
+local function animation_frame_rate(value)
+	if type(value) ~= "string" then
+		return nil
+	end
+	local numerator, denominator = value:match("^(%d+)%/(%d+)$")
+	if numerator then
+		denominator = tonumber(denominator)
+		return denominator and denominator > 0 and tonumber(numerator) / denominator or nil
+	end
+	return tonumber(value)
+end
+
+local function transmit_animation_frames(state, entry, descriptor, frames, gap_ms, available_width, limits)
+	entry.png_bytes = frames[1].bytes
+	entry.animation_frame_count = #frames
+	if entry.backend == "chafa" then
+		prepare_chafa(state, entry, { mime = "image/png" }, frames[1].bytes, limits)
+		return
+	end
+	if entry.backend ~= "kitty" then
+		entry.status = "fallback"
+		return
+	end
+	if entry.previous and entry.previous.animation_pixels then
+		if entry.previous.image_id then
+			delete_image(entry.previous.image_id)
+		end
+		entry.previous = nil
+	end
+	local total_pixels = frames.total_pixels or 0
+	local maximum_pixels = animation_number("max_total_pixels", 32 * 1024 * 1024)
+	local active_pixels = 0
+	for _, placement in pairs(placements) do
+		if placement ~= entry then
+			active_pixels = active_pixels + (placement.animation_pixels or 0)
+		end
+	end
+	if active_pixels + total_pixels > maximum_pixels then
+		entry.status = "failed"
+		entry.error = string.format("active animations exceed %d total pixel limit", maximum_pixels)
+		return
+	end
+	entry.animation_pixels = total_pixels
+	entry.cols, entry.rows = grid_dimensions(descriptor, available_width, entry.png_bytes, limits)
+	entry.image_id = next_id()
+	tty_write(encode_transmit(entry.image_id, frames[1].base64, entry.rows, entry.cols))
+	entry.status = "ready"
+	if #frames == 1 then
+		return
+	end
+	entry.animation_loading = true
+	local frame_index = 2
+	local function upload_batch()
+		if placements[entry.key] ~= entry or not entry.image_id then
+			return
+		end
+		local transmitted = 0
+		while frame_index <= #frames and transmitted < 2 do
+			tty_write(encode_animation_frame(entry.image_id, frames[frame_index].base64, gap_ms))
+			frame_index = frame_index + 1
+			transmitted = transmitted + 1
+		end
+		if frame_index <= #frames then
+			vim.schedule(upload_batch)
+			return
+		end
+		tty_write(string.format("\27_Ga=a,i=%d,r=1,z=%d,q=2\27\\", entry.image_id, gap_ms))
+		tty_write(string.format("\27_Ga=a,i=%d,s=3,v=1,q=2\27\\", entry.image_id))
+		entry.animation_loading = false
+	end
+	vim.schedule(upload_batch)
+end
+
+local function parse_converted_frames(data, maximum, max_frames, retained_source_size)
+	if type(data) ~= "string" or data == "" then
+		return nil, "animation conversion produced no frames"
+	end
+	local function u32(offset)
+		local a, b, c, d = data:byte(offset, offset + 3)
+		if not d then
+			return nil
+		end
+		return ((a * 256 + b) * 256 + c) * 256 + d
+	end
+	local frames = {}
+	local retained_total = retained_source_size or 0
+	local largest_encoded_frame = 0
+	local max_pixels = image_options().max_pixels or (16 * 1024 * 1024)
+	local max_total_pixels = animation_number("max_total_pixels", 32 * 1024 * 1024)
+	local total_pixels = 0
+	local canvas_width, canvas_height
+	local position = 1
+	while position <= #data do
+		if data:sub(position, position + 7) ~= "\137PNG\r\n\26\n" then
+			return nil, "animation conversion produced an invalid PNG stream"
+		end
+		local cursor = position + 8
+		local frame_end
+		while cursor <= #data do
+			local length = u32(cursor)
+			if not length or length > maximum then
+				return nil, "animation conversion produced an invalid PNG chunk"
+			end
+			local kind = data:sub(cursor + 4, cursor + 7)
+			local chunk_end = cursor + 12 + length - 1
+			if chunk_end > #data then
+				return nil, "animation conversion produced a truncated PNG frame"
+			end
+			cursor = chunk_end + 1
+			if kind == "IEND" then
+				frame_end = chunk_end
+				break
+			end
+		end
+		if not frame_end then
+			return nil, "animation conversion produced a PNG without IEND"
+		end
+		local bytes = data:sub(position, frame_end)
+		local width, height = png_dimensions(bytes)
+		if not width or not height or width <= 0 or height <= 0 then
+			return nil, "animation conversion produced invalid frame dimensions"
+		end
+		if width * height > max_pixels then
+			return nil, string.format("animation frame exceeds %d pixel limit", max_pixels)
+		end
+		total_pixels = total_pixels + width * height
+		if total_pixels > max_total_pixels then
+			return nil, string.format("animation exceeds %d total pixel limit", max_total_pixels)
+		end
+		if canvas_width and (width ~= canvas_width or height ~= canvas_height) then
+			return nil, "animation conversion produced inconsistent frame dimensions"
+		end
+		canvas_width, canvas_height = canvas_width or width, canvas_height or height
+		if retained_total + #bytes > maximum then
+			return nil, string.format("animation peak data exceeds %d byte limit", maximum)
+		end
+		local canonical = vim.base64.encode(bytes)
+		largest_encoded_frame = math.max(largest_encoded_frame, #canonical)
+		retained_total = retained_total + #canonical + (#frames == 0 and #bytes or 0)
+		if retained_total + 2 * largest_encoded_frame > maximum then
+			return nil, string.format("animation retained data exceeds %d byte limit", maximum)
+		end
+		table.insert(frames, { bytes = #frames == 0 and bytes or nil, base64 = canonical })
+		if #frames > max_frames then
+			return nil, string.format("animation exceeds %d frame limit", max_frames)
+		end
+		position = frame_end + 1
+	end
+	frames.total_pixels = total_pixels
+	return frames
+end
+
+local function convert_animation(state, entry, descriptor, source, retained_source_size, available_width, limits)
+	if vim.fn.executable("ffmpeg") ~= 1 then
+		entry.status = "failed"
+		entry.error = "ffmpeg is required for video animations"
+		return
+	end
+	local input = vim.fn.tempname() .. (descriptor.source_mime == "image/gif" and ".gif" or ".mp4")
+	if not write_bytes(input, source) then
+		entry.status = "failed"
+		entry.error = "could not create animation conversion input"
+		return
+	end
+	source = nil
+	entry.status = "pending"
+	local timeout = animation_number("conversion_timeout_ms", 30000)
+	local maximum = animation_number("max_bytes", 64 * 1024 * 1024)
+	local max_frames = math.floor(animation_number("max_frames", 240))
+	local max_fps = animation_number("max_fps", 30)
+	local max_duration = animation_number("max_duration_seconds", 60)
+	local max_width = math.floor(animation_number("max_width_px", 1280))
+	local max_height = math.floor(animation_number("max_height_px", 960))
+	local cancelled = false
+	local cleaned = false
+	local active_cancel
+	local function cleanup()
+		if cleaned then
+			return
+		end
+		cleaned = true
+		pcall(os.remove, input)
+		vim.defer_fn(function()
+			pcall(os.remove, input)
+		end, 250)
+	end
+	local function fail(message)
+		if cancelled then
+			return
+		end
+		cancelled = true
+		if active_cancel then
+			active_cancel()
+			active_cancel = nil
+		end
+		cleanup()
+		entry.cancel = nil
+		if placements[entry.key] == entry then
+			entry.status = "failed"
+			entry.error = message
+			refresh_when_ready(state, entry)
+		end
+	end
+	entry.cancel = function()
+		if cancelled then
+			return
+		end
+		cancelled = true
+		if active_cancel then
+			active_cancel()
+			active_cancel = nil
+		end
+		cleanup()
+	end
+	local function run_conversion(rate, duration)
+		if cancelled or placements[entry.key] ~= entry then
+			entry.cancel()
+			return
+		end
+		if duration and duration > max_duration then
+			fail(string.format("animation exceeds %.0f second limit", max_duration))
+			return
+		end
+		local fps = math.max(0.2, math.min(max_fps, rate or 10))
+		local gap_ms = math.max(1, math.floor(1000 / fps + 0.5))
+		local filter =
+			string.format("fps=%.6g,scale=%d:%d:force_original_aspect_ratio=decrease", fps, max_width, max_height)
+		local stream_limit = math.max(1, math.floor(math.max(0, maximum - retained_source_size) / 6))
+		local command = {
+			"ffmpeg",
+			"-nostdin",
+			"-v",
+			"error",
+			"-protocol_whitelist",
+			"file,pipe",
+			"-i",
+			input,
+			"-an",
+			"-t",
+			tostring(max_duration),
+			"-vf",
+			filter,
+			"-frames:v",
+			tostring(max_frames + 1),
+			"-compression_level",
+			"6",
+			"-f",
+			"image2pipe",
+			"-vcodec",
+			"png",
+			"pipe:1",
+		}
+		active_cancel = run_bounded_binary(command, stream_limit, function(result)
+			active_cancel = nil
+			if cancelled or placements[entry.key] ~= entry then
+				cleanup()
+				return
+			end
+			local frames, err
+			if result.overflow then
+				err = string.format("animation frame stream exceeds %d byte limit", stream_limit)
+			elseif result.code == 0 then
+				frames, err = parse_converted_frames(result.stdout, maximum, max_frames, retained_source_size)
+			else
+				err = result.code == 124 and "animation conversion timed out"
+					or (
+						(result.stderr or ""):gsub("%s+$", "") ~= "" and (result.stderr or ""):gsub("%s+$", "")
+						or "animation conversion failed"
+					)
+			end
+			cleanup()
+			entry.cancel = nil
+			if not frames then
+				entry.status = "failed"
+				entry.error = err
+			else
+				transmit_animation_frames(state, entry, descriptor, frames, gap_ms, available_width, limits)
+			end
+			refresh_when_ready(state, entry)
+		end, timeout)
+	end
+	if vim.fn.executable("ffprobe") ~= 1 then
+		run_conversion(nil, nil)
+		return
+	end
+	active_cancel = run_bounded({
+		"ffprobe",
+		"-v",
+		"error",
+		"-protocol_whitelist",
+		"file,pipe",
+		"-select_streams",
+		"v:0",
+		"-show_entries",
+		"stream=avg_frame_rate:format=duration",
+		"-of",
+		"json",
+		input,
+	}, function(result)
+		active_cancel = nil
+		if cancelled or placements[entry.key] ~= entry then
+			cleanup()
+			return
+		end
+		local rate, duration
+		if result.code == 0 then
+			local ok, payload = pcall(vim.json.decode, result.stdout or "")
+			if ok and type(payload) == "table" then
+				local stream = type(payload.streams) == "table" and payload.streams[1] or nil
+				rate = stream and animation_frame_rate(stream.avg_frame_rate) or nil
+				duration = type(payload.format) == "table" and tonumber(payload.format.duration) or nil
+			end
+		end
+		run_conversion(rate, duration)
+	end, math.min(timeout, 5000))
+end
+
+local function prepare_animation(state, entry, descriptor, available_width, limits)
+	if descriptor.trust_status ~= "trusted_interactive" then
+		entry.status = "failed"
+		entry.error = "animation blocked; use :NvJupTrustInteractive"
+		return
+	end
+	if entry.backend == "text" then
+		entry.status = "fallback"
+		return
+	end
+	if descriptor.animation_kind == "frames" then
+		local frames, gap_ms, err = parse_jshtml_frames(descriptor.data)
+		if not frames then
+			entry.status = "failed"
+			entry.error = err
+			return
+		end
+		transmit_animation_frames(state, entry, descriptor, frames, gap_ms, available_width, limits)
+		return
+	end
+	local payload = descriptor.data
+	if descriptor.embedded then
+		payload = extract_embedded_payload(payload, "data:video/mp4;base64,")
+	end
+	local retained_source_size = #descriptor.data
+	local maximum = animation_number("max_bytes", 64 * 1024 * 1024)
+	if retained_source_size >= maximum then
+		entry.status = "failed"
+		entry.error = string.format("animation retained data exceeds %d byte limit", maximum)
+		return
+	end
+	local source, err = bounded_animation_bytes(payload)
+	if not source then
+		entry.status = "failed"
+		entry.error = err
+		return
+	end
+	if retained_source_size + #source > maximum then
+		entry.status = "failed"
+		entry.error = string.format("animation peak data exceeds %d byte limit", maximum)
+		return
+	end
+	convert_animation(state, entry, descriptor, source, retained_source_size, available_width, limits)
 end
 
 local function prepare(state, entry, descriptor, available_width, limits)
+	if descriptor.animation then
+		prepare_animation(state, entry, descriptor, available_width, limits)
+		return
+	end
 	if entry.backend == "text" then
 		entry.status = "fallback"
 		return
@@ -702,9 +1460,11 @@ end
 
 local function fallback_line(descriptor, entry)
 	local reason = entry.error and (" · " .. entry.error) or ""
+	local label = descriptor.animation and "Matplotlib animation" or descriptor.mime
+	local frames = entry.animation_frame_count and string.format(" · %d frames", entry.animation_frame_count) or ""
 	return {
 		{
-			string.format("  [%s%s%s]", descriptor.mime, dimensions_suffix(descriptor), reason),
+			string.format("  [%s%s%s%s]", label, dimensions_suffix(descriptor), frames, reason),
 			entry.error and "NvJupWarning" or "NvJupImage",
 		},
 	}
@@ -720,16 +1480,53 @@ function M.descriptors(cell)
 	for output_index, item in ipairs(cell.outputs or {}) do
 		if item.output_type == "execute_result" or item.output_type == "display_data" then
 			local data = type(item.data) == "table" and item.data or {}
-			for _, mime in ipairs({ "image/png", "image/jpeg", "image/svg+xml", "application/pdf" }) do
-				local value = normalize_data(data[mime])
-				if value and value ~= "" then
-					table.insert(descriptors, {
-						output_index = output_index,
-						mime = mime,
-						data = value,
-						metadata = item.metadata or {},
-					})
-					break
+			local animation
+			if animation_options().enabled ~= false then
+				local maximum = animation_number("max_bytes", 64 * 1024 * 1024)
+				local video = normalize_data(data["video/mp4"], maximum)
+				local gif = normalize_data(data["image/gif"], maximum)
+				local html = normalize_data(data["text/html"], maximum)
+				local html_kind = animation_html_kind(html)
+				if video and video ~= "" then
+					animation = { kind = "video", source_mime = "video/mp4", data = video }
+				elseif gif and gif ~= "" then
+					animation = { kind = "video", source_mime = "image/gif", data = gif }
+				elseif html_kind then
+					animation = {
+						kind = html_kind,
+						source_mime = html_kind == "video" and "video/mp4" or "image/png",
+						data = html,
+						embedded = html_kind == "video",
+					}
+				end
+			end
+			if animation then
+				table.insert(descriptors, {
+					output_index = output_index,
+					mime = "application/vnd.nvjup.animation",
+					data = animation.data,
+					metadata = item.metadata or {},
+					animation = true,
+					animation_kind = animation.kind,
+					source_mime = animation.source_mime,
+					embedded = animation.embedded,
+					item = item,
+					cell = cell,
+				})
+			else
+				local maximum = tonumber(image_options().max_bytes) or (10 * 1024 * 1024)
+				local encoded_limit = math.ceil(maximum / 3) * 4 + math.ceil(maximum / 10) + 4096
+				for _, mime in ipairs({ "image/png", "image/jpeg", "image/svg+xml", "application/pdf" }) do
+					local value = normalize_data(data[mime], mime == "image/svg+xml" and maximum or encoded_limit)
+					if value and value ~= "" then
+						table.insert(descriptors, {
+							output_index = output_index,
+							mime = mime,
+							data = value,
+							metadata = item.metadata or {},
+						})
+						break
+					end
 				end
 			end
 		end
@@ -752,11 +1549,15 @@ function M.render(state, cell, available_width, limits)
 		local first_line = #virtual_lines + 1
 		local key = image_key(state, cell, descriptor.output_index)
 		seen[key] = true
+		if descriptor.animation then
+			descriptor.trust_status = trust.status(state, cell, descriptor.item)
+		end
 		local hash = descriptor_hash(descriptor)
 		local backend = selected_backend()
 		local entry = placements[key]
 		if not entry or entry.hash ~= hash or entry.backend ~= backend then
 			local previous = entry
+			cancel_entry(previous)
 			if previous and previous.status ~= "ready" and previous.previous then
 				previous = previous.previous
 			end
@@ -832,6 +1633,8 @@ end
 function M.finish_render(state, seen)
 	for key, entry in pairs(placements) do
 		if entry.buf == state.buf and not seen[key] then
+			cancel_entry(entry)
+			cancel_entry(entry.previous)
 			if entry.image_id then
 				delete_image(entry.image_id)
 			end
@@ -857,6 +1660,7 @@ function M.capabilities()
 		chafa = vim.fn.executable("chafa") == 1,
 		imagemagick = vim.fn.executable("magick") == 1 or vim.fn.executable("convert") == 1,
 		rsvg = vim.fn.executable("rsvg-convert") == 1,
+		ffmpeg = vim.fn.executable("ffmpeg") == 1,
 	}
 end
 
@@ -864,7 +1668,9 @@ function M._set_test_writer(writer)
 	test_writer = writer
 end
 
+M.is_animation_bundle = is_animation_bundle
 M._encode_transmit = encode_transmit
+M._encode_animation_frame = encode_animation_frame
 M._placeholder_lines = placeholder_lines
 M._safe_svg = safe_svg
 M._normalize_base64 = normalize_base64

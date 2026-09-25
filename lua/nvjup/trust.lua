@@ -14,7 +14,9 @@ local ACTIVE_MIMES = {
 	["application/vnd.jupyter.widget-state+json"] = true,
 	["application/vnd.jupyter.widget-view+json"] = true,
 	["application/vnd.plotly.v1+json"] = true,
+	["image/gif"] = true,
 	["text/html"] = true,
+	["video/mp4"] = true,
 }
 
 local function store_path()

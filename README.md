@@ -12,7 +12,7 @@ A Neovim-native editor for Jupyter notebooks. Open an `.ipynb` file and work wit
 - **Lossless nbformat** — preserves metadata, attachments, outputs, MIME bundles, cell IDs, and unknown fields.
 - **Language tooling** — per-language Tree-sitter highlighting and cross-cell LSP diagnostics, completion, navigation, rename, symbols, and code actions.
 - **Kernel execution** — run one cell or a batch, stream output, answer stdin, interrupt, restart, and persist execution results.
-- **Rich output** — text, tracebacks, tables, sanitized HTML, PNG, JPEG, SVG, PDF, progress bars, basic widgets, and ipympl frames.
+- **Rich output** — text, tracebacks, tables, sanitized HTML, images, PDF, progress bars, widgets, ipympl, and inline `matplotlib.animation` playback.
 - **Markdown and LaTeX** — rendered notebook cells through `render-markdown.nvim` and `Snacks.image`, while code cells remain code.
 - **Interactive figures** — sandboxed Plotly and Bokeh rendering with an in-Neovim focus view or an optional Awrit window.
 - **Remote Jupyter and Colab** — connect to a server or provision a CPU/GPU/TPU Colab runtime, then browse local/remote files in a two-panel Telescope UI.
@@ -42,6 +42,7 @@ The install command below creates a plugin-local Python environment containing `
 | rendered Markdown | `render-markdown.nvim` plus Markdown parsers |
 | LaTeX and image integration | `snacks.nvim`, `pdflatex`, ImageMagick |
 | terminal images | Kitty or Ghostty; `chafa` is the fallback |
+| Matplotlib HTML5/GIF animations | `ffmpeg` (`to_jshtml()` needs no converter) |
 | SVG conversion | `rsvg-convert` |
 | interactive figures | Chromium |
 | external interactive window | [Awrit](https://github.com/chase/awrit) and Kitty remote control |
@@ -158,6 +159,8 @@ require("nvjup").setup({
 
 Python kernels use `kernel.python_path` when set, then an `ipykernel`-capable project `.venv` or `venv`, `kernel.system_python`, and finally a system Python. Non-Python notebooks use their registered kernelspec. The Python running nvjup's sidecar is selected separately.
 
+Matplotlib animations use safe native Kitty frames rather than executing generated HTML/JavaScript. Return `HTML(animation.to_jshtml())` or `HTML(animation.to_html5_video())`; the latter requires `ffmpeg`. As in Jupyter, setting `matplotlib.rcParams["animation.html"]` also enables the animation object's rich representation.
+
 For a remote server, the simplest setup is interactive:
 
 ```vim
@@ -172,7 +175,7 @@ All defaults and advanced limits are documented in `:help nvjup-setup`.
 
 - HTML is sanitized and rendered as terminal text/tables; it is not executed.
 - SVG, images, text, RPC messages, filesystem transfers, renderer queues, and Chromium frames have configurable bounds.
-- Loaded Plotly/Bokeh output requires `:NvJupTrustInteractive`.
+- Loaded Plotly/Bokeh and Matplotlib animation output requires `:NvJupTrustInteractive`.
 - `:NvJupTrustRevoke` removes persisted trust.
 - Editing a cell invalidates revision-scoped local execution trust.
 - Remote kernel output never receives automatic local trust.

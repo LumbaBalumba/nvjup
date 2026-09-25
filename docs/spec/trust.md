@@ -9,7 +9,7 @@ Trust levels:
 - `unknown`: no decision is available;
 - `untrusted`: active content is blocked;
 - `trusted_static`: kernel execution may be explicitly requested, but active HTML/JS remains blocked;
-- `trusted_interactive`: sandboxed Plotly/Bokeh/HTML rendering is allowed;
+- `trusted_interactive`: sandboxed Plotly/Bokeh rendering and bounded Matplotlib animation decoding are allowed;
 - `revoked`: a previous decision was explicitly removed.
 
 Trusting a notebook does not automatically execute its cells. Explicit local-kernel execution grants only revision-scoped, in-memory trust to output produced for that cell; it does not create a persisted notebook-wide trust record. `execution.trust_local_kernel = false` disables this default, and an explicit revoke takes precedence. Kernels reached through the remote Jupyter Server transport are not local under this policy and never receive the ephemeral grant.
@@ -24,7 +24,7 @@ A trust record is local state and must not be written into notebook metadata by 
 - granted capability level;
 - decision timestamp.
 
-Changes to code, HTML, JavaScript, widget state, Plotly/Bokeh bundles, or external resource declarations invalidate interactive trust. Pure output visibility changes do not.
+Changes to code, HTML, JavaScript, widget state, Plotly/Bokeh bundles, animation video/GIF data, or external resource declarations invalidate interactive trust. Pure output visibility changes do not.
 
 ## Untrusted rendering
 
@@ -40,6 +40,7 @@ Allowed without interactive trust:
 Blocked by default:
 
 - JavaScript;
+- loaded or remote Matplotlib JSHTML/HTML5/GIF animation decoding;
 - HTML event handlers;
 - remote URLs;
 - `file://` access;

@@ -1,4 +1,5 @@
 local config = require("nvjup.config")
+local image = require("nvjup.image")
 
 local M = {}
 
@@ -348,6 +349,13 @@ local function render_bundle(data, metadata, options, cell)
 
 	if data["application/vnd.jupyter.widget-view+json"] then
 		return render_widget(data, cell)
+	end
+
+	if image.is_animation_bundle(data) then
+		if options.include_images == false then
+			return {}, "image"
+		end
+		return { "[Matplotlib animation · Kitty playback]" }, "image"
 	end
 
 	if data["application/vnd.plotly.v1+json"] then
