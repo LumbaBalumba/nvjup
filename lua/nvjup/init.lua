@@ -5,6 +5,7 @@ local inspector = require("nvjup.inspector")
 local interactive = require("nvjup.interactive")
 local kernel = require("nvjup.kernel")
 local lsp = require("nvjup.lsp")
+local markdown = require("nvjup.markdown")
 local notebook = require("nvjup.notebook")
 local output = require("nvjup.output")
 local render = require("nvjup.render")
@@ -144,6 +145,7 @@ local function detach_buffer(state)
 	kernel.detach(state)
 	interactive.detach(state)
 	image.detach(state)
+	markdown.detach(state)
 	if package.loaded["nvjup.cmp"] then
 		require("nvjup.cmp").detach(buf)
 	end
@@ -160,6 +162,7 @@ local function attach_buffer(state)
 
 	vim.bo[buf].syntax = ""
 
+	markdown.attach(state)
 	keymaps.attach(buf)
 	define_buffer_commands(buf)
 
@@ -167,6 +170,14 @@ local function attach_buffer(state)
 		group = group,
 		buffer = buf,
 		callback = function()
+			local current = notebook.get(buf)
+			if current and current:sync_from_buffer() then
+				local cell = current:current_cell()
+				if cell and cell.cell_type == "markdown" and cell.markdown_rendered ~= false then
+					markdown.set_rendered(current, cell, false)
+					render.render(current)
+				end
+			end
 			vim.schedule(function()
 				if vim.api.nvim_buf_is_valid(buf) then
 					require("nvjup.cmp").attach(buf)
@@ -323,6 +334,7 @@ M.inspector = inspector
 M.interactive = interactive
 M.kernel = kernel
 M.lsp = lsp
+M.markdown = markdown
 M.notebook = notebook
 M.output = output
 M.remote = require("nvjup.remote")

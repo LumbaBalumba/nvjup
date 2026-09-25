@@ -84,6 +84,8 @@ M.defaults = {
 	},
 	integrations = {
 		telescope = true,
+		render_markdown = true,
+		snacks = true,
 	},
 	lsp = {
 		enabled = true,

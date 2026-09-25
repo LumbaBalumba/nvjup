@@ -29,6 +29,7 @@ The repository now contains the **Stage 7 notebook editor, kernel/LSP tooling, r
 - automatic project-local `.venv`/`venv` selection for Pyright;
 - IPython magic preprocessing that preserves Python expressions for LSP rename, plus UTF-8/UTF-16/UTF-32 source maps;
 - projected Tree-sitter highlighting for code and Markdown cells, including mixed-language notebooks;
+- notebook-style Markdown preview that reuses the active `render-markdown.nvim` configuration and renders/conceals LaTeX through `Snacks.image`;
 - an isolated Python sidecar with local `jupyter_client` kernels and opt-in authenticated Jupyter Server REST/WebSocket transport;
 - current/advance/above/below/all/range execution through an immutable sequential queue;
 - streaming stdout/stderr, execute results, display updates, deferred clears, errors, and stdin;
@@ -54,7 +55,8 @@ The complete roadmap is in [`docs/nvjup-plan.md`](docs/nvjup-plan.md). Normative
 - Playwright, the Python Plotly and Bokeh packages (for local browser assets), and Chromium for inline interactive previews;
 - [Awrit](https://github.com/chase/awrit), Kitty remote control, and `KITTY_LISTEN_ON` for the zero-screenshot external focus window (optional; `<leader>nf` uses the TUI fallback);
 - nvim-cmp for optional live-kernel completion;
-- Telescope for optional outline/variable pickers and the required two-panel remote file manager UI.
+- Telescope for optional outline/variable pickers and the required two-panel remote file manager UI;
+- `render-markdown.nvim` for full Markdown-cell presentation, plus Snacks.image, the `markdown`, `markdown_inline`, and `latex` Tree-sitter parsers, `pdflatex`, and ImageMagick for inline LaTeX (all optional; text/highlight fallbacks remain available).
 
 The editor and LSP proxy remain pure Lua. Kernel transport runs in a separate Python sidecar and does not depend on `pynvim` or `python3_host_prog`. Python notebooks use `pyright-langserver` and `ruff server` automatically when those executables are available. Missing parsers and servers degrade gracefully.
 
@@ -92,7 +94,7 @@ The launcher redirects config, data, state, and cache into `.test-runtime/`.
 | `<leader>nM` | merge with cell below |
 | `<leader>nt` | cycle code → Markdown → raw |
 | `<leader>nm` / `<leader>ny` | convert to Markdown / code |
-| `<leader>nz` | collapse/expand cell source |
+| `<leader>nz` | toggle rendered/source mode for Markdown; collapse/expand other cell source |
 | `<leader>no` | expand/collapse truncated inline output |
 | `<leader>np` | open full output in a floating pager |
 | `<leader>nf` | open the current Plotly/Bokeh output in the responsive TUI focus window |
@@ -218,6 +220,24 @@ require("nvjup").setup({
 For Python notebooks, nvjup first looks for `.venv/bin/python` or `venv/bin/python` at the project root (and Windows equivalents) and verifies that `ipykernel` is importable. If no usable project environment exists, it falls back to a system Python with `ipykernel`. `kernel.python_path` and `kernel.system_python` provide explicit overrides. The selected executable is sent to the sidecar and used directly as `python -m ipykernel_launcher`; it is therefore independent from the Python that runs the sidecar and from a possibly stale global `python3` kernelspec. Non-Python notebooks continue to use their kernelspec.
 
 Batch commands snapshot cell IDs, source, and revisions before execution and dispatch one cell at a time. Editing a cell while its snapshot is running preserves the returned output but marks it stale (`[*]`). Outputs and execution counts are written back into nbformat on `:write`.
+
+## Markdown cells and LaTeX
+
+Loaded Markdown cells open in rendered mode. `<C-CR>`, `<S-CR>`, and the batch run commands render Markdown cells without sending them to the kernel; entering Insert mode reveals their source, and editing keeps them in source mode until they are run again. `<leader>nz` switches the current Markdown cell explicitly.
+
+When available, nvjup projects only rendered Markdown-cell ranges into `render-markdown.nvim`, so headings, bullets, code blocks, callouts, and conceal behavior reuse the user's existing Markdown configuration without interpreting code cells as Markdown. `Snacks.image` consumes the same Tree-sitter projection and renders `$...$` / `$$...$$` through LaTeX; its concealed placement hides the original formula source after the cell is rendered. These adapters are optional:
+
+```lua
+require("nvjup").setup({
+  render = { markdown = true },
+  integrations = {
+    render_markdown = true,
+    snacks = true,
+  },
+})
+```
+
+Use `:checkhealth nvjup` to verify the three parsers, `render-markdown.nvim`, Snacks, and `pdflatex`.
 
 ## Rich static output configuration
 

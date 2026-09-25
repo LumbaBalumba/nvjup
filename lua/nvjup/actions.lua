@@ -1,3 +1,4 @@
+local markdown = require("nvjup.markdown")
 local notebook = require("nvjup.notebook")
 local render = require("nvjup.render")
 
@@ -146,6 +147,11 @@ function M.toggle_source()
 	local nb = state()
 	assert(nb:sync_from_buffer())
 	local cell = nb:current_cell()
+	if cell.cell_type == "markdown" and markdown.enabled() then
+		local rendered = markdown.toggle(nb, cell)
+		render.render(nb)
+		return rendered
+	end
 	local start_line = cell.range.start_row + 1
 	local end_line = cell.range.end_row + 1
 	if vim.fn.foldclosed(start_line) >= 0 then

@@ -3,6 +3,7 @@ local features = require("nvjup.features")
 local image = require("nvjup.image")
 local interactive = require("nvjup.interactive")
 local language = require("nvjup.language")
+local markdown = require("nvjup.markdown")
 local notebook = require("nvjup.notebook")
 local output = require("nvjup.output")
 
@@ -183,7 +184,7 @@ local function output_virtual_lines(state, cell, width)
 end
 
 local function render_markdown_line(state, cell, row, line)
-	if not config.options.render.markdown or cell.cell_type ~= "markdown" then
+	if not config.options.render.markdown or cell.cell_type ~= "markdown" or markdown.external_active(state) then
 		return
 	end
 	local hashes = line:match("^(#+)%s")
@@ -308,6 +309,7 @@ function M.render(state)
 		M.configure_window(win)
 	end
 	features.update(state)
+	markdown.refresh(state)
 end
 
 function M.render_current_buffer()

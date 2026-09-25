@@ -1,6 +1,8 @@
 local root = assert(vim.env.NVJUP_PROJECT_ROOT)
 local Notebook = require("nvjup.notebook")
 local actions = require("nvjup.actions")
+local kernel = require("nvjup.kernel")
+local markdown = require("nvjup.markdown")
 local output = require("nvjup.output")
 local render = require("nvjup.render")
 local shadow = require("nvjup.shadow")
@@ -84,6 +86,37 @@ test("opens nbformat as notebook cells instead of JSON", function()
 	assert(vim.bo[state.buf].filetype == "nvjup")
 	assert(vim.bo[state.buf].buftype == "acwrite")
 	assert(vim.api.nvim_buf_get_lines(state.buf, 0, 1, false)[1]:find(Notebook.MARKER_PREFIX, 1, true))
+	close_fixture(state)
+end)
+
+test("renders loaded Markdown and returns edited cells to source mode", function()
+	local state = open_fixture("01_markdown_code.ipynb")
+	state:goto_cell(1)
+	local cell = state.cells[1]
+	assert(cell.markdown_rendered == true)
+	assert(#markdown.regions(state) == 1)
+	if state.markdown_parser then
+		assert(#state.markdown_parser:included_regions() == 1)
+	end
+
+	assert(actions.toggle_source() == false)
+	assert(#markdown.regions(state) == 0)
+	if state.markdown_parser then
+		assert(#state.markdown_parser:included_regions() == 0)
+		assert(next(state.markdown_parser:children()) == nil)
+	end
+	local _, queued = kernel.run_current()
+	assert(queued == 0)
+	assert(cell.markdown_rendered == true)
+	assert(#markdown.regions(state) == 1)
+	if state.markdown_parser then
+		assert(#state.markdown_parser:included_regions() == 1)
+	end
+
+	vim.api.nvim_buf_set_lines(state.buf, cell.range.start_row, cell.range.start_row + 1, false, { "# Edited" })
+	assert(state:sync_from_buffer())
+	assert(cell.markdown_rendered == false)
+	assert(#markdown.regions(state) == 0)
 	close_fixture(state)
 end)
 

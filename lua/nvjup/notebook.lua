@@ -82,6 +82,7 @@ local function wrap_cell(state, raw)
 				and source
 			or nil,
 		display_ids = {},
+		markdown_rendered = cell_type == "markdown",
 	}
 	state.cell_store[id] = cell
 	return cell
@@ -123,6 +124,7 @@ local function create_cell(state, cell_type, source)
 		execution_status = "not_executed",
 		stale = false,
 		display_ids = {},
+		markdown_rendered = false,
 	}
 	state.cell_store[id] = cell
 	return cell
@@ -157,6 +159,8 @@ local function update_source(cell, source)
 		if has_result and source ~= cell.last_executed_source then
 			cell.stale = true
 		end
+	elseif cell.cell_type == "markdown" then
+		cell.markdown_rendered = false
 	end
 	return true
 end
@@ -190,6 +194,7 @@ local function apply_cell_type(cell, cell_type)
 		cell.last_executed_source = nil
 	end
 	cell.cell_type = cell_type
+	cell.markdown_rendered = cell_type == "markdown" and false or nil
 end
 
 function Notebook:_build_buffer_lines()
@@ -299,6 +304,7 @@ function Notebook:sync_from_buffer()
 				execution_status = "not_executed",
 				stale = false,
 				display_ids = {},
+				markdown_rendered = false,
 			}
 			self.cell_store[entry.id] = cell
 		end

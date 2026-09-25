@@ -668,7 +668,9 @@ function M.run_cells(state, cells, options)
 	local policy = options.repeat_policy or config.options.execution.repeat_policy
 	local snapshots = {}
 	for _, cell in ipairs(cells) do
-		if cell and cell.cell_type == "code" then
+		if cell and cell.cell_type == "markdown" then
+			cell.markdown_rendered = true
+		elseif cell and cell.cell_type == "code" then
 			local conflict = conflict_for(session, cell.id)
 			if conflict and policy == "cancel" then
 				remove_queued_cell(session, cell.id)

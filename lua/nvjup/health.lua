@@ -22,7 +22,7 @@ function M.check()
 	end
 
 	vim.health.start("nvjup Tree-sitter")
-	for _, lang in ipairs({ "markdown", "markdown_inline", "python" }) do
+	for _, lang in ipairs({ "markdown", "markdown_inline", "latex", "python" }) do
 		local ok = pcall(vim.treesitter.language.add, lang)
 		if ok then
 			vim.health.ok(lang .. " parser is available")
@@ -31,6 +31,27 @@ function M.check()
 		else
 			vim.health.warn(lang .. " parser is unavailable")
 		end
+	end
+
+	vim.health.start("nvjup Markdown rendering")
+	if config.options.integrations.render_markdown == false then
+		vim.health.info("render-markdown.nvim integration is disabled")
+	elseif pcall(require, "render-markdown") then
+		vim.health.ok("render-markdown.nvim is available; notebook Markdown reuses its active configuration")
+	else
+		vim.health.info("render-markdown.nvim is unavailable; nvjup uses its built-in Markdown fallback")
+	end
+	if config.options.integrations.snacks == false then
+		vim.health.info("Snacks image integration is disabled")
+	elseif pcall(require, "snacks") then
+		vim.health.ok("Snacks.image is available for inline Markdown images and LaTeX")
+	else
+		vim.health.info("Snacks.image is unavailable; LaTeX remains text")
+	end
+	if vim.fn.executable("pdflatex") == 1 then
+		vim.health.ok("pdflatex is available for Snacks LaTeX rendering")
+	else
+		vim.health.warn("pdflatex is unavailable; Snacks cannot rasterize LaTeX")
 	end
 
 	vim.health.start("nvjup language servers")
