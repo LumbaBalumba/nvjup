@@ -57,7 +57,7 @@ local function probe_command(python)
 	return {
 		python,
 		"-c",
-		"import sys, aiohttp, jupyter_client; assert sys.version_info >= (3, 11)",
+		"import sys, aiohttp, jupyter_client; sys.exit(0 if sys.version_info >= (3, 11) else 1)",
 	}
 end
 

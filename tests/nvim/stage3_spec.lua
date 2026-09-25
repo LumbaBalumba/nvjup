@@ -150,9 +150,16 @@ end)
 test("probes every runtime dependency required by the sidecar", function()
 	local command = rpc._probe_command("/tmp/python")
 	assert(command[1] == "/tmp/python" and command[2] == "-c")
+	assert(command[3]:find("sys.exit", 1, true))
 	assert(command[3]:find("sys.version_info >= (3, 11)", 1, true))
+	assert(not command[3]:find("assert", 1, true))
 	assert(command[3]:find("aiohttp", 1, true))
 	assert(command[3]:find("jupyter_client", 1, true))
+
+	local runtime = rpc._probe_command(rpc.default_command()[1])
+	local optimized = { runtime[1], "-O", runtime[2], runtime[3] }
+	local result = vim.system(optimized, { text = true, env = { PYTHONOPTIMIZE = "1" } }):wait(5000)
+	assert(result.code == 0, result.stderr)
 end)
 
 local function rpc_process_factory(record)
