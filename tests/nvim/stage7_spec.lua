@@ -5,6 +5,7 @@ local kernel = require("nvjup.kernel")
 local notebook = require("nvjup.notebook")
 local output = require("nvjup.output")
 local statusline = require("nvjup.statusline")
+local trust = require("nvjup.trust")
 
 local root = assert(vim.g.nvjup_project_root)
 local passed = 0
@@ -161,6 +162,43 @@ test("resolves remote Jupyter transport settings for the sidecar", function()
 	assert(status.transport == "remote")
 	assert(status.python_source == "remote")
 	assert(remote_trust_revision == nil)
+end)
+
+test("does not retrust persisted mixed widget output after an unrelated local widget event", function()
+	local state = open_fixture("00_minimal.ipynb")
+	local cell = state.cells[1]
+	local persisted = {
+		output_type = "display_data",
+		data = {
+			["application/vnd.jupyter.widget-view+json"] = { model_id = "persisted-model" },
+			["application/vnd.plotly.v1+json"] = { data = {}, layout = {} },
+		},
+		metadata = {},
+	}
+	cell.outputs = { persisted }
+	cell.raw.outputs = cell.outputs
+	assert(not trust.allows_interactive(state, cell, persisted))
+	kernel.start()
+	local session = kernel._sessions[state.buf]
+	session.executions["benign-widget"] = {
+		execution_id = "benign-widget",
+		cell_id = cell.id,
+		revision = cell.revision,
+		source = cell.source,
+	}
+	kernel._handle_event(session, {
+		type = "execution.widget",
+		notebook_id = session.notebook_id,
+		payload = {
+			execution_id = "benign-widget",
+			action = "open",
+			model_id = "unrelated-model",
+			state = { _model_name = "CheckboxModel", value = true },
+		},
+	})
+	assert(not trust.allows_interactive(state, cell, persisted))
+	assert(#session.widget_outputs == 0, "persisted widget views must not become live output references")
+	close_fixture(state)
 end)
 
 test("opens the variable inspector and exposes statusline state", function()

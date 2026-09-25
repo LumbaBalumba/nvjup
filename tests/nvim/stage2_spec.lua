@@ -387,6 +387,49 @@ test("clears stale semantic highlights when no provider remains", function()
 	vim.api.nvim_buf_delete(buf, { force = true })
 end)
 
+test("cancels and ignores delayed ordinary responses after detach and reopen", function()
+	local old_state = open_fixture("09_lsp_mapping.ipynb")
+	vim.api.nvim_set_current_buf(old_state.buf)
+	vim.api.nvim_win_set_cursor(0, { old_state.cells[2].range.start_row + 1, 0 })
+	local delayed_callback
+	local cancelled = false
+	local client = {
+		id = 992,
+		offset_encoding = "utf-16",
+		server_capabilities = {},
+		supports_method = function(_, method)
+			return method == "textDocument/hover"
+		end,
+		request = function(_, method, _, handler)
+			assert(method == "textDocument/hover")
+			delayed_callback = handler
+			return true, 41
+		end,
+		cancel_request = function(_, id)
+			assert(id == 41)
+			cancelled = true
+		end,
+	}
+	local original_get_clients = vim.lsp.get_clients
+	vim.lsp.get_clients = function()
+		return { client }
+	end
+	lsp.hover()
+	assert(delayed_callback)
+	lsp.detach(old_state)
+	assert(cancelled)
+	close_fixture(old_state)
+	local reopened = open_fixture("09_lsp_mapping.ipynb")
+	local windows = #vim.api.nvim_list_wins()
+	assert(pcall(delayed_callback, nil, {
+		contents = { kind = "markdown", value = "stale hover must not open" },
+	}))
+	vim.wait(50)
+	assert(#vim.api.nvim_list_wins() == windows)
+	vim.lsp.get_clients = original_get_clients
+	close_fixture(reopened)
+end)
+
 test("invalidates semantic callbacks before detach cancellation", function()
 	local buf = vim.api.nvim_create_buf(false, true)
 	local ns = vim.api.nvim_create_namespace("nvjup-stage2-semantic-detach")

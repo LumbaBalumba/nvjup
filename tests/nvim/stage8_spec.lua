@@ -117,6 +117,43 @@ test("runs recursive local copies and deletion asynchronously", function()
 	assert(deleted and not vim.uv.fs_stat(base))
 end)
 
+test("bounds and yields while scanning an over-budget wide directory", function()
+	local base = vim.fn.tempname()
+	local source = vim.fs.joinpath(base, "wide-source")
+	assert(local_fs.mkdir(source))
+	for index = 1, 200 do
+		assert(local_fs.write(vim.fs.joinpath(source, string.format("file-%03d", index)), tostring(index)))
+	end
+
+	local original_copyfile = vim.uv.fs_copyfile
+	local original_schedule = vim.schedule
+	local copied_files, scheduled = 0, 0
+	vim.uv.fs_copyfile = function(...)
+		copied_files = copied_files + 1
+		return original_copyfile(...)
+	end
+	vim.schedule = function(callback)
+		scheduled = scheduled + 1
+		return original_schedule(callback)
+	end
+
+	local done, operation_error
+	local_fs.copy_async(source, vim.fs.joinpath(base, "target"), 70, function(ok, err)
+		done, operation_error = ok, err
+	end)
+	assert(vim.wait(5000, function()
+		return done ~= nil or operation_error ~= nil
+	end, 5))
+	vim.uv.fs_copyfile = original_copyfile
+	vim.schedule = original_schedule
+
+	assert(done == nil and operation_error:find("copy exceeds 70 entries", 1, true))
+	assert(copied_files == 69, "the root plus 69 children must exhaust the entry budget")
+	assert(scheduled >= 2, "wide scans must yield after bounded batches")
+	assert(vim.uv.fs_lstat(vim.fs.joinpath(base, "target")) == nil, "failed copies must be cleaned up")
+	assert(local_fs.delete(base))
+end)
+
 test("resolves bounded remote file transport options", function()
 	vim.env.NVJUP_STAGE8_TOKEN = "stage8-secret"
 	config.options.kernel.remote = {

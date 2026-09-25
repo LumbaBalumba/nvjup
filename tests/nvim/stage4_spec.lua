@@ -292,6 +292,23 @@ test("allocates and cleans more than 255 distinct Kitty image IDs", function()
 	image._set_test_writer(nil)
 end)
 
+test("hashes complete equal-length image payloads and rendering metadata", function()
+	local first = string.rep("A", 256)
+	local second = first:sub(1, 1) .. "B" .. first:sub(3)
+	local descriptor = {
+		mime = "image/png",
+		data = first,
+		metadata = { ["image/png"] = { width = 10, height = 5 } },
+	}
+	local first_hash = image._descriptor_hash(descriptor)
+	descriptor.data = second
+	assert(#first == #second)
+	assert(image._descriptor_hash(descriptor) ~= first_hash, "unsampled payload bytes must affect cache identity")
+	descriptor.data = first
+	descriptor.metadata["image/png"].width = 11
+	assert(image._descriptor_hash(descriptor) ~= first_hash, "rendering metadata must affect cache identity")
+end)
+
 test("caches image descriptors by output revision", function()
 	local cell = {
 		output_revision = 0,

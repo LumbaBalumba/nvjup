@@ -258,7 +258,19 @@ function M.write(path, content)
 	return true
 end
 
-local function async_remove(path, callback)
+local ASYNC_BATCH_SIZE = 32
+
+local function continue_batched(work, callback)
+	work.steps = (work.steps or 0) + 1
+	if work.steps % ASYNC_BATCH_SIZE == 0 then
+		vim.schedule(callback)
+	else
+		callback()
+	end
+end
+
+local function async_remove(path, callback, work)
+	work = work or { steps = 0 }
 	uv.fs_lstat(path, function(stat_err, stat)
 		if stat_err or not stat then
 			callback(nil, stat_err or "path does not exist")
@@ -275,29 +287,21 @@ local function async_remove(path, callback)
 				callback(nil, scan_err)
 				return
 			end
-			local names = {}
-			while true do
-				local name = uv.fs_scandir_next(scan)
-				if not name then
-					break
-				end
-				table.insert(names, name)
-			end
-			local index = 1
 			local function next_child(ok, err)
 				if not ok then
 					callback(nil, err)
 					return
 				end
-				local name = names[index]
+				local name = uv.fs_scandir_next(scan)
 				if not name then
 					uv.fs_rmdir(path, function(remove_err)
 						callback(not remove_err or nil, remove_err)
 					end)
 					return
 				end
-				index = index + 1
-				async_remove(path .. "/" .. name, next_child)
+				continue_batched(work, function()
+					async_remove(vim.fs.joinpath(path, name), next_child, work)
+				end)
 			end
 			next_child(true)
 		end)
@@ -334,32 +338,35 @@ local function async_copy(source, target, budget, callback)
 						if scan_err or not scan then
 							async_remove(target, function()
 								callback(nil, scan_err)
-							end)
+							end, budget.work)
 							return
 						end
-						local names = {}
-						while true do
-							local name = uv.fs_scandir_next(scan)
-							if not name then
-								break
-							end
-							table.insert(names, name)
-						end
-						local index = 1
 						local function next_child(ok, err)
 							if not ok then
 								async_remove(target, function()
 									callback(nil, err)
-								end)
+								end, budget.work)
 								return
 							end
-							local name = names[index]
+							local name = uv.fs_scandir_next(scan)
 							if not name then
 								callback(true)
 								return
 							end
-							index = index + 1
-							async_copy(source .. "/" .. name, target .. "/" .. name, budget, next_child)
+							if budget.count >= budget.max_entries then
+								async_remove(target, function()
+									callback(nil, string.format("copy exceeds %d entries", budget.max_entries))
+								end, budget.work)
+								return
+							end
+							continue_batched(budget.work, function()
+								async_copy(
+									vim.fs.joinpath(source, name),
+									vim.fs.joinpath(target, name),
+									budget,
+									next_child
+								)
+							end)
 						end
 						next_child(true)
 					end)
@@ -389,7 +396,7 @@ function M.copy_async(source, target, max_entries, callback)
 	async_copy(
 		absolute(source),
 		absolute(target),
-		{ count = 0, max_entries = max_entries or 10000 },
+		{ count = 0, max_entries = max_entries or 10000, work = { steps = 0 } },
 		vim.schedule_wrap(callback)
 	)
 end
@@ -403,20 +410,27 @@ function M.move_async(source, target, max_entries, callback)
 			end)
 			return
 		end
-		async_copy(source, target, { count = 0, max_entries = max_entries or 10000 }, function(ok, copy_err)
-			if not ok then
-				vim.schedule(function()
-					callback(nil, copy_err)
-				end)
-				return
+		async_copy(
+			source,
+			target,
+			{ count = 0, max_entries = max_entries or 10000, work = { steps = 0 } },
+			function(ok, copy_err)
+				if not ok then
+					vim.schedule(function()
+						callback(nil, copy_err)
+					end)
+					return
+				end
+				async_remove(source, vim.schedule_wrap(callback))
 			end
-			async_remove(source, vim.schedule_wrap(callback))
-		end)
+		)
 	end)
 end
 
 function M.delete_async(path, callback)
 	async_remove(absolute(path), vim.schedule_wrap(callback))
 end
+
+M._async_batch_size = ASYNC_BATCH_SIZE
 
 return M

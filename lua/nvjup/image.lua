@@ -181,13 +181,21 @@ local function normalize_data(value)
 	return type(value) == "string" and value or nil
 end
 
-local function quick_hash(value)
-	local hash = 5381
-	local step = math.max(1, math.floor(#value / 128))
-	for index = 1, #value, step do
-		hash = (hash * 33 + value:byte(index)) % 0x7fffffff
-	end
-	return tostring(hash) .. ":" .. #value
+local function descriptor_hash(descriptor)
+	local metadata = type(descriptor.metadata) == "table" and descriptor.metadata[descriptor.mime] or nil
+	local width = type(metadata) == "table" and tonumber(metadata.width) or nil
+	local height = type(metadata) == "table" and tonumber(metadata.height) or nil
+	local rendering_metadata =
+		table.concat({ width and tostring(width) or "", height and tostring(height) or "" }, "\0")
+	local identity = table.concat({
+		tostring(#descriptor.mime),
+		descriptor.mime,
+		tostring(#descriptor.data),
+		descriptor.data,
+		tostring(#rendering_metadata),
+		rendering_metadata,
+	}, "\0")
+	return vim.fn.sha256(identity)
 end
 
 local function image_key(state, cell, output_index)
@@ -704,7 +712,7 @@ function M.render(state, cell, available_width, limits)
 		local first_line = #virtual_lines + 1
 		local key = image_key(state, cell, descriptor.output_index)
 		seen[key] = true
-		local hash = descriptor.mime .. ":" .. quick_hash(descriptor.data)
+		local hash = descriptor_hash(descriptor)
 		local backend = selected_backend()
 		local entry = placements[key]
 		if not entry or entry.hash ~= hash or entry.backend ~= backend then
@@ -820,6 +828,7 @@ M._encode_transmit = encode_transmit
 M._placeholder_lines = placeholder_lines
 M._safe_svg = safe_svg
 M._grid_dimensions = grid_dimensions
+M._descriptor_hash = descriptor_hash
 M._placements = placements
 
 return M

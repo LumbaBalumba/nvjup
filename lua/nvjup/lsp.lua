@@ -11,15 +11,60 @@ end
 
 local function session_for(state)
 	local session = sessions[state.buf]
+	if session and session.state ~= state then
+		for _, request in pairs(session.outstanding_requests or {}) do
+			pcall(request.client.cancel_request, request.client, request.id)
+		end
+		session = nil
+	end
 	if not session then
 		session = {
 			state = state,
 			documents = {},
 			clients = {},
+			outstanding_requests = {},
 		}
 		sessions[state.buf] = session
 	end
 	return session
+end
+
+local function valid_session(session, state, manager, expected_version)
+	return session ~= nil
+		and sessions[state.buf] == session
+		and vim.api.nvim_buf_is_valid(state.buf)
+		and notebook.get(state.buf) == state
+		and state.shadow == manager
+		and manager.version == expected_version
+end
+
+local function cancel_requests(session, predicate)
+	for token, request in pairs(session.outstanding_requests or {}) do
+		if not predicate or predicate(request) then
+			session.outstanding_requests[token] = nil
+			pcall(request.client.cancel_request, request.client, request.id)
+		end
+	end
+end
+
+local function tracked_request(session, client, method, params, callback, document_buf, options)
+	options = options or {}
+	local token = {}
+	local completed = false
+	local sent, request_id = client:request(method, params, function(err, result)
+		completed = true
+		session.outstanding_requests[token] = nil
+		callback(err, result)
+	end, document_buf)
+	if sent and request_id and not completed then
+		session.outstanding_requests[token] = {
+			client = client,
+			id = request_id,
+			expected_version = options.expected_version,
+			kind = options.kind or "ordinary",
+		}
+	end
+	return sent, request_id
 end
 
 local function project_root(path)
@@ -119,7 +164,11 @@ local function schedule_refresh(session, delay)
 	end
 	session.refresh_timer:start(delay or 100, 0, function()
 		vim.schedule(function()
-			if vim.api.nvim_buf_is_valid(session.state.buf) then
+			if
+				sessions[session.state.buf] == session
+				and vim.api.nvim_buf_is_valid(session.state.buf)
+				and notebook.get(session.state.buf) == session.state
+			then
 				M.publish_diagnostics(session.state)
 				M.refresh_semantic_tokens(session.state)
 			end
@@ -196,6 +245,9 @@ function M.update(state, manager, changed)
 		start_servers(session, document)
 	end
 	if changed then
+		cancel_requests(session, function(request)
+			return request.expected_version ~= nil and request.expected_version ~= manager.version
+		end)
 		for _, document in pairs(manager.documents) do
 			vim.diagnostic.reset(nil, document.buf)
 		end
@@ -280,39 +332,40 @@ local function request_at_cursor(method, make_params, on_complete)
 		return
 	end
 
+	local session = session_for(state)
 	local expected_version = manager.version
 	local pending = #requests
 	local results = {}
+	local finished = false
+	local function finish()
+		if finished or pending > 0 then
+			return
+		end
+		finished = true
+		if valid_session(session, state, manager, expected_version) then
+			on_complete(results, state, manager, expected_version)
+		end
+	end
 	for _, request in ipairs(requests) do
 		local params = make_params(request.client, request.document, request.mapped)
-		local sent = request.client:request(method, params, function(err, result)
-			if manager.version == expected_version then
-				table.insert(results, {
-					err = err,
-					result = result,
-					client = request.client,
-					document = request.document,
-				})
+		local sent = tracked_request(session, request.client, method, params, function(err, result)
+			if not valid_session(session, state, manager, expected_version) then
+				return
 			end
+			table.insert(results, {
+				err = err,
+				result = result,
+				client = request.client,
+				document = request.document,
+			})
 			pending = pending - 1
-			if pending == 0 then
-				if manager.version ~= expected_version then
-					notify(
-						"discarded a stale response for source-map version " .. expected_version,
-						vim.log.levels.WARN
-					)
-					return
-				end
-				on_complete(results, state, manager, expected_version)
-			end
-		end, request.document.buf)
+			finish()
+		end, request.document.buf, { expected_version = expected_version })
 		if not sent then
 			pending = pending - 1
 		end
 	end
-	if pending == 0 then
-		on_complete(results, state, manager, expected_version)
-	end
+	finish()
 end
 
 local function text_document_position(document, mapped)
@@ -518,7 +571,7 @@ local function completion_state(buf)
 	return state, manager
 end
 
-local function sanitize_completion_item(item, response, version)
+local function sanitize_completion_item(item, response, version, notebook_buf)
 	local result = vim.deepcopy(item)
 	local edit = result.textEdit
 	if edit and edit.newText then
@@ -526,6 +579,7 @@ local function sanitize_completion_item(item, response, version)
 	end
 	result.textEdit = nil
 	result._nvjup = {
+		notebook_buf = notebook_buf,
 		client_id = response.client.id,
 		document_buf = response.document.buf,
 		document_uri = response.document.uri,
@@ -560,6 +614,7 @@ function M.complete_at(buf, row, byte_col, completion_context, callback)
 		return
 	end
 
+	local session = session_for(state)
 	local expected_version = manager.version
 	local pending = #requests
 	local responses = {}
@@ -569,8 +624,7 @@ function M.complete_at(buf, row, byte_col, completion_context, callback)
 			return
 		end
 		finished = true
-		if manager.version ~= expected_version then
-			callback({ isIncomplete = false, items = {} })
+		if not valid_session(session, state, manager, expected_version) then
 			return
 		end
 		local items, seen = {}, {}
@@ -584,7 +638,7 @@ function M.complete_at(buf, row, byte_col, completion_context, callback)
 					local key = table.concat({ item.label or "", inserted or "", tostring(item.kind or "") }, "\0")
 					if not seen[key] then
 						seen[key] = true
-						table.insert(items, sanitize_completion_item(item, response, expected_version))
+						table.insert(items, sanitize_completion_item(item, response, expected_version, state.buf))
 					end
 				end
 			end
@@ -595,7 +649,10 @@ function M.complete_at(buf, row, byte_col, completion_context, callback)
 	for _, request in ipairs(requests) do
 		local params = text_document_position(request.document, request.mapped)
 		params.context = completion_context or { triggerKind = 1 }
-		local sent = request.client:request("textDocument/completion", params, function(err, result)
+		local sent = tracked_request(session, request.client, "textDocument/completion", params, function(err, result)
+			if not valid_session(session, state, manager, expected_version) then
+				return
+			end
 			table.insert(responses, {
 				err = err,
 				result = result,
@@ -604,7 +661,7 @@ function M.complete_at(buf, row, byte_col, completion_context, callback)
 			})
 			pending = pending - 1
 			finish()
-		end, request.document.buf)
+		end, request.document.buf, { expected_version = expected_version })
 		if not sent then
 			pending = pending - 1
 		end
@@ -633,14 +690,20 @@ end
 function M.resolve_completion(item, callback)
 	local metadata = item and item._nvjup
 	local client = metadata and vim.lsp.get_client_by_id(metadata.client_id) or nil
+	local state = metadata and metadata.notebook_buf and notebook.get(metadata.notebook_buf) or nil
+	local manager = state and shadow.get(state) or nil
+	local session = state and sessions[state.buf] or nil
 	local supported = client and client:supports_method("completionItem/resolve", { bufnr = metadata.document_buf })
-	if not supported then
+	if not supported or not state or not manager or not valid_session(session, state, manager, metadata.version) then
 		callback(item)
 		return
 	end
 	local request = vim.deepcopy(item)
 	request._nvjup = nil
-	client:request("completionItem/resolve", request, function(err, result)
+	tracked_request(session, client, "completionItem/resolve", request, function(err, result)
+		if not valid_session(session, state, manager, metadata.version) then
+			return
+		end
 		if err or not result then
 			callback(item)
 			return
@@ -655,15 +718,17 @@ function M.resolve_completion(item, callback)
 		result.additionalTextEdits = nil
 		result.command = nil
 		callback(result)
-	end, metadata.document_buf)
+	end, metadata.document_buf, { expected_version = metadata.version })
 end
 
 function M.execute_completion(item, callback)
 	local metadata = item and item._nvjup
 	local client = metadata and vim.lsp.get_client_by_id(metadata.client_id) or nil
-	local state = notebook.get()
+	local state = metadata and metadata.notebook_buf and notebook.get(metadata.notebook_buf) or nil
 	local manager = state and shadow.get(state) or nil
-	if client and state and manager and metadata.additional_text_edits then
+	local session = state and sessions[state.buf] or nil
+	local valid = metadata and manager and valid_session(session, state, manager, metadata.version)
+	if client and valid and metadata.additional_text_edits then
 		local ok, err = M.apply_workspace_edit(state, manager, {
 			changes = { [metadata.document_uri] = metadata.additional_text_edits },
 		}, client, metadata.version)
@@ -671,7 +736,7 @@ function M.execute_completion(item, callback)
 			notify(err, vim.log.levels.ERROR)
 		end
 	end
-	if client and metadata and metadata.command then
+	if client and valid and metadata.command then
 		client:exec_cmd(metadata.command, { bufnr = metadata.document_buf })
 	end
 	callback(item)
@@ -866,7 +931,8 @@ function M.code_action()
 				return item.action.title
 			end,
 		}, function(selected)
-			if not selected then
+			local session = sessions[state.buf]
+			if not selected or not valid_session(session, state, manager, version) then
 				return
 			end
 			if selected.action.edit then
@@ -928,11 +994,33 @@ function M.document_symbols()
 		notify("no attached language server supports document symbols", vim.log.levels.WARN)
 		return
 	end
+	local session = session_for(state)
 	local pending, version, responses = #requests, manager.version, {}
+	local finished = false
+	local function finish()
+		if finished or pending > 0 then
+			return
+		end
+		finished = true
+		if not valid_session(session, state, manager, version) then
+			return
+		end
+		local items = {}
+		for _, response in ipairs(responses) do
+			if not response.err then
+				symbol_items(response, response.result, nil, state, manager, items)
+			end
+		end
+		vim.fn.setqflist({}, " ", { title = "nvjup document symbols", items = items })
+		vim.cmd.copen()
+	end
 	for _, request in ipairs(requests) do
-		request.client:request("textDocument/documentSymbol", {
+		local sent = tracked_request(session, request.client, "textDocument/documentSymbol", {
 			textDocument = { uri = request.document.uri },
 		}, function(err, result)
+			if not valid_session(session, state, manager, version) then
+				return
+			end
 			table.insert(responses, {
 				err = err,
 				result = result,
@@ -940,18 +1028,13 @@ function M.document_symbols()
 				document = request.document,
 			})
 			pending = pending - 1
-			if pending == 0 and manager.version == version then
-				local items = {}
-				for _, response in ipairs(responses) do
-					if not response.err then
-						symbol_items(response, response.result, nil, state, manager, items)
-					end
-				end
-				vim.fn.setqflist({}, " ", { title = "nvjup document symbols", items = items })
-				vim.cmd.copen()
-			end
-		end, request.document.buf)
+			finish()
+		end, request.document.buf, { expected_version = version })
+		if not sent then
+			pending = pending - 1
+		end
 	end
+	finish()
 end
 
 local function semantic_highlight(token_type, lang)
@@ -964,23 +1047,21 @@ function M.refresh_semantic_tokens(state)
 	end
 	local manager = shadow.get(state)
 	local session = session_for(state)
-	for _, request in ipairs(session.semantic_requests or {}) do
-		pcall(request.client.cancel_request, request.client, request.id)
-	end
-	session.semantic_requests = {}
+	cancel_requests(session, function(request)
+		return request.kind == "semantic"
+	end)
 	session.semantic_generation = (session.semantic_generation or 0) + 1
 	local generation = session.semantic_generation
 	local version = manager.version
 	local pending = 0
+	local issued = 0
 	local responses = {}
 
 	local function finish()
 		if
 			pending ~= 0
 			or generation ~= session.semantic_generation
-			or manager.version ~= version
-			or sessions[state.buf] ~= session
-			or not vim.api.nvim_buf_is_valid(state.buf)
+			or not valid_session(session, state, manager, version)
 		then
 			return
 		end
@@ -1030,14 +1111,10 @@ function M.refresh_semantic_tokens(state)
 	for _, document in pairs(manager.documents) do
 		for _, client in ipairs(clients_for(document, "textDocument/semanticTokens/full")) do
 			pending = pending + 1
-			local sent, request_id = client:request("textDocument/semanticTokens/full", {
+			local sent = tracked_request(session, client, "textDocument/semanticTokens/full", {
 				textDocument = { uri = document.uri },
 			}, function(err, result)
-				if
-					sessions[state.buf] ~= session
-					or not vim.api.nvim_buf_is_valid(state.buf)
-					or generation ~= session.semantic_generation
-				then
+				if not valid_session(session, state, manager, version) or generation ~= session.semantic_generation then
 					return
 				end
 				pending = pending - 1
@@ -1045,13 +1122,19 @@ function M.refresh_semantic_tokens(state)
 					table.insert(responses, { result = result, document = document, client = client })
 				end
 				finish()
-			end, document.buf)
-			if sent and request_id then
-				table.insert(session.semantic_requests, { client = client, id = request_id })
-			elseif not sent then
+			end, document.buf, { expected_version = version, kind = "semantic" })
+			if sent then
+				issued = issued + 1
+			else
 				pending = pending - 1
 			end
 		end
+	end
+	if issued == 0 then
+		if sessions[state.buf] == session and vim.api.nvim_buf_is_valid(state.buf) then
+			vim.api.nvim_buf_clear_namespace(state.buf, state.lsp_semantic_ns, 0, -1)
+		end
+		return
 	end
 	finish()
 end
@@ -1091,9 +1174,7 @@ function M.detach(state)
 		session.refresh_timer:stop()
 		session.refresh_timer:close()
 	end
-	for _, request in ipairs(session.semantic_requests or {}) do
-		pcall(request.client.cancel_request, request.client, request.id)
-	end
+	cancel_requests(session)
 	sessions[state.buf] = nil
 end
 

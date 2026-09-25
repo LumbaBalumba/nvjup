@@ -56,7 +56,7 @@ local function mark_outputs_changed(session, cell, execution_revision, changed_o
 	render.request_cell(state, cell)
 end
 
-local function remove_display_refs(session, cell_id)
+local function remove_output_refs(session, cell_id)
 	for display_id, references in pairs(session.display_ids) do
 		local retained = {}
 		for _, reference in ipairs(references) do
@@ -70,10 +70,17 @@ local function remove_display_refs(session, cell_id)
 			session.display_ids[display_id] = retained
 		end
 	end
+	local retained = {}
+	for _, reference in ipairs(session.widget_outputs or {}) do
+		if reference.cell_id ~= cell_id then
+			table.insert(retained, reference)
+		end
+	end
+	session.widget_outputs = retained
 end
 
 local function clear_cell_for_execution(session, cell)
-	remove_display_refs(session, cell.id)
+	remove_output_refs(session, cell.id)
 	cell.outputs = {}
 	cell.raw.outputs = cell.outputs
 	cell.execution_count = nil
@@ -97,7 +104,7 @@ local function apply_pending_clear(session, cell)
 	if not cell.clear_output_wait then
 		return false
 	end
-	remove_display_refs(session, cell.id)
+	remove_output_refs(session, cell.id)
 	cell.outputs = {}
 	cell.clear_output_wait = false
 	return true
@@ -120,25 +127,37 @@ local function append_stream(session, cell, payload)
 	return output_item
 end
 
+local function materialize_widget_output(session, output_item)
+	local view = type(output_item.data) == "table" and output_item.data["application/vnd.jupyter.widget-view+json"]
+	local model_id = type(view) == "table" and view.model_id or nil
+	local model = model_id and session.widget_models[model_id] or nil
+	local model_state = model and model.state or nil
+	if
+		not (model_state and model_state._model_name == "MPLCanvasModel" and type(model_state._data_url) == "string")
+	then
+		return false
+	end
+	local png = model_state._data_url:match("^data:image/png;base64,(.+)$") or model_state._data_url
+	if not png:match("^[A-Za-z0-9+/=]+$") or #png > 16 * 1024 * 1024 then
+		return false
+	end
+	local changed = output_item.data["image/png"] ~= png
+	output_item.data["image/png"] = png
+	local size = model_state._size
+	if type(size) == "table" and tonumber(size[1]) and tonumber(size[2]) then
+		output_item.metadata = output_item.metadata or {}
+		local dimensions = output_item.metadata["image/png"]
+		local width, height = tonumber(size[1]), tonumber(size[2])
+		changed = changed or type(dimensions) ~= "table" or dimensions.width ~= width or dimensions.height ~= height
+		output_item.metadata["image/png"] = { width = width, height = height }
+	end
+	return changed
+end
+
 local function materialize_widget_images(session, cell)
 	local changed = false
 	for _, output_item in ipairs(cell.outputs or {}) do
-		local view = type(output_item.data) == "table" and output_item.data["application/vnd.jupyter.widget-view+json"]
-		local model_id = type(view) == "table" and view.model_id or nil
-		local model = model_id and session.widget_models[model_id] or nil
-		local model_state = model and model.state or nil
-		if model_state and model_state._model_name == "MPLCanvasModel" and type(model_state._data_url) == "string" then
-			local png = model_state._data_url:match("^data:image/png;base64,(.+)$") or model_state._data_url
-			if png:match("^[A-Za-z0-9+/=]+$") and #png <= 16 * 1024 * 1024 then
-				changed = changed or output_item.data["image/png"] ~= png
-				output_item.data["image/png"] = png
-				local size = model_state._size
-				if type(size) == "table" and tonumber(size[1]) and tonumber(size[2]) then
-					output_item.metadata = output_item.metadata or {}
-					output_item.metadata["image/png"] = { width = tonumber(size[1]), height = tonumber(size[2]) }
-				end
-			end
-		end
+		changed = materialize_widget_output(session, output_item) or changed
 	end
 	return changed
 end
@@ -154,7 +173,18 @@ local function append_display(session, cell, payload)
 		item.execution_count = payload.execution_count
 	end
 	table.insert(cell.outputs, item)
-	materialize_widget_images(session, cell)
+	local view = type(item.data) == "table" and item.data["application/vnd.jupyter.widget-view+json"]
+	local model_id = type(view) == "table" and view.model_id or nil
+	if model_id then
+		cell.widget_models = session.widget_models
+		table.insert(session.widget_outputs, {
+			cell_id = cell.id,
+			item = item,
+			model_id = model_id,
+			execution_id = payload.execution_id,
+		})
+		materialize_widget_output(session, item)
+	end
 	local display_id = payload.transient and payload.transient.display_id
 	if display_id then
 		session.display_ids[display_id] = session.display_ids[display_id] or {}
@@ -163,46 +193,83 @@ local function append_display(session, cell, payload)
 	return item
 end
 
-local function update_widget(session, cell, payload)
+local function widget_model_reaches(session, model_id, target_id, seen)
+	if model_id == target_id then
+		return true
+	end
+	seen = seen or {}
+	if seen[model_id] then
+		return false
+	end
+	seen[model_id] = true
+	local model = session.widget_models[model_id]
+	local function state_reaches(value)
+		if type(value) == "string" then
+			local child_id = value:match("^IPY_MODEL_(.+)$")
+			return child_id ~= nil and widget_model_reaches(session, child_id, target_id, seen)
+		end
+		if type(value) == "table" then
+			for _, child in pairs(value) do
+				if state_reaches(child) then
+					return true
+				end
+			end
+		end
+		return false
+	end
+	return model ~= nil and state_reaches(model.state)
+end
+
+local function update_widget(session, cell, item, payload)
 	local model_id = payload.model_id
 	if type(model_id) ~= "string" or model_id == "" then
 		return
 	end
-	local model = session.widget_models[model_id] or { state = {} }
+	local model = session.widget_models[model_id]
+	if not model then
+		model = { state = {}, execution_id = item.execution_id, cell_id = item.cell_id, revision = item.revision }
+	elseif model.execution_id ~= item.execution_id then
+		return
+	end
 	model.state = vim.tbl_deep_extend("force", model.state or {}, payload.state or {})
 	model.closed = payload.action == "close"
 	session.widget_models[model_id] = model
+	cell.widget_models = session.widget_models
+
 	local image_changed = false
 	local affected = {}
-	for _, notebook_cell in ipairs(session.state.cells) do
-		notebook_cell.widget_models = session.widget_models
-		local has_widget = false
-		local widget_outputs = {}
-		for _, output_item in ipairs(notebook_cell.outputs or {}) do
-			local data = type(output_item.data) == "table" and output_item.data or {}
-			if data["application/vnd.jupyter.widget-view+json"] then
-				has_widget = true
-				table.insert(widget_outputs, output_item)
-			end
-		end
-		local cell_image_changed = materialize_widget_images(session, notebook_cell)
-		if has_widget or cell_image_changed then
-			notebook.touch_outputs(notebook_cell)
-			if session.transport ~= "remote" then
-				for _, output_item in ipairs(widget_outputs) do
-					trust.mark_local_output(notebook_cell, output_item)
+	for _, reference in ipairs(session.widget_outputs) do
+		if widget_model_reaches(session, reference.model_id, model_id) then
+			local notebook_cell = session.state:cell_by_id(reference.cell_id)
+			local live = false
+			for _, output_item in ipairs(notebook_cell and notebook_cell.outputs or {}) do
+				if output_item == reference.item then
+					live = true
+					break
 				end
 			end
-			affected[notebook_cell.id] = notebook_cell
+			if live then
+				notebook_cell.widget_models = session.widget_models
+				image_changed = materialize_widget_output(session, reference.item) or image_changed
+				affected[notebook_cell.id] = affected[notebook_cell.id] or { cell = notebook_cell, outputs = {} }
+				table.insert(affected[notebook_cell.id].outputs, reference.item)
+			end
 		end
-		image_changed = cell_image_changed or image_changed
+	end
+	for _, change in pairs(affected) do
+		notebook.touch_outputs(change.cell)
+		if session.transport ~= "remote" then
+			for _, output_item in ipairs(change.outputs) do
+				trust.mark_local_output(change.cell, output_item)
+			end
+		end
 	end
 	if image_changed then
 		trust.invalidate(session.state)
 		vim.bo[session.state.buf].modified = true
 	end
-	for _, affected_cell in pairs(affected) do
-		render.request_cell(session.state, affected_cell)
+	for _, change in pairs(affected) do
+		render.request_cell(session.state, change.cell)
 	end
 end
 
@@ -383,7 +450,7 @@ local function handle_event(session, message)
 		cell.execution_status = state_name
 		refresh(session.state)
 	elseif message.type == "execution.widget" then
-		update_widget(session, cell, payload)
+		update_widget(session, cell, item, payload)
 	elseif message.type == "execution.stream" then
 		local output_item = append_stream(session, cell, payload)
 		mark_outputs_changed(session, cell, item.revision, { output_item }, item.outputs_cleared)
@@ -424,7 +491,7 @@ local function handle_event(session, message)
 		if payload.wait then
 			cell.clear_output_wait = true
 		else
-			remove_display_refs(session, cell.id)
+			remove_output_refs(session, cell.id)
 			cell.outputs = {}
 			cell.clear_output_wait = false
 			item.outputs_cleared = true
@@ -454,6 +521,7 @@ local function create_session(state)
 		starting = false,
 		display_ids = {},
 		widget_models = {},
+		widget_outputs = {},
 	}
 	session.client = client_factory({
 		cwd = state.path ~= "" and vim.fs.dirname(state.path) or nil,
@@ -886,6 +954,7 @@ function M.restart(callback)
 			session.active = nil
 			session.queue = {}
 			session.widget_models = {}
+			session.widget_outputs = {}
 			for _, cell in ipairs(state.cells) do
 				cell.widget_models = nil
 				notebook.touch_outputs(cell)
@@ -1054,9 +1123,10 @@ function M.forget_displays(state, cell_id)
 		return
 	end
 	if cell_id then
-		remove_display_refs(session, cell_id)
+		remove_output_refs(session, cell_id)
 	else
 		session.display_ids = {}
+		session.widget_outputs = {}
 	end
 end
 

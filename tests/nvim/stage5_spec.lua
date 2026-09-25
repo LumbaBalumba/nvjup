@@ -187,6 +187,36 @@ test("maps mouse cells only inside the rendered figure", function()
 	assert(interactive._pixel_position({ wincol = 103, winrow = 1 }, geometry, entry) == nil)
 end)
 
+test("caps every interactive event mix while preserving releases", function()
+	local callbacks = {}
+	interactive._set_client_factory(function()
+		return {
+			request = function(_, request_type, _, _, callback)
+				assert(request_type == "renderer.event")
+				table.insert(callbacks, callback)
+			end,
+			kill = function() end,
+		}
+	end)
+	local active = {
+		entry = { state = { buf = 99124 }, figure_id = "saturated", width = 900, height = 540 },
+		event_queue = {},
+	}
+	for index = 1, 300 do
+		local event = ({ "key", "down", "up" })[(index - 1) % 3 + 1]
+		interactive._queue_event(active, { figure_id = "saturated", event = event, key = "x", x = 1, y = 1 })
+		assert(#active.event_queue <= 64)
+	end
+	assert(#active.event_queue == 64)
+	assert(vim.tbl_contains(
+		vim.tbl_map(function(event)
+			return event.event
+		end, active.event_queue),
+		"up"
+	))
+	assert(#callbacks == 1, "the stalled request must keep all later events queued")
+end)
+
 test("queues clicks and releases behind an in-flight hover frame", function()
 	local sent = {}
 	local callbacks = {}

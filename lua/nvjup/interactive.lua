@@ -538,6 +538,15 @@ local function pointer_position()
 	return pixel_position(mouse, focus.image_geometry, focus.entry)
 end
 
+local EVENT_QUEUE_LIMIT = 64
+local EVENT_PRIORITY = {
+	move = 1,
+	wheel = 1,
+	key = 2,
+	down = 3,
+	up = 4,
+}
+
 local dispatch_event
 local function queue_event(active, payload)
 	if active.event_pending then
@@ -549,19 +558,31 @@ local function queue_event(active, payload)
 			last.delta_x = (last.delta_x or 0) + (payload.delta_x or 0)
 			last.delta_y = (last.delta_y or 0) + (payload.delta_y or 0)
 		else
-			if #queue >= 64 then
+			if #queue >= EVENT_QUEUE_LIMIT then
+				local incoming_priority = EVENT_PRIORITY[payload.event] or 2
+				local drop_index, drop_priority
 				for index, queued in ipairs(queue) do
-					if queued.event == "move" or queued.event == "wheel" then
-						table.remove(queue, index)
-						break
+					local priority = EVENT_PRIORITY[queued.event] or 2
+					if priority < incoming_priority and (not drop_priority or priority < drop_priority) then
+						drop_index, drop_priority = index, priority
 					end
+				end
+				if drop_index then
+					table.remove(queue, drop_index)
+				elseif payload.event == "up" then
+					-- A release must reach the renderer so a saturated queue cannot
+					-- leave a pointer button held indefinitely.
+					table.remove(queue, 1)
+				else
+					return false
 				end
 			end
 			table.insert(queue, payload)
 		end
-		return
+		return true
 	end
 	dispatch_event(active, payload)
+	return true
 end
 
 function dispatch_event(active, payload)
