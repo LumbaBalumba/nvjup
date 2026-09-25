@@ -147,6 +147,165 @@ test("builds the default Python sidecar command from the plugin root", function(
 	assert(command[2] == vim.fs.joinpath(root, "python", "nvjup_sidecar_main.py"))
 end)
 
+local function rpc_process_factory(record)
+	return function(command, _, on_exit)
+		table.insert(record.commands, vim.deepcopy(command))
+		local process = { closing = false, writes = {}, on_exit = on_exit }
+		function process:is_closing()
+			return self.closing
+		end
+		function process:write(data)
+			table.insert(self.writes, data)
+		end
+		function process:kill()
+			self.closing = true
+		end
+		table.insert(record.processes, process)
+		return process
+	end
+end
+
+test("resolves sidecar Python asynchronously and flushes concurrent requests in order", function()
+	rpc._reset_python_resolver()
+	local probes = {}
+	local record = { commands = {}, processes = {} }
+	local client = rpc.Client.new({
+		probe_factory = function(python, callback)
+			table.insert(probes, { python = python, callback = callback })
+		end,
+		process_factory = rpc_process_factory(record),
+	})
+	assert(#probes == 0 and #record.processes == 0)
+	local first = client:request("test.first", {}, {}, function() end)
+	local second = client:request("test.second", {}, {}, function() end)
+	assert(first == "request-1" and second == "request-2")
+	assert(#probes == 1 and #record.processes == 0)
+
+	probes[1].callback(false)
+	assert(#probes == 2 and #record.processes == 0)
+	local fallback = probes[2].python
+	probes[2].callback(true)
+	assert(#record.processes == 1)
+	assert(record.commands[1][1] == fallback)
+	assert(#record.processes[1].writes == 2)
+	assert(vim.json.decode(record.processes[1].writes[1]).type == "test.first")
+	assert(vim.json.decode(record.processes[1].writes[2]).type == "test.second")
+end)
+
+test("does not launch a sidecar after cancellation during Python resolution", function()
+	rpc._reset_python_resolver()
+	local probe_callback
+	local failure
+	local record = { commands = {}, processes = {} }
+	local client = rpc.Client.new({
+		probe_factory = function(_, callback)
+			probe_callback = callback
+		end,
+		process_factory = rpc_process_factory(record),
+	})
+	assert(client:request("test.cancel", {}, {}, function(err)
+		failure = err
+	end))
+	assert(probe_callback and #record.processes == 0)
+	client:kill()
+	assert(failure and failure.code == "sidecar_cancelled")
+	probe_callback(true)
+	assert(#record.processes == 0)
+end)
+
+test("does not launch a sidecar after shutdown during Python resolution", function()
+	rpc._reset_python_resolver()
+	local probe_callback
+	local record = { commands = {}, processes = {} }
+	local client = rpc.Client.new({
+		probe_factory = function(_, callback)
+			probe_callback = callback
+		end,
+		process_factory = rpc_process_factory(record),
+	})
+	assert(client:request("test.shutdown", {}, {}, function() end))
+	local shutdown_called = false
+	client:shutdown(function()
+		shutdown_called = true
+	end)
+	assert(shutdown_called)
+	probe_callback(true)
+	assert(#record.processes == 0)
+end)
+
+test("reuses the process-wide Python selection without probing again", function()
+	rpc._reset_python_resolver()
+	local probe_count = 0
+	local record = { commands = {}, processes = {} }
+	local options = {
+		probe_factory = function(_, callback)
+			probe_count = probe_count + 1
+			callback(true)
+		end,
+		process_factory = rpc_process_factory(record),
+	}
+	local first = rpc.Client.new(options)
+	assert(first:request("test.cache.first", {}, {}, function() end))
+	local second = rpc.Client.new(options)
+	assert(second:request("test.cache.second", {}, {}, function() end))
+	assert(probe_count == 1)
+	assert(#record.processes == 2)
+end)
+
+test("fails queued sidecar requests cleanly when process startup fails", function()
+	rpc._reset_python_resolver()
+	local probe_callback
+	local failures = {}
+	local client = rpc.Client.new({
+		probe_factory = function(_, callback)
+			probe_callback = callback
+		end,
+		process_factory = function()
+			error("process unavailable")
+		end,
+	})
+	assert(client:request("test.failure.first", {}, {}, function(err)
+		table.insert(failures, err.code)
+	end))
+	assert(client:request("test.failure.second", {}, {}, function(err)
+		table.insert(failures, err.code)
+	end))
+	probe_callback(true)
+	assert(vim.deep_equal(failures, { "sidecar_start_failed", "sidecar_start_failed" }))
+end)
+
+test("reports no automatic Python candidate and preserves explicit Python", function()
+	rpc._reset_python_resolver()
+	local failure
+	local unavailable = rpc.Client.new({
+		probe_factory = function(_, callback)
+			callback(false)
+		end,
+		process_factory = function()
+			error("must not start")
+		end,
+	})
+	assert(unavailable:request("test.unavailable", {}, {}, function(err)
+		failure = err
+	end) == nil)
+	assert(failure and failure.code == "sidecar_start_failed")
+
+	local previous_python = config.options.sidecar.python
+	local previous_command = config.options.sidecar.command
+	config.options.sidecar.python = "configured-python"
+	local record = { commands = {}, processes = {} }
+	local explicit = rpc.Client.new({ process_factory = rpc_process_factory(record) })
+	assert(explicit:request("test.explicit", {}, {}, function() end))
+	assert(record.commands[1][1] == "configured-python")
+
+	config.options.sidecar.command = { "configured-sidecar", "--stdio" }
+	local commanded = rpc.Client.new({ process_factory = rpc_process_factory(record) })
+	assert(commanded:request("test.command", {}, {}, function() end))
+	assert(vim.deep_equal(record.commands[2], { "configured-sidecar", "--stdio" }))
+	config.options.sidecar.python = previous_python
+	config.options.sidecar.command = previous_command
+end)
+
 test("prefers the project virtualenv and falls back to system Python", function()
 	local state = open_fixture("00_minimal.ipynb")
 	local python, source = kernel.find_kernel_python(state)
