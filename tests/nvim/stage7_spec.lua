@@ -414,7 +414,7 @@ test("materializes ipympl data-url frames as Kitty-compatible PNG output", funct
 			canvas = {
 				state = {
 					_model_name = "MPLCanvasModel",
-					_data_url = "data:image/png;base64," .. png,
+					_data_url = "data:image/png;base64," .. png:sub(1, 40) .. "\n\t" .. png:sub(41),
 					_size = { 640, 480 },
 				},
 			},

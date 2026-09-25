@@ -452,6 +452,37 @@ class RemoteKernelClient:
                 last_error = exc
         raise TimeoutError("remote kernel did not become ready") from last_error
 
+    async def configure_colab_defaults(self, timeout: float = 10) -> None:
+        """Select MIME-bundle Plotly output before user code imports Plotly.
+
+        Colab's default renderer emits executable ``text/html``. nvjup blocks
+        notebook HTML/JavaScript by design and renders only Plotly's structured
+        MIME bundle in its sandboxed renderer. Setting the documented Plotly
+        environment override preserves interactivity without evaluating remote
+        HTML in Neovim.
+        """
+        message_id = self.execute(
+            "__import__('os').environ['PLOTLY_RENDERER'] = 'plotly_mimetype'\n"
+            "if 'plotly.io' in __import__('sys').modules:\n"
+            "    __import__('sys').modules['plotly.io'].renderers.default = "
+            "'plotly_mimetype'",
+            silent=True,
+            store_history=False,
+            allow_stdin=False,
+        )
+        deadline = asyncio.get_running_loop().time() + timeout
+        while True:
+            remaining = deadline - asyncio.get_running_loop().time()
+            if remaining <= 0:
+                raise TimeoutError("Colab Plotly renderer configuration timed out")
+            message = await self.get_shell_msg(remaining)
+            if message.get("parent_header", {}).get("msg_id") != message_id:
+                continue
+            content = message.get("content", {})
+            if content.get("status") != "ok":
+                raise RuntimeError("Colab rejected Plotly MIME renderer configuration")
+            return
+
     async def execute_interactive(
         self,
         code: str,

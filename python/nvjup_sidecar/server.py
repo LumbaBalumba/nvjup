@@ -147,6 +147,11 @@ class KernelSession:
         await self._cancel_work("kernel restarted")
         await self.manager.restart_kernel(now=True)
         await self.client.wait_for_ready(timeout=30)
+        if (
+            self.transport == "remote"
+            and getattr(self.manager, "provider", None) == "colab"
+        ):
+            await self.client.configure_colab_defaults()
         self.generation += 1
         self.queue = asyncio.Queue()
         self.widget_comm_ids.clear()
@@ -811,10 +816,13 @@ class SidecarServer:
             await manager.start_kernel(cwd=request["payload"].get("cwd"))
             client = manager.client()
             client.start_channels()
+        ready_timeout = float(request["payload"].get("timeout", 30))
         try:
-            await client.wait_for_ready(
-                timeout=float(request["payload"].get("timeout", 30))
-            )
+            await client.wait_for_ready(timeout=ready_timeout)
+            if transport == "remote" and getattr(manager, "provider", None) == "colab":
+                await client.configure_colab_defaults(
+                    timeout=min(10, max(1, ready_timeout))
+                )
         except Exception:
             client.stop_channels()
             await manager.shutdown_kernel(now=True)

@@ -212,6 +212,22 @@ test("encodes bounded Kitty chunks with an explicit virtual placement", function
 	assert(chunks > 2)
 end)
 
+test("normalizes RFC 4648 transport whitespace without accepting other bytes", function()
+	assert(image._normalize_base64("QU JD\tRA==\r\n") == "QUJDRA==")
+	assert(image._normalize_base64("QUJD!RA==") == nil)
+end)
+
+test("accepts bounded MIME line wrapping for large remote images", function()
+	local previous = config.options.render.images.max_bytes
+	config.options.render.images.max_bytes = 3 * 1024 * 1024
+	local raw = string.rep("x", 2 * 1024 * 1024)
+	local wrapped = vim.base64.encode(raw):gsub(string.rep(".", 76), "%0\r\n")
+	local decoded, err = image._bounded_bytes({ mime = "image/jpeg", data = wrapped })
+	config.options.render.images.max_bytes = previous
+	assert(not err, err)
+	assert(decoded == raw)
+end)
+
 test("renders PNG through Kitty Unicode placeholders and cleans it up", function()
 	local writes = {}
 	image._set_test_writer(function(value)
@@ -221,13 +237,14 @@ test("renders PNG through Kitty Unicode placeholders and cleans it up", function
 	local previous = config.options.render.images.backend
 	config.options.render.images.backend = "kitty"
 	local state = { buf = vim.api.nvim_get_current_buf() }
+	local png = "iVBORw0KGgoAAAANSUhEUgAAAAQAAAADCAYAAAC09K7GAAAAEklEQVR42mPwKdrwHxkzEBQAANiRHR2gDahVAAAAAElFTkSuQmCC"
 	local cell = {
 		id = "stage4-image",
 		outputs = {
 			{
 				output_type = "display_data",
 				data = {
-					["image/png"] = "iVBORw0KGgoAAAANSUhEUgAAAAQAAAADCAYAAAC09K7GAAAAEklEQVR42mPwKdrwHxkzEBQAANiRHR2gDahVAAAAAElFTkSuQmCC",
+					["image/png"] = "data:image/png;base64," .. png:sub(1, 32) .. "\n" .. png:sub(33) .. "\n",
 				},
 				metadata = { ["image/png"] = { width = 320, height = 240 } },
 			},
@@ -245,6 +262,8 @@ test("renders PNG through Kitty Unicode placeholders and cleans it up", function
 		)
 		:find(vim.fn.nr2char(0x10EEEE), 1, true))
 	assert(writes[1]:find("a=t,f=100", 1, true))
+	assert(not writes[1]:find("data:", 1, true))
+	assert(not writes[1]:find("\n", 1, true))
 	image.finish_render(state, {})
 	assert(writes[#writes]:find("a=d,d=I", 1, true))
 	config.options.render.images.backend = previous

@@ -1,4 +1,5 @@
 local config = require("nvjup.config")
+local image = require("nvjup.image")
 local lsp = require("nvjup.lsp")
 local notebook = require("nvjup.notebook")
 local render = require("nvjup.render")
@@ -138,7 +139,8 @@ local function materialize_widget_output(session, output_item)
 		return false
 	end
 	local png = model_state._data_url:match("^data:image/png;base64,(.+)$") or model_state._data_url
-	if not png:match("^[A-Za-z0-9+/=]+$") or #png > 16 * 1024 * 1024 then
+	png = image._normalize_base64(png)
+	if not png or #png > 16 * 1024 * 1024 then
 		return false
 	end
 	local changed = output_item.data["image/png"] ~= png

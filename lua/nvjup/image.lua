@@ -334,8 +334,27 @@ local function placeholder_lines(entry)
 	return lines
 end
 
+local function normalize_base64(value)
+	if type(value) ~= "string" then
+		return nil
+	end
+	-- Jupyter Server normally sends compact base64, while Colab currently
+	-- inserts a trailing newline. RFC 4648 decoders may accept that whitespace,
+	-- but vim.base64.decode() is intentionally strict, so remove only ASCII
+	-- transport whitespace and reject every other non-base64 byte.
+	local normalized = value:gsub("[ \t\r\n]", "")
+	if normalized == "" or normalized:find("[^A-Za-z0-9+/=]") then
+		return nil
+	end
+	return normalized
+end
+
 local function decode_base64(value)
-	local ok, decoded = pcall(vim.base64.decode, value)
+	local normalized = normalize_base64(value)
+	if not normalized then
+		return nil
+	end
+	local ok, decoded = pcall(vim.base64.decode, normalized)
 	return ok and decoded or nil
 end
 
@@ -408,14 +427,33 @@ local function safe_svg(value)
 	return lowered:find("<svg", 1, true) ~= nil
 end
 
-local function descriptor_bytes(descriptor)
+local function descriptor_bytes(descriptor, maximum)
 	if descriptor.mime == "image/svg+xml" then
 		if not safe_svg(descriptor.data) then
 			return nil, "unsafe SVG was blocked"
 		end
 		return descriptor.data
 	end
-	local decoded = decode_base64(descriptor.data)
+	local value = descriptor.data
+	local data_url_prefix = "data:" .. descriptor.mime .. ";base64,"
+	if value:sub(1, #data_url_prefix):lower() == data_url_prefix then
+		value = value:sub(#data_url_prefix + 1)
+	end
+	-- Bound encoded input before allocating decoded bytes. The small allowance
+	-- covers MIME line wrapping without permitting an arbitrarily large
+	-- whitespace-only payload to bypass the decoded-size limit.
+	local encoded_limit = math.ceil(maximum / 3) * 4
+	if #value > encoded_limit + math.ceil(encoded_limit / 10) + 4096 then
+		return nil, string.format("image exceeds %d byte limit", maximum)
+	end
+	local normalized = normalize_base64(value)
+	if not normalized then
+		return nil, "invalid base64 image data"
+	end
+	if #normalized > encoded_limit + 4 then
+		return nil, string.format("image exceeds %d byte limit", maximum)
+	end
+	local decoded = decode_base64(normalized)
 	if not decoded then
 		return nil, "invalid base64 image data"
 	end
@@ -423,12 +461,12 @@ local function descriptor_bytes(descriptor)
 end
 
 local function bounded_bytes(descriptor)
-	local bytes, err = descriptor_bytes(descriptor)
+	local options = image_options()
+	local maximum = options.max_bytes or (10 * 1024 * 1024)
+	local bytes, err = descriptor_bytes(descriptor, maximum)
 	if not bytes then
 		return nil, err
 	end
-	local options = image_options()
-	local maximum = options.max_bytes or (10 * 1024 * 1024)
 	if #bytes > maximum then
 		return nil, string.format("image exceeds %d byte limit", maximum)
 	end
@@ -629,7 +667,9 @@ local function prepare(state, entry, descriptor, available_width, limits)
 	end
 	if descriptor.mime == "image/png" then
 		entry.png_bytes = bytes
-		entry.png_base64 = descriptor.data
+		-- Kitty requires a compact raw base64 payload. Re-encode validated bytes
+		-- rather than forwarding MIME whitespace or a data-URL prefix.
+		entry.png_base64 = vim.base64.encode(bytes)
 		entry.status = "converted"
 	else
 		convert_to_png(state, entry, descriptor, bytes)
@@ -827,6 +867,8 @@ end
 M._encode_transmit = encode_transmit
 M._placeholder_lines = placeholder_lines
 M._safe_svg = safe_svg
+M._normalize_base64 = normalize_base64
+M._bounded_bytes = bounded_bytes
 M._grid_dimensions = grid_dimensions
 M._descriptor_hash = descriptor_hash
 M._placements = placements

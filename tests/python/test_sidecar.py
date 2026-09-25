@@ -362,6 +362,37 @@ def test_ordinary_jupyter_transport_auth_is_unchanged() -> None:
     asyncio.run(exercise())
 
 
+def test_colab_configures_plotly_to_emit_structured_mime() -> None:
+    async def exercise() -> None:
+        client = object.__new__(RemoteKernelClient)
+        calls: list[tuple[str, dict[str, Any]]] = []
+
+        def execute(code: str, **kwargs: Any) -> str:
+            calls.append((code, kwargs))
+            return "configure-request"
+
+        async def get_shell_msg(_timeout: float | None = None) -> dict[str, Any]:
+            return {
+                "parent_header": {"msg_id": "configure-request"},
+                "content": {"status": "ok"},
+            }
+
+        client.execute = execute  # type: ignore[method-assign]
+        client.get_shell_msg = get_shell_msg  # type: ignore[method-assign]
+        await client.configure_colab_defaults()
+        assert len(calls) == 1
+        code, kwargs = calls[0]
+        assert "PLOTLY_RENDERER" in code
+        assert "plotly_mimetype" in code
+        assert kwargs == {
+            "silent": True,
+            "store_history": False,
+            "allow_stdin": False,
+        }
+
+    asyncio.run(exercise())
+
+
 def test_remote_entry_names_are_basenames_consistent_with_paths() -> None:
     valid = RemoteContentsClient._entry(
         {"name": "data.bin", "path": "tree/data.bin"},
