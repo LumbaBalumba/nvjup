@@ -497,6 +497,19 @@ local function operate_delete(browser)
 	end
 end
 
+local function loaded_buffer(path)
+	local normalized = vim.fs.normalize(vim.fn.fnamemodify(path, ":p"))
+	for _, buf in ipairs(vim.api.nvim_list_bufs()) do
+		if vim.api.nvim_buf_is_valid(buf) then
+			local name = vim.api.nvim_buf_get_name(buf)
+			if name ~= "" and vim.fs.normalize(vim.fn.fnamemodify(name, ":p")) == normalized then
+				return buf
+			end
+		end
+	end
+	return nil
+end
+
 local function navigate(browser, entry)
 	if entry and entry.type == "directory" then
 		browser[browser.active].path = entry.path
@@ -514,11 +527,20 @@ local function navigate(browser, entry)
 		local actions = require("telescope.actions")
 		actions.close(browser.prompt_bufnr)
 		vim.schedule(function()
-			vim.cmd.edit(vim.fn.fnameescape(entry.path))
+			local existing = loaded_buffer(entry.path)
+			if existing then
+				vim.api.nvim_set_current_buf(existing)
+			else
+				vim.cmd.edit(vim.fn.fnameescape(entry.path))
+			end
 		end)
 		return
 	end
 	local target = vim.fs.joinpath(browser["local"].path, entry.name)
+	if loaded_buffer(target) then
+		notify("download target is already open; close it or choose another local directory", vim.log.levels.WARN)
+		return
+	end
 	with_empty_destination(browser, "local", target, function(ready, err)
 		if not ready then
 			if err ~= "cancelled" then
@@ -846,6 +868,8 @@ end
 
 M._active = active_browsers
 M._launch = launch
+M._loaded_buffer = loaded_buffer
+M._navigate = navigate
 M._copy_recursive = copy_recursive
 M._remote_join = remote_join
 M._remote_parent = remote_parent

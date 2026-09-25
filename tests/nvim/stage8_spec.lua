@@ -41,6 +41,28 @@ test("registers the global remote UI commands", function()
 	assert(vim.fn.exists(":NvJupRemoteFiles") == 2)
 end)
 
+test("reuses an already loaded notebook during local file navigation", function()
+	local state = open_fixture("00_minimal.ipynb")
+	assert(remote_files._loaded_buffer(state.path) == state.buf)
+	local original_actions = package.loaded["telescope.actions"]
+	package.loaded["telescope.actions"] = { close = function() end }
+	local scratch = vim.api.nvim_create_buf(false, true)
+	vim.api.nvim_set_current_buf(scratch)
+	remote_files._navigate({ active = "local", prompt_bufnr = 0 }, {
+		name = vim.fs.basename(state.path),
+		path = state.path,
+		type = "file",
+		side = "local",
+	})
+	assert(vim.wait(1000, function()
+		return vim.api.nvim_get_current_buf() == state.buf
+	end, 10))
+	assert(notebook.get(state.buf) == state)
+	package.loaded["telescope.actions"] = original_actions
+	vim.api.nvim_buf_delete(scratch, { force = true })
+	close_fixture(state)
+end)
+
 test("performs bounded local filesystem operations", function()
 	local base = vim.fn.tempname()
 	assert(local_fs.mkdir(base))

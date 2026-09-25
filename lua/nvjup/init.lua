@@ -136,6 +136,21 @@ local function define_buffer_commands(buf)
 	end)
 end
 
+local function detach_buffer(state)
+	if not state then
+		return
+	end
+	local buf = state.buf
+	kernel.detach(state)
+	interactive.detach(state)
+	image.detach(state)
+	if package.loaded["nvjup.cmp"] then
+		require("nvjup.cmp").detach(buf)
+	end
+	features.detach(state)
+	notebook.detach(buf)
+end
+
 local function attach_buffer(state)
 	local buf = state.buf
 	vim.bo[buf].buftype = "acwrite"
@@ -218,15 +233,7 @@ local function attach_buffer(state)
 		buffer = buf,
 		once = true,
 		callback = function()
-			local current = notebook.get(buf)
-			kernel.detach(current)
-			interactive.detach(current)
-			image.detach(current)
-			if package.loaded["nvjup.cmp"] then
-				require("nvjup.cmp").detach(buf)
-			end
-			features.detach(notebook.get(buf))
-			notebook.detach(buf)
+			detach_buffer(notebook.get(buf))
 		end,
 	})
 
@@ -241,6 +248,11 @@ end
 local function open_buffer(args)
 	local buf = args.buf
 	local path = vim.api.nvim_buf_get_name(buf)
+	local previous = notebook.get(buf)
+	if previous then
+		detach_buffer(previous)
+		vim.api.nvim_clear_autocmds({ group = group, buffer = buf })
+	end
 	local state
 	local err
 

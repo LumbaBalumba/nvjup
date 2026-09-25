@@ -89,15 +89,37 @@ local function make_shadow_name(state, lang)
 end
 
 local function create_document(state, lang)
-	local buf = vim.api.nvim_create_buf(false, true)
+	local name = make_shadow_name(state, lang)
+	local buf
+	local occupied = false
+	for _, candidate in ipairs(vim.api.nvim_list_bufs()) do
+		if vim.api.nvim_buf_is_valid(candidate) and vim.api.nvim_buf_get_name(candidate) == name then
+			occupied = true
+			if
+				vim.b[candidate].nvjup_shadow
+				and vim.b[candidate].nvjup_notebook_buf == state.buf
+				and language.normalize(vim.bo[candidate].filetype) == language.normalize(lang)
+			then
+				buf = candidate
+			end
+			break
+		end
+	end
+	if not buf then
+		buf = vim.api.nvim_create_buf(false, true)
+		if occupied then
+			name = string.format("%s.%d", name, buf)
+		end
+		vim.api.nvim_buf_set_name(buf, name)
+	end
 	vim.bo[buf].buftype = "nofile"
 	vim.bo[buf].bufhidden = "hide"
 	vim.bo[buf].buflisted = false
 	vim.bo[buf].swapfile = false
 	vim.bo[buf].undofile = false
 	vim.bo[buf].filetype = lang
-	vim.api.nvim_buf_set_name(buf, make_shadow_name(state, lang))
 	vim.b[buf].nvjup_shadow = true
+	vim.b[buf].nvjup_shadow_lang = lang
 	vim.b[buf].nvjup_notebook_buf = state.buf
 	return {
 		buf = buf,

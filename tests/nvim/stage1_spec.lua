@@ -3,6 +3,7 @@ local Notebook = require("nvjup.notebook")
 local actions = require("nvjup.actions")
 local output = require("nvjup.output")
 local render = require("nvjup.render")
+local shadow = require("nvjup.shadow")
 
 local passed = 0
 local failures = {}
@@ -84,6 +85,35 @@ test("opens nbformat as notebook cells instead of JSON", function()
 	assert(vim.bo[state.buf].buftype == "acwrite")
 	assert(vim.api.nvim_buf_get_lines(state.buf, 0, 1, false)[1]:find(Notebook.MARKER_PREFIX, 1, true))
 	close_fixture(state)
+end)
+
+test("reuses an existing shadow buffer after notebook state reattachment", function()
+	local state = open_fixture("01_markdown_code.ipynb")
+	local original = assert(state.shadow:document("python"))
+	state.shadow = nil
+	local changed, manager = shadow.update(state)
+	assert(changed)
+	local adopted = assert(manager:document("python"))
+	assert(adopted.buf == original.buf)
+	assert(vim.api.nvim_buf_get_name(adopted.buf) == vim.api.nvim_buf_get_name(original.buf))
+	close_fixture(state)
+end)
+
+test("reopening a loaded notebook does not collide with its shadow buffer", function()
+	local state = open_fixture("01_markdown_code.ipynb")
+	local ok, err = pcall(vim.cmd.edit, vim.fn.fnameescape(state.path))
+	assert(ok, err)
+	local reopened = assert(Notebook.get(state.buf))
+	local document = assert(reopened.shadow:document("python"))
+	assert(vim.api.nvim_buf_is_valid(document.buf))
+	local shadows = 0
+	for _, buf in ipairs(vim.api.nvim_list_bufs()) do
+		if vim.api.nvim_buf_is_valid(buf) and vim.b[buf].nvjup_notebook_buf == reopened.buf then
+			shadows = shadows + 1
+		end
+	end
+	assert(shadows == 1)
+	close_fixture(reopened)
 end)
 
 test("renders one concealed marker and two border anchors per cell", function()
