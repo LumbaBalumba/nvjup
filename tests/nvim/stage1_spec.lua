@@ -172,7 +172,7 @@ test("renders full-width unbroken cell borders", function()
 		source_rows = source_rows + cell.range.end_row - cell.range.start_row + 1
 	end
 	assert(count_where(render_marks, function(item)
-		return item.virt_text_pos == "right_align" and item.virt_text_repeat_linebreak
+		return item.virt_text_pos == "eol_right_align" and item.virt_text_repeat_linebreak
 	end) == source_rows)
 
 	local expected_width = render.content_width(state.buf)
@@ -221,7 +221,7 @@ test("wraps long source lines and repeats both borders on visual rows", function
 		if item.virt_text_repeat_linebreak and item.virt_text_win_col == 0 then
 			repeated_left = true
 		end
-		if item.virt_text_repeat_linebreak and item.virt_text_pos == "right_align" then
+		if item.virt_text_repeat_linebreak and item.virt_text_pos == "eol_right_align" then
 			repeated_right = true
 		end
 	end

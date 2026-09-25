@@ -344,7 +344,9 @@ local function render_cell_chrome(state, cell, index, width, buffer_lines, clear
 		if config.options.render.right_border then
 			body_mark(row, {
 				virt_text = { { "│", "NvJupBorder" } },
-				virt_text_pos = "right_align",
+				-- Unlike right_align, eol_right_align never overlays the final
+				-- display cell of Markdown or wrapped source text.
+				virt_text_pos = "eol_right_align",
 				virt_text_repeat_linebreak = true,
 				hl_mode = "combine",
 				priority = 80,

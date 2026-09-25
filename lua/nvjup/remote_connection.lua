@@ -432,8 +432,8 @@ function M.connect(state)
 end
 
 local function choose_provider(state)
-	vim.ui.select({ "Jupyter Server", "Google Colab" }, { prompt = "Remote Jupyter provider" }, function(choice)
-		if choice == "Jupyter Server" then
+	vim.ui.select({ "Jupyter Lab", "Google Colab" }, { prompt = "Remote Jupyter provider" }, function(choice)
+		if choice == "Jupyter Lab" then
 			M.connect(state)
 		elseif choice == "Google Colab" then
 			M.connect_colab(state)

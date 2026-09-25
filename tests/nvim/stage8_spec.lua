@@ -43,6 +43,21 @@ test("registers the global remote UI commands", function()
 	assert(vim.fn.exists(":NvJupRemoteFiles") == 2)
 end)
 
+test("opens with a Jupyter Lab or Google Colab provider menu", function()
+	local original_select = vim.ui.select
+	local selected_items, selected_prompt
+	remote.disconnect()
+	vim.ui.select = function(items, options)
+		selected_items = items
+		selected_prompt = options.prompt
+	end
+	assert(remote_connection.open({ buf = vim.api.nvim_get_current_buf(), path = "" }))
+	vim.ui.select = original_select
+	remote.reset_session()
+	assert(vim.deep_equal(selected_items, { "Jupyter Lab", "Google Colab" }))
+	assert(selected_prompt == "Remote Jupyter provider")
+end)
+
 local function colab_state(path, session_id, overrides)
 	local value = vim.tbl_extend("force", {
 		name = session_id,
