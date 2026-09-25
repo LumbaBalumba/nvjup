@@ -385,12 +385,30 @@ request_open = function(state, entry)
 end
 
 function M.prepare_cell(state, cell)
+	if options().enabled == false then
+		return cell, {}
+	end
+	local has_interactive = false
+	for _, item in ipairs(cell.outputs or {}) do
+		if interactive_payload(item) then
+			has_interactive = true
+			break
+		end
+	end
+	if not has_interactive then
+		return cell, {}
+	end
+
 	local copy = vim.deepcopy(cell)
+	-- The copy can substitute trust placeholders or renderer frames and must not
+	-- reuse the source cell's output-segment cache.
+	copy.output_revision = nil
+	copy.output_render_cache = nil
 	local seen = {}
 	local trust_status = trust.status(state, cell)
 	for output_index, item in ipairs(cell.outputs or {}) do
 		local backend, figure = interactive_payload(item)
-		if backend and options().enabled ~= false then
+		if backend then
 			if trust_status ~= "trusted_interactive" then
 				copy.outputs[output_index] = blocked_copy(item, trust_status)
 			else

@@ -28,14 +28,19 @@ local function notebook_id(state)
 	return "notebook-" .. vim.fn.sha256(identity):sub(1, 24)
 end
 
-local function refresh(state)
+local function refresh(state, immediate)
 	if state and vim.api.nvim_buf_is_valid(state.buf) then
-		render.render(state)
+		if immediate then
+			render.render(state)
+		else
+			render.request(state)
+		end
 	end
 end
 
 local function mark_outputs_changed(session, cell, execution_revision)
 	local state = session.state
+	notebook.touch_outputs(cell)
 	trust.invalidate(state)
 	if session.transport ~= "remote" then
 		trust.mark_local_execution(cell, execution_revision)
@@ -71,6 +76,7 @@ local function clear_cell_for_execution(session, cell)
 	cell.output_collapsed = false
 	cell.output_expanded = false
 	cell.clear_output_wait = false
+	notebook.touch_outputs(cell)
 	cell.execution_duration_ns = nil
 	cell.stale = false
 	vim.bo[session.state.buf].modified = true
@@ -159,7 +165,19 @@ local function update_widget(session, cell, payload)
 	local image_changed = false
 	for _, notebook_cell in ipairs(session.state.cells) do
 		notebook_cell.widget_models = session.widget_models
-		image_changed = materialize_widget_images(session, notebook_cell) or image_changed
+		local has_widget = false
+		for _, output_item in ipairs(notebook_cell.outputs or {}) do
+			local data = type(output_item.data) == "table" and output_item.data or {}
+			if data["application/vnd.jupyter.widget-view+json"] then
+				has_widget = true
+				break
+			end
+		end
+		local cell_image_changed = materialize_widget_images(session, notebook_cell)
+		if has_widget or cell_image_changed then
+			notebook.touch_outputs(notebook_cell)
+		end
+		image_changed = cell_image_changed or image_changed
 	end
 	if image_changed then
 		trust.invalidate(session.state)
@@ -361,6 +379,7 @@ local function handle_event(session, message)
 		local any_changed = false
 		for _, target in pairs(changed) do
 			target.raw.outputs = target.outputs
+			notebook.touch_outputs(target)
 			any_changed = true
 		end
 		if any_changed then
@@ -703,7 +722,7 @@ function M.run_cells(state, cells, options)
 			cell.execution_status = "queued"
 		end
 	end
-	refresh(state)
+	refresh(state, true)
 	M._pump(session)
 	return batch_id, #snapshots
 end
@@ -833,7 +852,9 @@ function M.restart(callback)
 			session.widget_models = {}
 			for _, cell in ipairs(state.cells) do
 				cell.widget_models = nil
+				notebook.touch_outputs(cell)
 			end
+			refresh(state)
 			if callback then
 				callback()
 			end

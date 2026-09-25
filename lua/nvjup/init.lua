@@ -175,7 +175,7 @@ local function attach_buffer(state)
 				local cell = current:current_cell()
 				if cell and cell.cell_type == "markdown" and cell.markdown_rendered ~= false then
 					markdown.set_rendered(current, cell, false)
-					render.render(current)
+					render.render(current, { sync = false })
 				end
 			end
 			vim.schedule(function()
@@ -206,14 +206,19 @@ local function attach_buffer(state)
 		end,
 	})
 
-	vim.api.nvim_create_autocmd({ "CursorMoved", "CursorMovedI", "BufWinEnter" }, {
+	vim.api.nvim_create_autocmd({ "CursorMoved", "CursorMovedI" }, {
 		group = group,
 		buffer = buf,
 		callback = function()
-			local current = notebook.get(buf)
-			if current then
-				render.render(current)
-			end
+			render.active(notebook.get(buf))
+		end,
+	})
+
+	vim.api.nvim_create_autocmd("BufWinEnter", {
+		group = group,
+		buffer = buf,
+		callback = function()
+			render.refresh_window(notebook.get(buf))
 		end,
 	})
 
@@ -222,20 +227,9 @@ local function attach_buffer(state)
 		buffer = buf,
 		callback = function()
 			local current = notebook.get(buf)
-			if not current or current.internal_change then
-				return
+			if current and not current.internal_change then
+				render.request(current, config.options.render.debounce_ms)
 			end
-			vim.schedule(function()
-				if not vim.api.nvim_buf_is_valid(buf) then
-					return
-				end
-				local ok, err = current:sync_from_buffer()
-				if ok then
-					render.render(current)
-				else
-					notify_error(err)
-				end
-			end)
 		end,
 	})
 
@@ -319,7 +313,7 @@ function M.setup(options)
 		group = group,
 		callback = function()
 			for _, state in pairs(notebook.all()) do
-				render.render(state)
+				render.refresh_window(state)
 			end
 			interactive.resize_focus()
 		end,

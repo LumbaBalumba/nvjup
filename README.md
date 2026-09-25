@@ -225,12 +225,13 @@ Batch commands snapshot cell IDs, source, and revisions before execution and dis
 
 Loaded Markdown cells open in rendered mode. `<C-CR>`, `<S-CR>`, and the batch run commands render Markdown cells without sending them to the kernel; entering Insert mode reveals their source, and editing keeps them in source mode until they are run again. `<leader>nz` switches the current Markdown cell explicitly.
 
-When available, nvjup projects only rendered Markdown-cell ranges into `render-markdown.nvim`, so headings, bullets, code blocks, callouts, and conceal behavior reuse the user's existing Markdown configuration without interpreting code cells as Markdown. `Snacks.image` consumes the same Tree-sitter projection and renders `$...$` / `$$...$$` through LaTeX; its concealed placement hides the original formula source after the cell is rendered. These adapters are optional:
+When available, nvjup projects only rendered Markdown-cell ranges into `render-markdown.nvim`, so headings, bullets, code blocks, callouts, and conceal behavior reuse the user's existing Markdown configuration without interpreting code cells as Markdown. The projected Markdown byte count, rather than large saved notebook outputs, controls the integration limit. `Snacks.image` consumes the same Tree-sitter projection and renders `$...$` / `$$...$$` through LaTeX; its concealed placement hides the original formula source after the cell is rendered. These adapters are optional:
 
 ```lua
 require("nvjup").setup({
   render = {
     markdown = true,
+    markdown_max_bytes = 2 * 1024 * 1024,
     full_width = true,
     markdown_latex_font_size = "normalsize",
   },
@@ -249,7 +250,10 @@ Cell frames span the full text area by default, including wrapped source and ext
 require("nvjup").setup({
   render = {
     outputs = true,
+    debounce_ms = 30,
     max_output_lines = 12,
+    max_html_bytes = 512 * 1024,
+    max_text_bytes = 1024 * 1024,
     images = {
       enabled = true,
       backend = "auto", -- auto, kitty, chafa, or text
@@ -267,9 +271,9 @@ require("nvjup").setup({
 
 Stream rendering implements bare-carriage-return overwrite semantics used by console tqdm and similar progress bars. `tqdm.auto` selects ipywidgets in a Jupyter kernel, so nvjup also projects the bounded HBox/HTML/progress model subset into a live terminal progress bar. Arbitrary widget JavaScript remains disabled.
 
-HTML is never executed. Stage 4 strips active elements and renders ordinary text or `<table>` content in the terminal. SVG with scripts, event handlers, external references, entities, or embedded objects is rejected before rasterization. Image byte, pixel, conversion-time, memory, and disk limits are configurable.
+HTML is never executed. Stage 4 strips active elements and renders ordinary text or `<table>` content in the terminal. HTML and text byte limits are checked before sanitization or line splitting; oversized payloads keep their lossless notebook data but render a bounded placeholder and a `text/plain` fallback when available. Rendered output segments are cached by output revision, cursor movement updates only active-cell decoration, and bursty text/kernel events are coalesced. SVG with scripts, event handlers, external references, entities, or embedded objects is rejected before rasterization. Image byte, pixel, conversion-time, memory, and disk limits are configurable.
 
-Use `<leader>no` to toggle the inline `max_output_lines` limit for the current cell. Use `<leader>np` or `:NvJupOutputOpen` to inspect complete output without truncation in a pager; the command also accepts `split`, `vsplit`, or `tab`.
+Use `<leader>no` to toggle the inline `max_output_lines` limit for the current cell. Use `<leader>np` or `:NvJupOutputOpen` to inspect output without the line limit in a pager; byte safety limits still replace oversized HTML/text with metadata placeholders. The command also accepts `split`, `vsplit`, or `tab`.
 
 See [`docs/stage4.md`](docs/stage4.md) for lifecycle, fallback, and security details.
 

@@ -155,14 +155,15 @@ local function output_virtual_lines(state, cell, width)
 		render_cell, seen_interactive = interactive.prepare_cell(state, cell)
 	end
 	local segments = {}
-	if config.options.render.outputs then
+	local image_lines, seen_images, images_by_output = {}, {}, {}
+	if config.options.render.outputs and not cell.output_collapsed then
 		local output_options = { include_images = false }
 		if cell.output_expanded then
 			output_options.limit = false
 		end
 		segments = output.segments(render_cell, output_options)
+		image_lines, seen_images, images_by_output = image.render(state, render_cell, width)
 	end
-	local image_lines, seen_images, images_by_output = image.render(state, render_cell, width)
 	local text_line_count = 0
 	for _, segment in pairs(segments) do
 		text_line_count = text_line_count + #segment.lines
@@ -224,34 +225,79 @@ function M.configure_window(win)
 	vim.wo[win].showbreak = "  "
 end
 
-function M.render(state)
-	if not state or not vim.api.nvim_buf_is_valid(state.buf) then
+local function current_active_index(state)
+	if vim.api.nvim_get_current_buf() ~= state.buf then
+		return nil
+	end
+	local cursor_row = vim.api.nvim_win_get_cursor(0)[1] - 1
+	return state:cell_index_at(cursor_row)
+end
+
+local function update_header(state, index, active)
+	local cell = index and state.cells[index] or nil
+	if not cell or not cell.render_header_mark then
 		return
 	end
-	local ok = state:sync_from_buffer()
-	if not ok then
-		return
+	local header, highlight = header_text(cell, index, state.render_width or window_width(state.buf), active)
+	cell.render_header_mark = vim.api.nvim_buf_set_extmark(state.buf, state.render_ns, cell.range.start_row, 0, {
+		id = cell.render_header_mark,
+		virt_lines = { { { header, highlight } } },
+		virt_lines_above = true,
+		priority = 100,
+	})
+end
+
+function M.active(state, force)
+	if not state or not state.rendered or not vim.api.nvim_buf_is_valid(state.buf) then
+		return false
+	end
+	local active_index = current_active_index(state)
+	if not force and active_index == state.render_active_index then
+		return true
+	end
+	update_header(state, state.render_active_index, false)
+	vim.api.nvim_buf_clear_namespace(state.buf, state.active_ns, 0, -1)
+	state.render_active_index = active_index
+	update_header(state, active_index, true)
+	local cell = active_index and state.cells[active_index] or nil
+	if cell then
+		for row = cell.range.start_row, cell.range.end_row do
+			vim.api.nvim_buf_set_extmark(state.buf, state.active_ns, row, 0, {
+				line_hl_group = "NvJupActiveCell",
+				priority = 70,
+			})
+		end
+	end
+	return true
+end
+
+function M.render(state, options)
+	options = options or {}
+	if not state or not vim.api.nvim_buf_is_valid(state.buf) then
+		return false
+	end
+	state.render_request_generation = (state.render_request_generation or 0) + 1
+	if options.sync ~= false then
+		local ok = state:sync_from_buffer()
+		if not ok then
+			return false
+		end
 	end
 
 	define_highlights()
 	vim.api.nvim_buf_clear_namespace(state.buf, state.render_ns, 0, -1)
+	vim.api.nvim_buf_clear_namespace(state.buf, state.active_ns, 0, -1)
 	vim.api.nvim_buf_clear_namespace(state.buf, state.marker_ns, 0, -1)
 
 	local width = window_width(state.buf)
-	local cursor_row
-	if vim.api.nvim_get_current_buf() == state.buf then
-		cursor_row = vim.api.nvim_win_get_cursor(0)[1] - 1
-	end
-	local active_index = cursor_row and state:cell_index_at(cursor_row) or nil
 	local buffer_lines = vim.api.nvim_buf_get_lines(state.buf, 0, -1, false)
 	local seen_images = {}
 	local seen_interactive = {}
 
 	for index, cell in ipairs(state.cells) do
-		local active = index == active_index
-		local header, header_highlight = header_text(cell, index, width, active)
-		vim.api.nvim_buf_set_extmark(state.buf, state.render_ns, cell.range.start_row, 0, {
-			virt_lines = { { { header, header_highlight } } },
+		local header = header_text(cell, index, width, false)
+		cell.render_header_mark = vim.api.nvim_buf_set_extmark(state.buf, state.render_ns, cell.range.start_row, 0, {
+			virt_lines = { { { header, "NvJupHeader" } } },
 			virt_lines_above = true,
 			priority = 100,
 		})
@@ -272,7 +318,6 @@ function M.render(state)
 				virt_text = { { "│ ", "NvJupBorder" } },
 				virt_text_pos = "inline",
 				hl_mode = "combine",
-				line_hl_group = active and "NvJupActiveCell" or nil,
 				priority = 80,
 			})
 			-- Wrapped continuation rows do not repeat inline virtual text. Pin a
@@ -312,11 +357,47 @@ function M.render(state)
 	image.finish_render(state, seen_images)
 	interactive.finish_render(state, seen_interactive)
 
+	state.render_width = width
+	state.rendered = true
+	state.render_active_index = nil
+	M.active(state, true)
 	for _, win in ipairs(vim.fn.win_findbuf(state.buf)) do
 		M.configure_window(win)
 	end
 	features.update(state)
 	markdown.refresh(state)
+	return true
+end
+
+function M.request(state, delay_ms)
+	if not state or not vim.api.nvim_buf_is_valid(state.buf) then
+		return
+	end
+	state.render_request_generation = (state.render_request_generation or 0) + 1
+	local generation = state.render_request_generation
+	vim.defer_fn(function()
+		if
+			vim.api.nvim_buf_is_valid(state.buf)
+			and state.render_request_generation == generation
+			and notebook.get(state.buf) == state
+		then
+			M.render(state)
+		end
+	end, math.max(0, tonumber(delay_ms) or tonumber(config.options.render.debounce_ms) or 30))
+end
+
+function M.refresh_window(state)
+	if not state or not vim.api.nvim_buf_is_valid(state.buf) then
+		return
+	end
+	for _, win in ipairs(vim.fn.win_findbuf(state.buf)) do
+		M.configure_window(win)
+	end
+	if not state.rendered or state.render_width ~= window_width(state.buf) then
+		M.render(state)
+	else
+		M.active(state)
+	end
 end
 
 function M.render_current_buffer()

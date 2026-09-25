@@ -251,6 +251,26 @@ test("renders PNG through Kitty Unicode placeholders and cleans it up", function
 	image._set_test_writer(nil)
 end)
 
+test("caches image descriptors by output revision", function()
+	local cell = {
+		output_revision = 0,
+		outputs = {
+			{
+				output_type = "display_data",
+				data = { ["image/png"] = "AAAA" },
+				metadata = {},
+			},
+		},
+	}
+	local first = image.descriptors(cell)
+	assert(image.descriptors(cell) == first)
+	cell.outputs[1].data["image/png"] = "BBBB"
+	Notebook.touch_outputs(cell)
+	local changed = image.descriptors(cell)
+	assert(changed ~= first)
+	assert(changed[1].data == "BBBB")
+end)
+
 test("keeps the previous Kitty frame until its replacement is painted", function()
 	local writes = {}
 	image._set_test_writer(function(value)

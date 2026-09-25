@@ -58,8 +58,15 @@ local function initial_execution_status(outputs, execution_count)
 	return "not_executed"
 end
 
+local function touch_outputs(cell)
+	cell.output_revision = (cell.output_revision or 0) + 1
+	cell.output_render_cache = nil
+	cell.image_descriptor_cache = nil
+end
+
+M.touch_outputs = touch_outputs
+
 local function wrap_cell(state, raw)
-	raw = vim.deepcopy(raw)
 	local had_id = type(raw.id) == "string" and raw.id ~= ""
 	local id = had_id and raw.id or util.new_cell_id(existing_ids(state))
 	local cell_type = vim.tbl_contains({ "code", "markdown", "raw" }, raw.cell_type) and raw.cell_type or "raw"
@@ -76,6 +83,8 @@ local function wrap_cell(state, raw)
 		raw = raw,
 		range = {},
 		revision = 0,
+		output_revision = 0,
+		output_render_cache = nil,
 		execution_status = initial_execution_status(outputs, raw.execution_count),
 		stale = false,
 		last_executed_source = (#outputs > 0 or (raw.execution_count ~= nil and raw.execution_count ~= vim.NIL))
@@ -121,6 +130,8 @@ local function create_cell(state, cell_type, source)
 		raw = raw,
 		range = {},
 		revision = 0,
+		output_revision = 0,
+		output_render_cache = nil,
 		execution_status = "not_executed",
 		stale = false,
 		display_ids = {},
@@ -142,6 +153,7 @@ local function clear_execution(cell)
 		cell.stale = false
 		cell.last_executed_source = nil
 		cell.display_ids = {}
+		touch_outputs(cell)
 	end
 end
 
@@ -195,6 +207,7 @@ local function apply_cell_type(cell, cell_type)
 	end
 	cell.cell_type = cell_type
 	cell.markdown_rendered = cell_type == "markdown" and false or nil
+	touch_outputs(cell)
 end
 
 function Notebook:_build_buffer_lines()
@@ -301,6 +314,8 @@ function Notebook:sync_from_buffer()
 				raw = raw,
 				range = {},
 				revision = 0,
+				output_revision = 0,
+				output_render_cache = nil,
 				execution_status = "not_executed",
 				stale = false,
 				display_ids = {},
@@ -615,6 +630,7 @@ function M.open(buf, path, document)
 		cell_store = {},
 		internal_change = false,
 		render_ns = vim.api.nvim_create_namespace("nvjup-render-" .. buf),
+		active_ns = vim.api.nvim_create_namespace("nvjup-active-" .. buf),
 		marker_ns = vim.api.nvim_create_namespace("nvjup-markers-" .. buf),
 		treesitter_ns = vim.api.nvim_create_namespace("nvjup-treesitter-" .. buf),
 		lsp_diagnostic_ns = vim.api.nvim_create_namespace("nvjup-lsp-diagnostics-" .. buf),
@@ -622,8 +638,11 @@ function M.open(buf, path, document)
 	}, Notebook)
 
 	document.metadata = document.metadata or {}
-	document.cells = document.cells or {}
-	for _, raw in ipairs(document.cells) do
+	local raw_cells = document.cells or {}
+	-- Transfer the decoded cell tables into the live model. Retaining the
+	-- original tree and deep-copying it only duplicates large saved outputs.
+	document.cells = {}
+	for _, raw in ipairs(raw_cells) do
 		table.insert(state.cells, wrap_cell(state, raw))
 	end
 	if #state.cells == 0 then

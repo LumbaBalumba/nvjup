@@ -657,6 +657,11 @@ local function fallback_line(descriptor, entry)
 end
 
 function M.descriptors(cell)
+	local revision = cell.output_revision
+	local cached = revision ~= nil and cell.image_descriptor_cache or nil
+	if cached and cached.revision == revision then
+		return cached.descriptors
+	end
 	local descriptors = {}
 	for output_index, item in ipairs(cell.outputs or {}) do
 		if item.output_type == "execute_result" or item.output_type == "display_data" then
@@ -675,6 +680,9 @@ function M.descriptors(cell)
 			end
 		end
 	end
+	if revision ~= nil then
+		cell.image_descriptor_cache = { revision = revision, descriptors = descriptors }
+	end
 	return descriptors
 end
 
@@ -690,7 +698,7 @@ function M.render(state, cell, available_width, limits)
 		local first_line = #virtual_lines + 1
 		local key = image_key(state, cell, descriptor.output_index)
 		seen[key] = true
-		local hash = quick_hash(descriptor.mime .. "\0" .. descriptor.data)
+		local hash = descriptor.mime .. ":" .. quick_hash(descriptor.data)
 		local backend = selected_backend()
 		local entry = placements[key]
 		if not entry or entry.hash ~= hash or entry.backend ~= backend then

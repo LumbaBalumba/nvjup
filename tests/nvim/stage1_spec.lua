@@ -1,6 +1,8 @@
 local root = assert(vim.env.NVJUP_PROJECT_ROOT)
 local Notebook = require("nvjup.notebook")
 local actions = require("nvjup.actions")
+local config = require("nvjup.config")
+local interactive = require("nvjup.interactive")
 local kernel = require("nvjup.kernel")
 local markdown = require("nvjup.markdown")
 local output = require("nvjup.output")
@@ -592,6 +594,98 @@ test("source lines that resemble structural markers round-trip safely", function
 	local saved = vim.json.decode(saved_file:read("*a"))
 	saved_file:close()
 	assert(saved.cells[1].source == source_line)
+	close_fixture(state)
+end)
+
+test("bounds and caches large HTML output before sanitization", function()
+	local previous = config.options.render.max_html_bytes
+	config.options.render.max_html_bytes = 64
+	local cell = {
+		output_revision = 0,
+		outputs = {
+			{
+				output_type = "display_data",
+				data = {
+					["text/html"] = "<script>" .. string.rep("base64-frame", 64) .. "</script>",
+					["text/plain"] = "animation fallback",
+				},
+				metadata = {},
+			},
+		},
+	}
+	local first = output.segments(cell, { include_images = false })
+	local second = output.segments(cell, { include_images = false })
+	assert(first == second)
+	assert(find_line(first[1].lines, "animation fallback"))
+	assert(find_line(first[1].lines, "HTML output omitted"))
+	assert(find_line(first[1].lines, "payload retained in notebook"))
+
+	cell.outputs[1].data["text/html"] = "<b>small</b>"
+	Notebook.touch_outputs(cell)
+	local third = output.segments(cell, { include_images = false })
+	assert(third ~= second)
+	assert(find_line(third[1].lines, "small"))
+	local border_width = config.options.border_width
+	config.options.border_width = border_width + 1
+	local resized = output.segments(cell, { include_images = false })
+	config.options.border_width = border_width
+	assert(resized ~= third)
+	config.options.render.max_html_bytes = previous
+end)
+
+test("avoids copying cells without interactive MIME", function()
+	local cell = {
+		outputs = {
+			{ output_type = "display_data", data = { ["text/plain"] = "plain" }, metadata = {} },
+		},
+	}
+	local prepared, seen = interactive.prepare_cell({}, cell)
+	assert(prepared == cell)
+	assert(next(seen) == nil)
+end)
+
+test("skips collapsed output preprocessing", function()
+	local state = open_fixture("08_large_output.ipynb")
+	state.cells[1].output_collapsed = true
+	local original = output.segments
+	local calls = 0
+	output.segments = function(...)
+		calls = calls + 1
+		return original(...)
+	end
+	render.render(state)
+	output.segments = original
+	assert(calls == 0)
+	close_fixture(state)
+end)
+
+test("uses lightweight cursor updates and coalesces text renders", function()
+	local state = open_fixture("01_markdown_code.ipynb")
+	local original_render = render.render
+	local original_active = render.active
+	local full_calls, active_calls = 0, 0
+	render.render = function(...)
+		full_calls = full_calls + 1
+		return true
+	end
+	render.active = function(...)
+		active_calls = active_calls + 1
+		return true
+	end
+	vim.api.nvim_exec_autocmds("CursorMoved", { buffer = state.buf, modeline = false })
+	assert(full_calls == 0)
+	assert(active_calls == 1)
+
+	for _ = 1, 5 do
+		vim.api.nvim_exec_autocmds("TextChangedI", { buffer = state.buf, modeline = false })
+	end
+	assert(vim.wait(500, function()
+		return full_calls == 1
+	end, 5))
+	vim.wait(50)
+	render.render = original_render
+	render.active = original_active
+	assert(full_calls == 1)
 	close_fixture(state)
 end)
 

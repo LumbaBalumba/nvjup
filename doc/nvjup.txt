@@ -40,8 +40,12 @@ Options include:
     border_width = 88, -- fixed-width fallback and output pager width
     render = {
       outputs = true,
+      debounce_ms = 30,
       max_output_lines = 12,
+      max_html_bytes = 512 * 1024,
+      max_text_bytes = 1024 * 1024,
       markdown = true,
+      markdown_max_bytes = 2 * 1024 * 1024,
       full_width = true,
       markdown_latex_font_size = "normalsize",
       right_border = true,
@@ -192,8 +196,10 @@ its active user configuration. Snacks.image uses the same markdown,
 markdown_inline, and latex Tree-sitter projection to render $...$ and $$...$$;
 the image placement conceals the original formula. Configure these optional
 adapters with integrations.render_markdown and integrations.snacks. LaTeX
-rendering also needs pdflatex and ImageMagick. Cell frames use the full window
-text area and continue across wrapped and display-math rows. The default
+rendering also needs pdflatex and ImageMagick. The projected Markdown byte
+count, not the physical .ipynb size with saved outputs, controls
+markdown_max_bytes. Cell frames use the full window text area and continue
+across wrapped and display-math rows. The default
 markdown_latex_font_size="normalsize" keeps formulas near the terminal text
 size. :checkhealth nvjup reports all components.
 
@@ -261,14 +267,20 @@ scrolling, resizing, folds, and hidden windows without Kitty remote control.
 Cached terminal images are deleted when output changes, collapses, clears, or
 the notebook closes.
 
-HTML is never executed. SVG containing scripts, event handlers, external
-references, entities, embedded objects, or CSS URLs is rejected. Configurable
-byte, pixel, conversion-time, memory, disk, and output-size bounds apply.
+HTML is never executed. max_html_bytes and max_text_bytes are checked before
+sanitization or line splitting; oversized payloads remain losslessly stored in
+the notebook but render a bounded placeholder and text/plain fallback. Output
+segments are cached by revision, cursor movement updates only the active cell,
+and bursty changes are coalesced by debounce_ms. SVG containing scripts, event
+handlers, external references, entities, embedded objects, or CSS URLs is
+rejected. Configurable byte, pixel, conversion-time, memory, disk, and
+output-size bounds apply.
 
 <Leader>no toggles the inline max_output_lines limit for the current cell.
-<Leader>np or :NvJupOutputOpen opens the current cell's untruncated output.
-Optional modes are split, vsplit, and tab. See docs/stage4.md for protocol and
-security details. :checkhealth nvjup reports the selected backend.
+<Leader>np or :NvJupOutputOpen removes that line limit, while HTML/text byte
+limits still use metadata placeholders. Optional modes are split, vsplit, and
+tab. See docs/stage4.md for protocol and security details. :checkhealth nvjup
+reports the selected backend.
 
 `tqdm.auto` uses ipywidgets in Jupyter kernels. nvjup recognizes a bounded
 HTML/label/box/progress/button/checkbox/text/slider/selection model subset and
@@ -344,7 +356,7 @@ local panel and edits that copy. Telescope is required. See docs/stage8.md.
 :NvJupCellType          Set or cycle cell type.
 :NvJupCellToggleSource  Collapse or expand current cell source.
 :NvJupCellToggleOutput  Expand or restore the inline output line limit.
-:NvJupOutputOpen        Open full output; optional float/split/vsplit/tab mode.
+:NvJupOutputOpen        Open line-untruncated output; optional float/split/vsplit/tab mode.
 :NvJupPlotFocus          Open current Plotly/Bokeh output in external Awrit.
 :NvJupPlotFocusTui       Open screenshot-based TUI focus mode.
 :NvJupPlotStatus         Show interactive renderer state and timings.

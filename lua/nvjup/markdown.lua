@@ -29,6 +29,21 @@ local function rendered_regions(state)
 	return regions, table.concat(signature, "|")
 end
 
+local function projected_bytes(state)
+	local total = 0
+	for _, cell in ipairs(state.cells or {}) do
+		if cell.cell_type == "markdown" and cell.markdown_rendered ~= false then
+			total = total + #(cell.source or "")
+		end
+	end
+	return total
+end
+
+local function within_projected_limit(state)
+	local maximum = tonumber(config.options.render.markdown_max_bytes)
+	return not maximum or maximum <= 0 or projected_bytes(state) <= maximum
+end
+
 local function register_language()
 	if language_registered then
 		return true
@@ -71,7 +86,17 @@ local function attach_render_markdown(state)
 	if ok_config and buffer_config then
 		buffer_config.win_options.concealcursor = { default = "nc", rendered = "nc" }
 	end
+	-- render-markdown checks the on-disk file size, which includes binary and
+	-- saved output payloads that are not part of the projected Markdown tree.
+	-- Bypass that check only for this synchronous attach after nvjup has applied
+	-- its own projected-Markdown byte limit.
+	local original_max_file_size = render_state.max_file_size
+	local stat = vim.uv.fs_stat(vim.api.nvim_buf_get_name(state.buf))
+	if stat and stat.size then
+		render_state.max_file_size = math.max(original_max_file_size or 0, stat.size / (1024 * 1024) + 1)
+	end
 	local ok = pcall(manager.attach, state.buf)
+	render_state.max_file_size = original_max_file_size
 	if added_filetype then
 		table.remove(render_state.file_types, #render_state.file_types)
 	end
@@ -241,6 +266,9 @@ function M.attach(state)
 	if not enabled() or not state or not vim.api.nvim_buf_is_valid(state.buf) then
 		return false
 	end
+	if not within_projected_limit(state) then
+		return false
+	end
 	states[state.buf] = state
 	if not register_language() then
 		return false
@@ -267,7 +295,12 @@ function M.refresh(state, force)
 	if not parser then
 		return false
 	end
-	local regions, signature = rendered_regions(state)
+	local regions, signature
+	if within_projected_limit(state) then
+		regions, signature = rendered_regions(state)
+	else
+		regions, signature = {}, "oversized:" .. projected_bytes(state)
+	end
 	local changed = signature ~= state.markdown_region_signature
 	if changed or force then
 		-- LanguageTree keeps injected children when the root is projected to an
@@ -289,7 +322,9 @@ function M.refresh(state, force)
 		state.markdown_region_signature = signature
 		pcall(parser.parse, parser)
 	end
-	update_integrations(state, changed or force)
+	if changed or force then
+		update_integrations(state, true)
+	end
 	return true
 end
 

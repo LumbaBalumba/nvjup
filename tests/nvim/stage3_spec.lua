@@ -390,9 +390,13 @@ test("exposes interrupt, restart, status, commands, and execution mappings", fun
 	local client = assert(clients[1])
 	assert(kernel.interrupt())
 	assert(client:last("kernel.interrupt"))
+	state.cells[1].widget_models = { stale = true }
+	local output_revision = state.cells[1].output_revision
 	kernel.restart()
 	assert(client:last("kernel.restart"))
 	assert(kernel.status(state).generation == 2)
+	assert(state.cells[1].widget_models == nil)
+	assert(state.cells[1].output_revision == output_revision + 1)
 	for _, command in ipairs({
 		"NvJupRunCurrent",
 		"NvJupRunAndAdvance",

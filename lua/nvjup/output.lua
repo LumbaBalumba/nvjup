@@ -27,14 +27,59 @@ local function process_carriage_returns(value)
 	return table.concat(lines, "\n")
 end
 
-local function split_text(value)
+local function normalize_text(value)
 	if type(value) == "table" then
 		value = table.concat(value)
 	end
 	if type(value) ~= "string" then
 		value = vim.inspect(value)
 	end
+	return value
+end
+
+local function text_size(value)
+	if type(value) == "string" then
+		return #value
+	end
+	if type(value) == "table" then
+		local size = 0
+		for _, chunk in ipairs(value) do
+			size = size + #(type(chunk) == "string" and chunk or tostring(chunk))
+		end
+		return size
+	end
+	return #vim.inspect(value)
+end
+
+local function format_bytes(size)
+	if size >= 1024 * 1024 then
+		return string.format("%.1f MiB", size / (1024 * 1024))
+	end
+	if size >= 1024 then
+		return string.format("%.1f KiB", size / 1024)
+	end
+	return string.format("%d B", size)
+end
+
+local function split_text(value)
+	value = normalize_text(value)
 	return vim.split(process_carriage_returns(strip_ansi(value)), "\n", { plain = true, trimempty = true })
+end
+
+local function bounded_text(value, label)
+	local size = text_size(value)
+	local maximum = tonumber(config.options.render.max_text_bytes)
+	if maximum and maximum > 0 and size > maximum then
+		return {
+			string.format(
+				"[%s output omitted: %s exceeds the %s display limit]",
+				label,
+				format_bytes(size),
+				format_bytes(maximum)
+			),
+		}
+	end
+	return split_text(value)
 end
 
 local function decode_entities(value)
@@ -68,8 +113,10 @@ local function sanitize_html(value)
 	return value
 end
 
-local function strip_tags(value)
-	value = sanitize_html(value)
+local function strip_tags(value, already_sanitized)
+	if not already_sanitized then
+		value = sanitize_html(value)
+	end
 	value = value:gsub("<[bB][rR]%s*/?>", "\n")
 	value = value:gsub("</[pP]%s*>", "\n")
 	value = value:gsub("</[dD][iI][vV]%s*>", "\n")
@@ -88,7 +135,7 @@ local function table_rows(html)
 		-- the same <tr>. Parse both tags in document order; choosing one tag
 		-- family per row silently discarded every data value after the index.
 		for cell in row:gmatch("<[tT][hHdD][^>]*>([%s%S]-)</[tT][hHdD]%s*>") do
-			local text = strip_tags(cell):gsub("%s+", " "):gsub("^%s+", ""):gsub("%s+$", "")
+			local text = strip_tags(cell, true):gsub("%s+", " "):gsub("^%s+", ""):gsub("%s+$", "")
 			table.insert(cells, text)
 		end
 		if #cells > 0 then
@@ -330,19 +377,36 @@ local function render_bundle(data, metadata, options, cell)
 	end
 
 	if data["text/markdown"] then
-		return split_text(data["text/markdown"]), "markdown"
+		return bounded_text(data["text/markdown"], "Markdown"), "markdown"
 	end
 	if data["text/html"] then
-		local html = type(data["text/html"]) == "table" and table.concat(data["text/html"], "")
-			or tostring(data["text/html"])
-		local table_lines = render_table(sanitize_html(html))
-		return table_lines or split_text(strip_tags(html)), "html"
+		local size = text_size(data["text/html"])
+		local maximum = tonumber(config.options.render.max_html_bytes)
+		if maximum and maximum > 0 and size > maximum then
+			local lines = {}
+			if data["text/plain"] then
+				vim.list_extend(lines, bounded_text(data["text/plain"], "text"))
+			end
+			table.insert(
+				lines,
+				string.format(
+					"[HTML output omitted: %s > %s display limit; payload retained in notebook]",
+					format_bytes(size),
+					format_bytes(maximum)
+				)
+			)
+			return lines, "html"
+		end
+		local html = normalize_text(data["text/html"])
+		local sanitized = sanitize_html(html)
+		local table_lines = render_table(sanitized)
+		return table_lines or split_text(strip_tags(sanitized, true)), "html"
 	end
 	if data["text/latex"] then
-		return split_text(data["text/latex"]), "latex"
+		return bounded_text(data["text/latex"], "LaTeX"), "latex"
 	end
 	if data["text/plain"] then
-		return split_text(data["text/plain"]), "text"
+		return bounded_text(data["text/plain"], "text"), "text"
 	end
 
 	local mime_types = vim.tbl_keys(data)
@@ -354,7 +418,7 @@ local function render_item(item, options, cell)
 	local lines
 	local kind
 	if item.output_type == "stream" then
-		lines = split_text(item.text or "")
+		lines = bounded_text(item.text or "", item.name == "stderr" and "stderr" or "stdout")
 		kind = item.name == "stderr" and "stderr" or "stdout"
 	elseif item.output_type == "error" then
 		lines = item.traceback and vim.deepcopy(item.traceback)
@@ -376,11 +440,29 @@ local function render_item(item, options, cell)
 	return lines, kinds
 end
 
+local function segment_cache_key(options)
+	return table.concat({
+		options.include_images == false and "no-images" or "images",
+		options.limit == false and "unlimited" or tostring(config.options.render.max_output_lines),
+		tostring(config.options.render.max_html_bytes),
+		tostring(config.options.render.max_text_bytes),
+		tostring(config.options.border_width),
+	}, ":")
+end
+
 function M.segments(cell, options)
 	options = options or {}
 	if options.include_images == nil then
 		options.include_images = true
 	end
+	local cache_key = segment_cache_key(options)
+	local revision = cell.output_revision
+	local cache = revision ~= nil and cell.output_render_cache or nil
+	local cached = cache and cache[cache_key]
+	if cached and cached.revision == revision then
+		return cached.segments
+	end
+
 	local segments = {}
 	local total = 0
 	for output_index, item in ipairs(cell.outputs or {}) do
@@ -409,6 +491,10 @@ function M.segments(cell, options)
 		segments[#(cell.outputs or {})] = target
 		table.insert(target.lines, string.format("… %d more output line%s", omitted, omitted == 1 and "" or "s"))
 		table.insert(target.kinds, "truncated")
+	end
+	if revision ~= nil then
+		cell.output_render_cache = cache or {}
+		cell.output_render_cache[cache_key] = { revision = revision, segments = segments }
 	end
 	return segments
 end

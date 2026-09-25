@@ -51,7 +51,7 @@ Stream text applies terminal carriage-return overwrite semantics. This lets tqdm
 
 SVG is rejected before conversion if it contains declarations/entities, scripts, event handlers, `foreignObject`, iframe/object/embed, `href`/`src`, JavaScript/file URLs, CSS `url()`, or imports. This deliberately rejects some legitimate linked SVGs rather than allowing ImageMagick to resolve external resources.
 
-HTML is never loaded into a browser or evaluated. Scripts, styles, iframe, and object blocks are removed; remaining tags become escaped terminal text. Tables are parsed into bounded Unicode grids. Interactive trust and sandboxed HTML/JavaScript remain Stage 6 work.
+HTML is never loaded into a browser or evaluated. `render.max_html_bytes` is checked before sanitization, and oversized payloads retain their lossless notebook data while displaying a bounded placeholder plus `text/plain` fallback. Smaller HTML is sanitized once: scripts, styles, iframe, and object blocks are removed; remaining tags become escaped terminal text. Tables are parsed into bounded Unicode grids. `render.max_text_bytes` similarly bounds stream and textual MIME processing before line splitting. Interactive trust and sandboxed HTML/JavaScript remain Stage 6 work.
 
 ## Full-output pager
 
@@ -64,7 +64,7 @@ Inline text is capped by `render.max_output_lines`. `<leader>no` toggles full in
 :NvJupOutputOpen tab
 ```
 
-opens the current cell's complete textual output in an ephemeral read-only buffer. `q` or `<Esc>` closes it.
+opens the current cell's textual output without the inline line limit in an ephemeral read-only buffer. HTML/text byte limits still produce metadata placeholders instead of synchronously processing unbounded payloads. `q` or `<Esc>` closes it.
 
 ## Configuration
 
@@ -72,7 +72,10 @@ opens the current cell's complete textual output in an ephemeral read-only buffe
 require("nvjup").setup({
   render = {
     outputs = true,
+    debounce_ms = 30,
     max_output_lines = 12,
+    max_html_bytes = 512 * 1024,
+    max_text_bytes = 1024 * 1024,
     images = {
       enabled = true,
       backend = "auto",
@@ -92,7 +95,9 @@ require("nvjup").setup({
 
 `tests/nvim/stage4_spec.lua` covers:
 
-- HTML table rendering and active-content stripping;
+- HTML table rendering, active-content stripping, and pre-sanitization byte bounds;
+- revision-keyed output cache and collapsed-output short circuit;
+- lightweight cursor updates and coalesced full rendering;
 - static-image MIME priority;
 - SVG rejection policy;
 - chunked Kitty transmission and explicit virtual placement;
