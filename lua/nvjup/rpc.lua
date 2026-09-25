@@ -5,10 +5,11 @@ local Client = {}
 Client.__index = Client
 local python_resolver = {
 	probe_cache = {},
-	resolved = false,
 	resolving = false,
 	selected = nil,
 	waiters = {},
+	run = 0,
+	active_probe = nil,
 }
 
 local function plugin_root()
@@ -70,66 +71,115 @@ local function default_probe_factory(python, callback)
 	return process
 end
 
+local function cancel_probe(probe)
+	if not probe then
+		return
+	end
+	if type(probe.cancel) == "function" then
+		pcall(probe.cancel, probe)
+	elseif type(probe.kill) == "function" then
+		pcall(probe.kill, probe, 15)
+	end
+end
+
 local function resolve_python(probe_factory, callback)
-	if python_resolver.resolved then
+	if python_resolver.selected then
 		callback(python_resolver.selected)
-		return
+		return function() end
 	end
-	table.insert(python_resolver.waiters, callback)
+
+	local waiter = { callback = callback }
+	table.insert(python_resolver.waiters, waiter)
+	local cancelled = false
+	local function unsubscribe()
+		if cancelled then
+			return
+		end
+		cancelled = true
+		waiter.callback = nil
+		for index, candidate in ipairs(python_resolver.waiters) do
+			if candidate == waiter then
+				table.remove(python_resolver.waiters, index)
+				break
+			end
+		end
+		if python_resolver.resolving and #python_resolver.waiters == 0 then
+			python_resolver.run = python_resolver.run + 1
+			python_resolver.resolving = false
+			local active_probe = python_resolver.active_probe
+			python_resolver.active_probe = nil
+			cancel_probe(active_probe)
+		end
+	end
+
 	if python_resolver.resolving then
-		return
+		return unsubscribe
 	end
+
 	python_resolver.resolving = true
+	python_resolver.run = python_resolver.run + 1
+	local run = python_resolver.run
 	local candidates = python_candidates()
 	local index = 0
 
 	local function finish(python)
-		python_resolver.selected = python
-		python_resolver.resolved = true
+		if run ~= python_resolver.run then
+			return
+		end
+		python_resolver.active_probe = nil
 		python_resolver.resolving = false
+		if python then
+			python_resolver.selected = python
+			python_resolver.probe_cache[python] = true
+		end
 		local waiters = python_resolver.waiters
 		python_resolver.waiters = {}
-		for _, waiter in ipairs(waiters) do
-			waiter(python)
+		for _, pending_waiter in ipairs(waiters) do
+			local waiter_callback = pending_waiter.callback
+			pending_waiter.callback = nil
+			if waiter_callback then
+				waiter_callback(python)
+			end
 		end
 	end
 
 	local function probe_next()
+		if run ~= python_resolver.run then
+			return
+		end
 		index = index + 1
 		local python = candidates[index]
 		if not python then
 			finish(nil)
 			return
 		end
-		local cached = python_resolver.probe_cache[python]
-		if cached ~= nil then
-			if cached then
-				finish(python)
-			else
-				probe_next()
-			end
+		if python_resolver.probe_cache[python] == true then
+			finish(python)
 			return
 		end
 		local completed = false
 		local function on_probe(available)
-			if completed then
+			if completed or run ~= python_resolver.run then
 				return
 			end
 			completed = true
-			python_resolver.probe_cache[python] = available == true
+			python_resolver.active_probe = nil
 			if available then
 				finish(python)
 			else
 				probe_next()
 			end
 		end
-		local ok = pcall(probe_factory, python, on_probe)
+		local ok, probe = pcall(probe_factory, python, on_probe)
 		if not ok then
 			on_probe(false)
+		elseif not completed and run == python_resolver.run then
+			python_resolver.active_probe = probe
 		end
 	end
 
 	probe_next()
+	return unsubscribe
 end
 
 local function configured_command(options)
@@ -195,6 +245,7 @@ function Client.new(options)
 		starting = false,
 		closed = false,
 		generation = 0,
+		resolver_cancel = nil,
 	}, Client)
 end
 
@@ -209,9 +260,14 @@ function Client:_start_process()
 		return true
 	end
 	self.starting = true
+	self.generation = self.generation + 1
+	local generation = self.generation
+	self.stdout_buffer = ""
+	self.stderr_buffer = ""
 	local maximum = (config.options.sidecar and config.options.sidecar.max_message_bytes) or (128 * 1024 * 1024)
 	local env = vim.tbl_extend("force", {}, self.env or {}, { NVJUP_MAX_MESSAGE_BYTES = tostring(maximum) })
-	local ok, process = pcall(self.process_factory, self.command, {
+	local process
+	local ok, result = pcall(self.process_factory, self.command, {
 		cwd = self.cwd,
 		env = env,
 		stdin = true,
@@ -219,40 +275,51 @@ function Client:_start_process()
 		stdout = function(err, data)
 			if err then
 				vim.schedule(function()
-					self:_fail_all(structured_error("sidecar_stdout_failed", err, true))
+					if generation == self.generation and self.process == process then
+						self:_fail_all(structured_error("sidecar_stdout_failed", err, true))
+					end
 				end)
 				return
 			end
 			if data then
 				vim.schedule(function()
-					self:_consume_stdout(data)
+					if generation == self.generation and self.process == process then
+						self:_consume_stdout(data)
+					end
 				end)
 			end
 		end,
 		stderr = function(_, data)
 			if data then
 				vim.schedule(function()
-					self:_consume_stderr(data)
+					if generation == self.generation and self.process == process then
+						self:_consume_stderr(data)
+					end
 				end)
 			end
 		end,
-	}, function(result)
+	}, function(exit_result)
 		vim.schedule(function()
+			if generation ~= self.generation or self.process ~= process then
+				return
+			end
 			self.alive = false
 			self.starting = false
+			self.process = nil
 			self:_fail_all(
 				structured_error(
 					"sidecar_exited",
-					string.format("sidecar exited with code %d", result.code),
+					string.format("sidecar exited with code %d", exit_result.code),
 					true,
-					{ code = result.code, signal = result.signal, stderr = self.stderr_buffer }
+					{ code = exit_result.code, signal = exit_result.signal, stderr = self.stderr_buffer }
 				)
 			)
 			if self.on_exit then
-				self.on_exit(result)
+				self.on_exit(exit_result)
 			end
 		end)
 	end)
+	process = result
 	if not ok or not process then
 		self.starting = false
 		return nil, process or "process factory returned no process"
@@ -280,10 +347,13 @@ function Client:start()
 	self.starting = true
 	self.last_start_error = nil
 	local generation = self.generation
-	resolve_python(self.probe_factory, function(python)
+	local completed = false
+	local unsubscribe = resolve_python(self.probe_factory, function(python)
+		completed = true
 		if self.closed or generation ~= self.generation then
 			return
 		end
+		self.resolver_cancel = nil
 		self.starting = false
 		if not python then
 			self.last_start_error = "no Python with jupyter_client was found"
@@ -297,6 +367,9 @@ function Client:start()
 			self:_fail_all(structured_error("sidecar_start_failed", self.last_start_error, true))
 		end
 	end)
+	if not completed and self.starting and generation == self.generation then
+		self.resolver_cancel = unsubscribe
+	end
 	if self.last_start_error then
 		return nil, self.last_start_error
 	end
@@ -371,10 +444,52 @@ local function fail_request(request, err)
 		request.timer:stop()
 		request.timer:close()
 	end
-	if not request.done and request.callback then
+	if not request.done then
 		request.done = true
-		request.callback(err, {}, nil)
+		if request.callback then
+			request.callback(err, {}, nil)
+		end
 	end
+end
+
+function Client:_remove_queued(id)
+	for index = #self.queued, 1, -1 do
+		if self.queued[index].id == id then
+			table.remove(self.queued, index)
+		end
+	end
+end
+
+function Client:_cancel_resolution_if_idle()
+	if self.resolver_cancel and not self.alive and next(self.pending) == nil then
+		local cancel = self.resolver_cancel
+		self.resolver_cancel = nil
+		self.starting = false
+		cancel()
+	end
+end
+
+function Client:_start_request_timer(item, request)
+	if item.timeout <= 0 then
+		return
+	end
+	item.deadline = vim.uv.now() + item.timeout
+	local timer = vim.uv.new_timer()
+	request.timer = timer
+	timer:start(item.timeout, 0, function()
+		vim.schedule(function()
+			local pending = self.pending[item.id]
+			if pending and not pending.done then
+				self.pending[item.id] = nil
+				self:_remove_queued(item.id)
+				fail_request(
+					pending,
+					structured_error("request_timeout", string.format("%s timed out", item.request_type), true)
+				)
+				self:_cancel_resolution_if_idle()
+			end
+		end)
+	end)
 end
 
 function Client:_fail_all(err)
@@ -399,27 +514,19 @@ function Client:_write_request(item)
 	if not request then
 		return nil
 	end
+	if item.deadline and vim.uv.now() >= item.deadline then
+		self.pending[item.id] = nil
+		fail_request(
+			request,
+			structured_error("request_timeout", string.format("%s timed out", item.request_type), true)
+		)
+		return nil
+	end
 	local write_ok, write_err = pcall(self.process.write, self.process, item.encoded .. "\n")
 	if not write_ok then
 		self.pending[item.id] = nil
 		fail_request(request, structured_error("sidecar_write_failed", tostring(write_err), true))
 		return nil
-	end
-	if item.timeout > 0 then
-		local timer = vim.uv.new_timer()
-		request.timer = timer
-		timer:start(item.timeout, 0, function()
-			vim.schedule(function()
-				local pending = self.pending[item.id]
-				if pending and not pending.done then
-					self.pending[item.id] = nil
-					fail_request(
-						pending,
-						structured_error("request_timeout", string.format("%s timed out", item.request_type), true)
-					)
-				end
-			end)
-		end)
 	end
 	return true
 end
@@ -442,15 +549,6 @@ function Client:request(request_type, payload, context, callback)
 		end
 		return nil
 	end
-	if not self.alive or not self.process or self.process:is_closing() then
-		local ok, err = self:start()
-		if not ok then
-			if callback then
-				callback(structured_error("sidecar_start_failed", tostring(err), true), {}, nil)
-			end
-			return nil
-		end
-	end
 	self.request_seq = self.request_seq + 1
 	local id = string.format("request-%d", self.request_seq)
 	payload = payload or {}
@@ -470,10 +568,8 @@ function Client:request(request_type, payload, context, callback)
 			message[field] = context[field]
 		end
 	end
-	self.pending[id] = { callback = callback, done = false, timer = nil }
 	local encoded_ok, encoded = pcall(vim.json.encode, message)
 	if not encoded_ok then
-		self.pending[id] = nil
 		if callback then
 			callback(structured_error("request_encode_failed", tostring(encoded), false), {}, nil)
 		end
@@ -481,7 +577,6 @@ function Client:request(request_type, payload, context, callback)
 	end
 	local maximum = (config.options.sidecar and config.options.sidecar.max_message_bytes) or (128 * 1024 * 1024)
 	if #encoded + 1 > maximum then
-		self.pending[id] = nil
 		if callback then
 			callback(
 				structured_error(
@@ -503,6 +598,21 @@ function Client:request(request_type, payload, context, callback)
 			or (config.options.sidecar and config.options.sidecar.request_timeout_ms)
 			or 30000,
 	}
+	local request = { callback = callback, done = false, timer = nil }
+	self.pending[id] = request
+	self:_start_request_timer(item, request)
+
+	if not self.alive or not self.process or self.process:is_closing() then
+		local ok, err = self:start()
+		if not ok then
+			local pending = self.pending[id]
+			if pending then
+				self.pending[id] = nil
+				fail_request(pending, structured_error("sidecar_start_failed", tostring(err), true))
+			end
+			return nil
+		end
+	end
 	if self.alive and self.process and not self.process:is_closing() then
 		if not self:_write_request(item) then
 			return nil
@@ -518,6 +628,11 @@ function Client:shutdown(callback)
 		self.closed = true
 		self.generation = self.generation + 1
 		self.starting = false
+		if self.resolver_cancel then
+			local cancel = self.resolver_cancel
+			self.resolver_cancel = nil
+			cancel()
+		end
 		self:_fail_all(structured_error("sidecar_cancelled", "sidecar shutdown before startup completed", false))
 		if callback then
 			callback()
@@ -539,6 +654,11 @@ function Client:kill()
 	self.closed = true
 	self.generation = self.generation + 1
 	self.starting = false
+	if self.resolver_cancel then
+		local cancel = self.resolver_cancel
+		self.resolver_cancel = nil
+		cancel()
+	end
 	self:_fail_all(structured_error("sidecar_cancelled", "sidecar client was killed", false))
 	if self.process and not self.process:is_closing() then
 		pcall(self.process.write, self.process, nil)
@@ -548,11 +668,16 @@ function Client:kill()
 end
 
 local function reset_python_resolver()
+	python_resolver.run = python_resolver.run + 1
+	cancel_probe(python_resolver.active_probe)
+	for _, waiter in ipairs(python_resolver.waiters) do
+		waiter.callback = nil
+	end
 	python_resolver.probe_cache = {}
-	python_resolver.resolved = false
 	python_resolver.resolving = false
 	python_resolver.selected = nil
 	python_resolver.waiters = {}
+	python_resolver.active_probe = nil
 end
 
 M.Client = Client

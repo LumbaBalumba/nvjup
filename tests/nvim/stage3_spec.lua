@@ -179,6 +179,7 @@ test("resolves sidecar Python asynchronously and flushes concurrent requests in 
 	local first = client:request("test.first", {}, {}, function() end)
 	local second = client:request("test.second", {}, {}, function() end)
 	assert(first == "request-1" and second == "request-2")
+	local first_timer = assert(client.pending[first].timer)
 	assert(#probes == 1 and #record.processes == 0)
 
 	probes[1].callback(false)
@@ -190,6 +191,38 @@ test("resolves sidecar Python asynchronously and flushes concurrent requests in 
 	assert(#record.processes[1].writes == 2)
 	assert(vim.json.decode(record.processes[1].writes[1]).type == "test.first")
 	assert(vim.json.decode(record.processes[1].writes[2]).type == "test.second")
+	assert(client.pending[first].timer == first_timer)
+	client:kill()
+end)
+
+test("times out queued requests before delayed Python resolution", function()
+	rpc._reset_python_resolver()
+	local probe_callback
+	local callback_count = 0
+	local failure
+	local record = { commands = {}, processes = {} }
+	local client = rpc.Client.new({
+		probe_factory = function(_, callback)
+			probe_callback = callback
+		end,
+		process_factory = rpc_process_factory(record),
+	})
+	local id = assert(client:request("test.deadline", {}, { timeout_ms = 10 }, function(err)
+		callback_count = callback_count + 1
+		failure = err
+	end))
+	assert(
+		vim.wait(1000, function()
+			return callback_count == 1
+		end),
+		"queued request did not time out"
+	)
+	assert(failure and failure.code == "request_timeout")
+	assert(client.pending[id] == nil and #client.queued == 0)
+	probe_callback(true)
+	vim.wait(20)
+	assert(callback_count == 1)
+	assert(#record.processes == 0)
 end)
 
 test("does not launch a sidecar after cancellation during Python resolution", function()
@@ -250,6 +283,89 @@ test("reuses the process-wide Python selection without probing again", function(
 	assert(second:request("test.cache.second", {}, {}, function() end))
 	assert(probe_count == 1)
 	assert(#record.processes == 2)
+	first:kill()
+	second:kill()
+end)
+
+test("retries automatic Python selection after a transient all-candidate failure", function()
+	rpc._reset_python_resolver()
+	local failed_probes = 0
+	local first_failure
+	local first = rpc.Client.new({
+		probe_factory = function(_, callback)
+			failed_probes = failed_probes + 1
+			callback(false)
+		end,
+		process_factory = function()
+			error("must not start after failed probes")
+		end,
+	})
+	assert(first:request("test.retry.failure", {}, {}, function(err)
+		first_failure = err
+	end) == nil)
+	assert(first_failure and first_failure.code == "sidecar_start_failed")
+	assert(failed_probes > 0)
+
+	local successful_probes = 0
+	local record = { commands = {}, processes = {} }
+	local options = {
+		probe_factory = function(_, callback)
+			successful_probes = successful_probes + 1
+			callback(true)
+		end,
+		process_factory = rpc_process_factory(record),
+	}
+	local second = rpc.Client.new(options)
+	assert(second:request("test.retry.success", {}, {}, function() end))
+	local third = rpc.Client.new(options)
+	assert(third:request("test.retry.cached", {}, {}, function() end))
+	assert(successful_probes == 1)
+	assert(#record.processes == 2)
+	second:kill()
+	third:kill()
+end)
+
+test("unsubscribes one or all clients from shared Python resolution", function()
+	rpc._reset_python_resolver()
+	local probe_callback
+	local probe_cancellations = 0
+	local record = { commands = {}, processes = {} }
+	local options = {
+		probe_factory = function(_, callback)
+			probe_callback = callback
+			return {
+				cancel = function()
+					probe_cancellations = probe_cancellations + 1
+				end,
+			}
+		end,
+		process_factory = rpc_process_factory(record),
+	}
+	local first = rpc.Client.new(options)
+	local second = rpc.Client.new(options)
+	assert(first:request("test.shared.first", {}, {}, function() end))
+	assert(second:request("test.shared.second", {}, {}, function() end))
+	first:kill()
+	assert(probe_cancellations == 0)
+	probe_callback(true)
+	assert(#record.processes == 1)
+	assert(second.alive and not first.alive)
+	second:kill()
+
+	rpc._reset_python_resolver()
+	probe_callback = nil
+	probe_cancellations = 0
+	record = { commands = {}, processes = {} }
+	options.process_factory = rpc_process_factory(record)
+	first = rpc.Client.new(options)
+	second = rpc.Client.new(options)
+	assert(first:request("test.shared.cancel-first", {}, {}, function() end))
+	assert(second:request("test.shared.cancel-second", {}, {}, function() end))
+	first:shutdown()
+	second:kill()
+	assert(probe_cancellations == 1)
+	probe_callback(true)
+	assert(#record.processes == 0)
 end)
 
 test("fails queued sidecar requests cleanly when process startup fails", function()
@@ -272,6 +388,66 @@ test("fails queued sidecar requests cleanly when process startup fails", functio
 	end))
 	probe_callback(true)
 	assert(vim.deep_equal(failures, { "sidecar_start_failed", "sidecar_start_failed" }))
+end)
+
+test("ignores delayed callbacks from an earlier sidecar process", function()
+	local launches = {}
+	local stderr_calls = 0
+	local exit_calls = 0
+	local response_calls = 0
+	local client = rpc.Client.new({
+		command = { "fake-sidecar" },
+		on_stderr = function()
+			stderr_calls = stderr_calls + 1
+		end,
+		on_exit = function()
+			exit_calls = exit_calls + 1
+		end,
+		process_factory = function(_, options, on_exit)
+			local process = { closing = false, options = options, on_exit = on_exit, writes = {} }
+			function process:is_closing()
+				return self.closing
+			end
+			function process:write(data)
+				table.insert(self.writes, data)
+			end
+			function process:kill()
+				self.closing = true
+			end
+			table.insert(launches, process)
+			return process
+		end,
+	})
+	assert(client:start())
+	local first = launches[1]
+	first.closing = true
+	client.alive = false
+	assert(client:start())
+	local second = launches[2]
+	local id = assert(client:request("test.current-process", {}, { timeout_ms = 60000 }, function()
+		response_calls = response_calls + 1
+	end))
+
+	first.options.stdout(nil, vim.json.encode({
+		protocol = "nvjup/1",
+		kind = "response",
+		id = id,
+		payload = {},
+	}) .. "\n")
+	first.options.stderr(nil, "old stderr\n")
+	first.on_exit({ code = 1, signal = 0 })
+	local scheduled = false
+	vim.schedule(function()
+		scheduled = true
+	end)
+	assert(vim.wait(1000, function()
+		return scheduled
+	end))
+	assert(client.alive and client.process == second)
+	assert(client.pending[id] ~= nil)
+	assert(response_calls == 0 and stderr_calls == 0 and exit_calls == 0)
+	assert(client.stdout_buffer == "" and client.stderr_buffer == "")
+	client:kill()
 end)
 
 test("reports no automatic Python candidate and preserves explicit Python", function()
