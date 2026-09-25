@@ -639,11 +639,11 @@ local function send_key(key)
 	queue_event(focus, { figure_id = focus.entry.figure_id, event = "key", key = key })
 end
 
-local function close_focus()
-	if not focus then
+local function finalize_focus(active, close_window)
+	if not active or active.finalized then
 		return
 	end
-	local active = focus
+	active.finalized = true
 	active.closing = true
 	local release
 	if active.pointer_down and not (active.event_in_flight and active.event_in_flight.event == "up") then
@@ -672,14 +672,20 @@ local function close_focus()
 			dispatch_event(active, release)
 		end
 	end
-	focus = nil
+	if focus == active then
+		focus = nil
+	end
 	vim.o.mousemoveevent = active.previous_mousemoveevent
 	if vim.api.nvim_buf_is_valid(active.buf) then
 		image.detach({ buf = active.buf })
 	end
-	if vim.api.nvim_win_is_valid(active.win) then
+	if close_window and vim.api.nvim_win_is_valid(active.win) then
 		vim.api.nvim_win_close(active.win, true)
 	end
+end
+
+local function close_focus()
+	finalize_focus(focus, true)
 end
 
 local function focus_render_dimensions(window)
@@ -830,7 +836,7 @@ function M.open_focus(state, cell)
 		border = "rounded",
 		title = " nvjup interactive ",
 	})
-	focus = {
+	local active = {
 		buf = buffer,
 		win = window,
 		entry = entry,
@@ -839,6 +845,7 @@ function M.open_focus(state, cell)
 		event_queue = {},
 		pointer_down = false,
 	}
+	focus = active
 	vim.bo[buffer].buftype = "nofile"
 	vim.bo[buffer].bufhidden = "wipe"
 	vim.bo[buffer].modifiable = true
@@ -880,15 +887,11 @@ function M.open_focus(state, cell)
 			send_key(key_name)
 		end, { buffer = buffer, silent = true })
 	end
-	local previous_mousemoveevent = focus.previous_mousemoveevent
 	vim.api.nvim_create_autocmd("BufWipeout", {
 		buffer = buffer,
 		once = true,
 		callback = function()
-			if focus and focus.buf == buffer then
-				focus = nil
-				vim.o.mousemoveevent = previous_mousemoveevent
-			end
+			finalize_focus(active, false)
 		end,
 	})
 	update_focus(entry)

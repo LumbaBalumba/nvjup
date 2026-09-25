@@ -1,4 +1,5 @@
 local config = require("nvjup.config")
+local image = require("nvjup.image")
 local interactive = require("nvjup.interactive")
 
 local passed = 0
@@ -267,6 +268,76 @@ test("close focus drains a queued release behind an in-flight down", function()
 	table.remove(callbacks, 1)(nil, {})
 	assert(not active.event_pending)
 	assert(#active.event_queue == 0)
+	interactive.finish_render(state, {})
+end)
+
+test("API window close finalizes focus and drains an in-flight down", function()
+	local sent = {}
+	local callbacks = {}
+	interactive._set_client_factory(function()
+		return {
+			request = function(_, request_type, payload, _, callback)
+				if request_type == "renderer.open" then
+					callback(nil, {
+						figure_id = payload.figure_id,
+						png = png,
+						width = 900,
+						height = 540,
+					})
+				elseif request_type == "renderer.event" then
+					table.insert(sent, payload.event)
+					table.insert(callbacks, callback)
+				elseif callback then
+					callback(nil, {})
+				end
+			end,
+			kill = function() end,
+		}
+	end)
+	local state = { buf = 99128 }
+	local cell = {
+		id = "release-on-window-close",
+		outputs = {
+			{
+				output_type = "display_data",
+				data = { ["application/vnd.plotly.v1+json"] = { data = {}, layout = {} } },
+				metadata = {},
+			},
+		},
+	}
+	interactive.prepare_cell(state, cell)
+	local original_mousemoveevent = vim.o.mousemoveevent
+	vim.o.mousemoveevent = false
+	local focus_buf, focus_win = interactive.open_focus(state, cell)
+	local active = assert(interactive._focus())
+	local placement_count = 0
+	for _, placement in pairs(image._placements) do
+		if placement.buf == focus_buf then
+			placement_count = placement_count + 1
+		end
+	end
+	assert(placement_count > 0, "focus image placement was not created")
+	interactive._queue_event(active, { figure_id = active.entry.figure_id, event = "down", x = 4, y = 5 })
+	assert(vim.deep_equal(sent, { "down" }))
+	vim.api.nvim_win_close(focus_win, true)
+	assert(not vim.api.nvim_win_is_valid(focus_win))
+	assert(not vim.api.nvim_buf_is_valid(focus_buf))
+	assert(active.closing and active.finalized)
+	assert(interactive.status().focus == nil)
+	assert(not vim.o.mousemoveevent)
+	assert(#active.event_queue == 1 and active.event_queue[1].event == "up")
+	for _, placement in pairs(image._placements) do
+		assert(placement.buf ~= focus_buf, "focus image placement was not detached")
+	end
+	assert(#callbacks == 1)
+	table.remove(callbacks, 1)(nil, {})
+	assert(vim.deep_equal(sent, { "down", "up" }), vim.inspect(sent))
+	assert(#callbacks == 1)
+	table.remove(callbacks, 1)(nil, {})
+	assert(not active.event_pending)
+	assert(#active.event_queue == 0)
+	assert(#callbacks == 0, "focus finalization dispatched more than one release")
+	vim.o.mousemoveevent = original_mousemoveevent
 	interactive.finish_render(state, {})
 end)
 
