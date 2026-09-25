@@ -9,6 +9,7 @@ import inspect
 import json
 import math
 import os
+import stat
 import sys
 import traceback
 import uuid
@@ -22,6 +23,13 @@ from nvjup_sidecar.remote import RemoteContentsClient, RemoteKernelManager
 
 PROTOCOL = "nvjup/1"
 VERSION = "0.5.0"
+MAX_MESSAGE_BYTES = max(
+    1,
+    min(
+        int(os.environ.get("NVJUP_MAX_MESSAGE_BYTES", 128 * 1024 * 1024)),
+        512 * 1024 * 1024,
+    ),
+)
 
 
 @dataclass
@@ -551,11 +559,30 @@ class SidecarServer:
             message["error"] = error
         self.send(message)
 
+    @staticmethod
+    def _read_stdin_line() -> tuple[bytes, bool]:
+        line = sys.stdin.buffer.readline(MAX_MESSAGE_BYTES + 2)
+        if not line:
+            return b"", False
+        oversized = len(line) > MAX_MESSAGE_BYTES or not line.endswith(b"\n")
+        if oversized and not line.endswith(b"\n"):
+            while True:
+                remainder = sys.stdin.buffer.readline(MAX_MESSAGE_BYTES + 2)
+                if not remainder or remainder.endswith(b"\n"):
+                    break
+        return line, oversized
+
     async def run(self) -> None:
         while self.running:
-            line = await asyncio.to_thread(sys.stdin.readline)
+            line, oversized = await asyncio.to_thread(self._read_stdin_line)
             if not line:
                 break
+            if oversized:
+                self.log(
+                    "error",
+                    f"invalid request: message exceeds {MAX_MESSAGE_BYTES} bytes",
+                )
+                continue
             try:
                 message = json.loads(line)
                 self._validate_request(message)
@@ -1071,19 +1098,35 @@ class SidecarServer:
     ) -> dict[str, Any]:
         client = await self._contents_client(request)
         target = str(request["payload"].get("local_path", ""))
-        if not target or os.path.exists(target):
+        if not target or os.path.lexists(target):
             raise ValueError("download target must be a new local path")
-        content = await client.download(str(request["payload"].get("path", "")))
+        requested_limit = request["payload"].get("max_bytes")
+        limit = client.max_file_bytes
+        if requested_limit is not None:
+            if (
+                not isinstance(requested_limit, int)
+                or isinstance(requested_limit, bool)
+                or requested_limit < 0
+            ):
+                raise ValueError("download byte limit must be a non-negative integer")
+            limit = min(limit, requested_limit)
+        content = await client.download(
+            str(request["payload"].get("path", "")), max_bytes=limit
+        )
+        created = False
 
         def write_new() -> None:
+            nonlocal created
             with open(target, "xb") as stream:
+                created = True
                 stream.write(content)
 
         try:
             await asyncio.to_thread(write_new)
         except BaseException:
-            with contextlib.suppress(OSError):
-                os.unlink(target)
+            if created:
+                with contextlib.suppress(OSError):
+                    os.unlink(target)
             raise
         return {"size": len(content), "local_path": target}
 
@@ -1092,16 +1135,33 @@ class SidecarServer:
     ) -> dict[str, Any]:
         client = await self._contents_client(request)
         source = str(request["payload"].get("local_path", ""))
-        stat = await asyncio.to_thread(os.stat, source)
-        if not os.path.isfile(source) or stat.st_size > client.max_file_bytes:
-            raise ValueError("local upload source is not a bounded regular file")
+        requested_limit = request["payload"].get("max_bytes")
+        limit = client.max_file_bytes
+        if requested_limit is not None:
+            if (
+                not isinstance(requested_limit, int)
+                or isinstance(requested_limit, bool)
+                or requested_limit < 0
+            ):
+                raise ValueError("upload byte limit must be a non-negative integer")
+            limit = min(limit, requested_limit)
 
         def read_source() -> bytes:
             with open(source, "rb") as stream:
-                return stream.read()
+                source_stat = os.fstat(stream.fileno())
+                if not stat.S_ISREG(source_stat.st_mode) or source_stat.st_size > limit:
+                    raise ValueError(
+                        "local upload source is not a bounded regular file"
+                    )
+                content = stream.read(limit + 1)
+                if len(content) > limit:
+                    raise ValueError(f"file exceeds {limit} bytes")
+                return content
 
         content = await asyncio.to_thread(read_source)
-        return await client.upload(str(request["payload"].get("path", "")), content)
+        result = await client.upload(str(request["payload"].get("path", "")), content)
+        result["size"] = len(content)
+        return result
 
     async def _handle_remote_files_copy(
         self, request: dict[str, Any]

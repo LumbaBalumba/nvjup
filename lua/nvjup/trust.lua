@@ -5,6 +5,7 @@ local M = {}
 local POLICY_VERSION = 1
 local records
 local loaded_path
+local local_outputs = setmetatable({}, { __mode = "k" })
 
 local ACTIVE_MIMES = {
 	["application/javascript"] = true,
@@ -190,21 +191,23 @@ function M.invalidate(state)
 	state._nvjup_trust_identity = nil
 end
 
-local function locally_executed(cell)
-	return config.options.execution
-		and config.options.execution.trust_local_kernel ~= false
-		and cell
-		and cell._nvjup_local_execution_revision ~= nil
-		and cell._nvjup_local_execution_revision == (cell.revision or 0)
+local function locally_executed(cell, output_item)
+	if not (config.options.execution and config.options.execution.trust_local_kernel ~= false and cell) then
+		return false
+	end
+	if cell._nvjup_local_execution_revision ~= nil and cell._nvjup_local_execution_revision == (cell.revision or 0) then
+		return true
+	end
+	return output_item ~= nil and local_outputs[output_item] == (cell.revision or 0)
 end
 
-function M.status(state, cell)
+function M.status(state, cell, output_item)
 	if config.options.interactive and config.options.interactive.require_trust == false then
 		return "trusted_interactive", { bypassed = true }
 	end
 	local path = canonical_path(state)
 	if not path then
-		local local_execution = locally_executed(cell)
+		local local_execution = locally_executed(cell, output_item)
 		return local_execution and "trusted_interactive" or "unknown",
 			{
 				reason = "notebook has no canonical path",
@@ -219,7 +222,7 @@ function M.status(state, cell)
 	if record and record.level == "revoked" then
 		return "revoked", { path = path, record = record }
 	end
-	if locally_executed(cell) then
+	if locally_executed(cell, output_item) then
 		return "trusted_interactive", { path = path, local_kernel = true }
 	end
 	if not record then
@@ -236,13 +239,24 @@ function M.status(state, cell)
 	return record.level or "untrusted", { hash = hash, path = path, record = record }
 end
 
-function M.allows_interactive(state, cell)
-	return M.status(state, cell) == "trusted_interactive"
+function M.allows_interactive(state, cell, output_item)
+	return M.status(state, cell, output_item) == "trusted_interactive"
 end
 
 function M.mark_local_execution(cell, revision)
 	if config.options.execution and config.options.execution.trust_local_kernel ~= false and cell then
 		cell._nvjup_local_execution_revision = revision == nil and (cell.revision or 0) or revision
+	end
+end
+
+function M.mark_local_output(cell, output_item)
+	if
+		config.options.execution
+		and config.options.execution.trust_local_kernel ~= false
+		and cell
+		and type(output_item) == "table"
+	then
+		local_outputs[output_item] = cell.revision or 0
 	end
 end
 

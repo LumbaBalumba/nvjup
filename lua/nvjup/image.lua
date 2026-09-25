@@ -9,6 +9,8 @@ local PLACEHOLDER = 0x10EEEE
 local KITTY_CHUNK = 3072
 local next_image_id = 0x181818
 local placements = {}
+local allocated_image_ids = {}
+local retiring_image_ids = {}
 local test_writer
 
 -- Kitty's Unicode-placeholder protocol indexes rows/columns with this fixed
@@ -275,12 +277,15 @@ end
 
 local function delete_image(image_id)
 	tty_write(string.format("\27_Ga=d,d=I,i=%d,q=2\27\\", image_id))
+	allocated_image_ids[image_id] = nil
+	retiring_image_ids[image_id] = nil
 end
 
 local function retire_image(image_id)
-	if not image_id then
+	if not image_id or retiring_image_ids[image_id] then
 		return
 	end
+	retiring_image_ids[image_id] = true
 	-- Keep the currently displayed frame alive until the replacement has been
 	-- transmitted and Neovim has had a chance to paint its new placeholders.
 	vim.defer_fn(function()
@@ -289,11 +294,14 @@ local function retire_image(image_id)
 end
 
 local function next_id()
-	next_image_id = (next_image_id + 0x010101) % 0xffffff
-	if next_image_id == 0 then
-		next_image_id = 0x010101
+	for _ = 1, 0xffffff do
+		next_image_id = (next_image_id % 0xffffff) + 1
+		if not allocated_image_ids[next_image_id] and not retiring_image_ids[next_image_id] then
+			allocated_image_ids[next_image_id] = true
+			return next_image_id
+		end
 	end
-	return next_image_id
+	error("Kitty image ID space is exhausted")
 end
 
 local function ensure_highlight(image_id)

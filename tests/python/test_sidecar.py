@@ -1,6 +1,8 @@
 from __future__ import annotations
 
+import asyncio
 import base64
+import io
 import json
 import os
 import queue
@@ -20,8 +22,144 @@ ROOT = Path(__file__).resolve().parents[2]
 SIDECAR = ROOT / "python" / "nvjup_sidecar_main.py"
 sys.path.insert(0, str(ROOT / "python"))
 
-from nvjup_sidecar.remote import _deserialize_v1, _serialize_v1  # noqa: E402
-from nvjup_sidecar.server import Execution, KernelSession  # noqa: E402
+from nvjup_sidecar.remote import (  # noqa: E402
+    RemoteContentsClient,
+    _deserialize_v1,
+    _serialize_v1,
+)
+from nvjup_sidecar.server import Execution, KernelSession, SidecarServer  # noqa: E402
+
+
+def test_remote_entry_names_are_basenames_consistent_with_paths() -> None:
+    valid = RemoteContentsClient._entry(
+        {"name": "data.bin", "path": "tree/data.bin"},
+        expected_path="tree/data.bin",
+    )
+    assert valid["name"] == "data.bin"
+    for model in (
+        {"name": "..", "path": "tree/.."},
+        {"name": "../escape", "path": "tree/../escape"},
+        {"name": "escape/file", "path": "tree/escape/file"},
+        {"name": "file", "path": "other/file"},
+    ):
+        with pytest.raises(ValueError):
+            RemoteContentsClient._entry(model, expected_path="tree/file")
+
+    async def malicious_listing() -> None:
+        client = object.__new__(RemoteContentsClient)
+        client.max_entries = 10
+
+        async def response(*_args: object, **_kwargs: object) -> dict[str, Any]:
+            return {
+                "content": [{"name": "escape", "path": "other/escape", "type": "file"}]
+            }
+
+        client._json_request = response  # type: ignore[method-assign]
+        with pytest.raises(ValueError, match="escapes"):
+            await client.list("tree")
+
+    asyncio.run(malicious_listing())
+
+
+async def _direct_download_preserves_dangling_symlink_and_create_race(
+    tmp_path: Path,
+) -> None:
+    server = SidecarServer()
+
+    class Client:
+        max_file_bytes = 1024
+        create_race: Path | None = None
+
+        async def download(self, _path: str, max_bytes: int | None = None) -> bytes:
+            assert max_bytes == 1024
+            if self.create_race:
+                self.create_race.write_bytes(b"competitor")
+            return b"download"
+
+    client = Client()
+
+    async def contents(_request: dict[str, Any]) -> Client:
+        return client
+
+    server._contents_client = contents  # type: ignore[method-assign]
+    missing = tmp_path / "missing"
+    dangling = tmp_path / "dangling"
+    dangling.symlink_to(missing)
+    request = {
+        "payload": {"path": "remote", "local_path": str(dangling)},
+    }
+    with pytest.raises(ValueError):
+        await server._handle_remote_files_download_to(request)
+    assert dangling.is_symlink()
+
+    target = tmp_path / "raced"
+    client.create_race = target
+    request["payload"]["local_path"] = str(target)
+    with pytest.raises(FileExistsError):
+        await server._handle_remote_files_download_to(request)
+    assert target.read_bytes() == b"competitor"
+
+
+def test_direct_download_preserves_dangling_symlink_and_create_race(
+    tmp_path: Path,
+) -> None:
+    asyncio.run(_direct_download_preserves_dangling_symlink_and_create_race(tmp_path))
+
+
+async def _direct_transfers_enforce_actual_byte_limit(tmp_path: Path) -> None:
+    server = SidecarServer()
+
+    class Client:
+        max_file_bytes = 1024
+
+        async def download(self, _path: str, max_bytes: int | None = None) -> bytes:
+            if max_bytes is not None and 5 > max_bytes:
+                raise ValueError("file exceeds limit")
+            return b"12345"
+
+        async def upload(self, _path: str, content: bytes) -> dict[str, Any]:
+            return {"name": "target", "path": "target", "received": content}
+
+    client = Client()
+
+    async def contents(_request: dict[str, Any]) -> Client:
+        return client
+
+    server._contents_client = contents  # type: ignore[method-assign]
+    target = tmp_path / "target"
+    with pytest.raises(ValueError):
+        await server._handle_remote_files_download_to(
+            {"payload": {"path": "remote", "local_path": str(target), "max_bytes": 4}}
+        )
+    assert not target.exists()
+
+    source = tmp_path / "source"
+    source.write_bytes(b"12345")
+    with pytest.raises(ValueError):
+        await server._handle_remote_files_upload_from(
+            {"payload": {"path": "remote", "local_path": str(source), "max_bytes": 4}}
+        )
+
+
+def test_direct_transfers_enforce_actual_byte_limit(tmp_path: Path) -> None:
+    asyncio.run(_direct_transfers_enforce_actual_byte_limit(tmp_path))
+
+
+def test_sidecar_stdin_reader_bounds_oversized_lines(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    import nvjup_sidecar.server as server_module
+
+    class Input:
+        buffer = io.BytesIO(b"x" * 20 + b'\n{"ok": true}\n')
+
+    monkeypatch.setattr(server_module, "MAX_MESSAGE_BYTES", 16)
+    monkeypatch.setattr(server_module.sys, "stdin", Input())
+    _, oversized = SidecarServer._read_stdin_line()
+    assert oversized
+    line, oversized = SidecarServer._read_stdin_line()
+    assert not oversized
+    assert line == b'{"ok": true}\n'
 
 
 class SidecarProcess:

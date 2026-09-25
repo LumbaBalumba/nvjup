@@ -32,6 +32,24 @@ local function valid_basename(name)
 		and not name:find("\0", 1, true)
 end
 
+local function validate_remote_entries(parent, entries)
+	if type(entries) ~= "table" or not vim.islist(entries) then
+		return nil, "remote directory entries must be a list"
+	end
+	for _, entry in ipairs(entries) do
+		if
+			type(entry) ~= "table"
+			or type(entry.name) ~= "string"
+			or type(entry.path) ~= "string"
+			or not valid_basename(entry.name)
+			or entry.path ~= remote_join(parent, entry.name)
+		then
+			return nil, "remote entry name or path is invalid"
+		end
+	end
+	return entries
+end
+
 local function side_label(side)
 	return side == "local" and "Local" or "Remote"
 end
@@ -122,8 +140,13 @@ local function load_remote(browser, callback)
 			callback(nil, error_message(err))
 			return
 		end
+		local remote_entries, validation_err = validate_remote_entries(browser.remote.path, payload.entries or {})
+		if not remote_entries then
+			callback(nil, validation_err)
+			return
+		end
 		local entries = {}
-		for _, entry in ipairs(payload.entries or {}) do
+		for _, entry in ipairs(remote_entries) do
 			if browser.show_hidden or (entry.name or ""):sub(1, 1) ~= "." then
 				entry.side = "remote"
 				table.insert(entries, entry)
@@ -189,10 +212,15 @@ local function list_side(browser, side, path, callback)
 				callback(nil, error_message(err))
 				return
 			end
-			for _, entry in ipairs(payload.entries or {}) do
+			local entries, validation_err = validate_remote_entries(path, payload.entries or {})
+			if not entries then
+				callback(nil, validation_err)
+				return
+			end
+			for _, entry in ipairs(entries) do
 				entry.side = "remote"
 			end
-			callback(payload.entries or {})
+			callback(entries)
 		end)
 	end
 end
@@ -247,40 +275,42 @@ local function copy_recursive(browser, source_side, entry, target_side, target, 
 		return
 	end
 	if entry.type ~= "directory" then
-		local declared_size = tonumber(entry.size) or 0
-		if declared_size > 0 and budget.bytes + declared_size > budget.max_bytes then
-			callback(nil, string.format("transfer exceeds %d bytes", budget.max_bytes))
-			return
-		end
+		local remaining = budget.max_bytes - budget.bytes
 		if source_side == "remote" and target_side == "local" and browser.client.download_to then
 			local parent = vim.fs.dirname(target)
 			if vim.fn.mkdir(parent, "p", 493) ~= 1 and not vim.uv.fs_stat(parent) then
 				callback(nil, "failed to create local destination directory")
 				return
 			end
-			browser.client:download_to(entry.path, target, function(err, payload)
+			browser.client:download_to(entry.path, target, remaining, function(err, payload)
 				if err then
 					callback(nil, error_message(err))
 					return
 				end
-				budget.bytes = budget.bytes + (tonumber((payload or {}).size) or declared_size)
+				local actual_size = tonumber((payload or {}).size)
+				if not actual_size or actual_size < 0 or actual_size > remaining then
+					local_fs.delete_async(target, function()
+						callback(nil, string.format("transfer exceeds %d bytes", budget.max_bytes))
+					end)
+					return
+				end
+				budget.bytes = budget.bytes + actual_size
 				callback(true)
 			end)
 			return
 		elseif source_side == "local" and target_side == "remote" and browser.client.upload_from then
-			browser.client:upload_from(target, entry.path, function(err)
-				if not err then
-					budget.bytes = budget.bytes + declared_size
+			browser.client:upload_from(target, entry.path, remaining, function(err, payload)
+				if err then
+					callback(nil, error_message(err))
+					return
 				end
-				callback(not err, err and error_message(err) or nil)
-			end)
-			return
-		elseif source_side == "remote" and target_side == "remote" and browser.client.copy then
-			browser.client:copy(entry.path, target, function(err)
-				if not err then
-					budget.bytes = budget.bytes + declared_size
+				local actual_size = tonumber((payload or {}).size)
+				if not actual_size or actual_size < 0 or actual_size > remaining then
+					callback(nil, string.format("transfer exceeds %d bytes", budget.max_bytes))
+					return
 				end
-				callback(not err, err and error_message(err) or nil)
+				budget.bytes = budget.bytes + actual_size
+				callback(true)
 			end)
 			return
 		end
@@ -915,6 +945,7 @@ M._launch = launch
 M._loaded_buffer = loaded_buffer
 M._navigate = navigate
 M._copy_recursive = copy_recursive
+M._validate_remote_entries = validate_remote_entries
 M._remote_join = remote_join
 M._remote_parent = remote_parent
 

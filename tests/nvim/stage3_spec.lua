@@ -427,7 +427,126 @@ test("exposes interrupt, restart, status, commands, and execution mappings", fun
 	close_fixture(state)
 end)
 
+test("finishes a deleted active cell and pumps the queued execution", function()
+	setup_fake()
+	local state = open_fixture("09_lsp_mapping.ipynb")
+	local cells = code_cells(state)
+	kernel.run_cells(state, { cells[1], cells[2] })
+	local client = assert(clients[1])
+	local first = assert(client:last("execution.enqueue"))
+	for index, candidate in ipairs(state.cells) do
+		if candidate.id == cells[1].id then
+			table.remove(state.cells, index)
+			state.cell_store[candidate.id] = nil
+			for shifted = index, #state.cells do
+				state.cells[shifted].index = shifted
+			end
+			break
+		end
+	end
+	terminal(client, first, "completed", 1)
+	assert(
+		vim.wait(1000, function()
+			return client:count("execution.enqueue") == 2
+		end),
+		"queue remained blocked after the executing cell was deleted"
+	)
+	assert(kernel.status(state).active ~= first.payload.execution_id)
+	close_fixture(state)
+end)
+
+test("trusts only output produced by a non-clearing local execution", function()
+	setup_fake()
+	config.options.execution.clear_before_run = false
+	local state = open_fixture("05_plotly.ipynb")
+	local cell = code_cells(state)[1]
+	local persisted = cell.outputs[1]
+	kernel.run_cells(state, { cell })
+	local client = assert(clients[1])
+	local request = assert(client:last("execution.enqueue"))
+	client:emit("execution.display", {
+		execution_id = request.payload.execution_id,
+		output_type = "display_data",
+		data = { ["application/vnd.plotly.v1+json"] = { data = {}, layout = {} } },
+		metadata = {},
+	}, request)
+	local produced = cell.outputs[#cell.outputs]
+	assert(trust.status(state, cell, persisted) ~= "trusted_interactive")
+	assert(trust.status(state, cell, produced) == "trusted_interactive")
+	assert(trust.status(state, cell) ~= "trusted_interactive")
+	config.options.execution.clear_before_run = true
+	close_fixture(state)
+end)
+
+test("targets widget and display-update burst renders to affected cells", function()
+	setup_fake()
+	local state = open_fixture("09_lsp_mapping.ipynb")
+	local cell = code_cells(state)[1]
+	kernel.run_cells(state, { cell })
+	local client = assert(clients[1])
+	local request = assert(client:last("execution.enqueue"))
+	client:emit("execution.display", {
+		execution_id = request.payload.execution_id,
+		output_type = "display_data",
+		data = { ["application/vnd.jupyter.widget-view+json"] = { model_id = "root" } },
+		metadata = {},
+		transient = { display_id = "burst" },
+	}, request)
+	local original_request, original_request_cell = render.request, render.request_cell
+	local full, targeted = 0, 0
+	render.request = function()
+		full = full + 1
+	end
+	render.request_cell = function(_, target)
+		assert(target.id == cell.id)
+		targeted = targeted + 1
+	end
+	for index = 1, 5 do
+		client:emit("execution.widget", {
+			execution_id = request.payload.execution_id,
+			action = "update",
+			model_id = "root",
+			state = { value = index },
+		}, request)
+		client:emit("execution.display_update", {
+			execution_id = request.payload.execution_id,
+			data = {
+				["text/plain"] = tostring(index),
+				["application/vnd.jupyter.widget-view+json"] = { model_id = "root" },
+			},
+			metadata = {},
+			transient = { display_id = "burst" },
+		}, request)
+	end
+	render.request, render.request_cell = original_request, original_request_cell
+	assert(full == 0)
+	assert(targeted == 10, "expected targeted burst renders, got " .. targeted)
+	close_fixture(state)
+end)
+
 kernel._set_client_factory(nil)
+
+test("rejects oversized outbound RPC before writing", function()
+	local previous = config.options.sidecar.max_message_bytes
+	config.options.sidecar.max_message_bytes = 128
+	local writes, failure = 0
+	local client = rpc.Client.new({ command = { "true" } })
+	client.alive = true
+	client.process = {
+		is_closing = function()
+			return false
+		end,
+		write = function()
+			writes = writes + 1
+		end,
+	}
+	assert(client:request("oversized", { value = string.rep("x", 256) }, {}, function(err)
+		failure = err
+	end) == nil)
+	assert(writes == 0)
+	assert(failure and failure.code == "request_message_too_large")
+	config.options.sidecar.max_message_bytes = previous
+end)
 
 test("cancels RPC timeout handles after an immediate response", function()
 	local client = rpc.Client.new({ command = { "true" } })

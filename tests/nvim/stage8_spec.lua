@@ -380,6 +380,138 @@ test("recursively transfers a local directory tree to remote storage", function(
 	assert(local_fs.delete(base))
 end)
 
+test("rejects malicious direct and recursive remote entry responses", function()
+	for _, entry in ipairs({
+		{ name = "..", path = "workspace/.." },
+		{ name = "escape/file", path = "workspace/escape/file" },
+		{ name = "file", path = "other/file" },
+	}) do
+		local entries, err = remote_files._validate_remote_entries("workspace", { entry })
+		assert(entries == nil and err)
+	end
+	local deleted, failure
+	local browser = {
+		client = {
+			mkdir = function(_, _, callback)
+				callback(nil, {})
+			end,
+			list = function(_, _, callback)
+				callback(nil, { entries = { { name = "../escape", path = "tree/../escape", type = "file" } } })
+			end,
+			delete = function(_, path, callback)
+				deleted = path
+				callback(nil)
+			end,
+		},
+	}
+	remote_files._copy_recursive(
+		browser,
+		"remote",
+		{ name = "tree", path = "tree", type = "directory" },
+		"remote",
+		"copy",
+		{ count = 0, max = 10, bytes = 0, max_bytes = 100 },
+		function(ok, err)
+			assert(not ok)
+			failure = err
+		end
+	)
+	assert(failure and failure:find("invalid", 1, true))
+	assert(deleted == "copy")
+end)
+
+test("enforces cumulative actual bytes for direct directory transfers", function()
+	local created, failure = {}, nil
+	local original_list = local_fs.list
+	local_fs.list = function(path)
+		assert(path == "/local/tree")
+		return {
+			{ name = "one", path = "/local/tree/one", type = "file", size = 1, side = "local" },
+			{ name = "two", path = "/local/tree/two", type = "file", side = "local" },
+		}
+	end
+	local browser = {
+		client = {
+			mkdir = function(_, path, callback)
+				created[path] = "directory"
+				callback(nil, {})
+			end,
+			list = function(_, _, callback)
+				callback(nil, {
+					entries = {
+						{ name = "one", path = "tree/one", type = "file", size = 1 },
+						{ name = "two", path = "tree/two", type = "file" },
+					},
+				})
+			end,
+			upload_from = function(_, remote_path, _, remaining, callback)
+				local actual = remote_path:find("one", 1, true) and 6 or 5
+				assert(remaining == (remote_path:find("one", 1, true) and 10 or 4))
+				callback(nil, { size = actual })
+			end,
+			delete = function(_, path, callback)
+				created[path] = nil
+				callback(nil)
+			end,
+		},
+	}
+	remote_files._copy_recursive(
+		browser,
+		"local",
+		{ name = "tree", path = "/local/tree", type = "directory" },
+		"remote",
+		"tree",
+		{ count = 0, max = 10, bytes = 0, max_bytes = 10 },
+		function(ok, err)
+			assert(not ok)
+			failure = err
+		end
+	)
+	local_fs.list = original_list
+	assert(failure and failure:find("10 bytes", 1, true))
+	assert(created.tree == nil, "partial destination directory was not cleaned up")
+
+	local target = vim.fn.tempname()
+	local download_calls = 0
+	failure = nil
+	local download_browser = {
+		client = {
+			list = function(_, path, callback)
+				assert(path == "tree")
+				callback(nil, {
+					entries = {
+						{ name = "one", path = "tree/one", type = "file", size = 1 },
+						{ name = "two", path = "tree/two", type = "file" },
+					},
+				})
+			end,
+			download_to = function(_, _, local_path, remaining, callback)
+				download_calls = download_calls + 1
+				local actual = download_calls == 1 and 6 or 5
+				assert(remaining == (download_calls == 1 and 10 or 4))
+				assert(local_fs.write(local_path, string.rep("x", actual)))
+				callback(nil, { size = actual })
+			end,
+		},
+	}
+	remote_files._copy_recursive(
+		download_browser,
+		"remote",
+		{ name = "tree", path = "tree", type = "directory" },
+		"local",
+		target,
+		{ count = 0, max = 10, bytes = 0, max_bytes = 10 },
+		function(ok, err)
+			assert(not ok)
+			failure = err
+		end
+	)
+	assert(vim.wait(1000, function()
+		return failure ~= nil and vim.uv.fs_lstat(target) == nil
+	end))
+	assert(failure:find("10 bytes", 1, true))
+end)
+
 test("builds a two-panel Telescope manager with nvim-tree operations and transfer", function()
 	local saved = {}
 	for _, name in ipairs({

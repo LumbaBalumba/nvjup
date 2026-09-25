@@ -38,12 +38,17 @@ local function refresh(state, immediate)
 	end
 end
 
-local function mark_outputs_changed(session, cell, execution_revision)
+local function mark_outputs_changed(session, cell, execution_revision, changed_outputs, trust_cell)
 	local state = session.state
 	notebook.touch_outputs(cell)
 	trust.invalidate(state)
 	if session.transport ~= "remote" then
-		trust.mark_local_execution(cell, execution_revision)
+		if trust_cell then
+			trust.mark_local_execution(cell, execution_revision)
+		end
+		for _, output_item in ipairs(changed_outputs or {}) do
+			trust.mark_local_output(cell, output_item)
+		end
 	end
 	cell.raw.outputs = cell.outputs
 	cell.raw.execution_count = cell.execution_count == nil and vim.NIL or cell.execution_count
@@ -108,9 +113,11 @@ local function append_stream(session, cell, payload)
 			previous.text = previous.text and { previous.text } or {}
 		end
 		table.insert(previous.text, text)
-	else
-		table.insert(cell.outputs, { output_type = "stream", name = name, text = text })
+		return previous
 	end
+	local output_item = { output_type = "stream", name = name, text = text }
+	table.insert(cell.outputs, output_item)
+	return output_item
 end
 
 local function materialize_widget_images(session, cell)
@@ -153,6 +160,7 @@ local function append_display(session, cell, payload)
 		session.display_ids[display_id] = session.display_ids[display_id] or {}
 		table.insert(session.display_ids[display_id], { cell_id = cell.id, item = item })
 	end
+	return item
 end
 
 local function update_widget(session, cell, payload)
@@ -165,19 +173,27 @@ local function update_widget(session, cell, payload)
 	model.closed = payload.action == "close"
 	session.widget_models[model_id] = model
 	local image_changed = false
+	local affected = {}
 	for _, notebook_cell in ipairs(session.state.cells) do
 		notebook_cell.widget_models = session.widget_models
 		local has_widget = false
+		local widget_outputs = {}
 		for _, output_item in ipairs(notebook_cell.outputs or {}) do
 			local data = type(output_item.data) == "table" and output_item.data or {}
 			if data["application/vnd.jupyter.widget-view+json"] then
 				has_widget = true
-				break
+				table.insert(widget_outputs, output_item)
 			end
 		end
 		local cell_image_changed = materialize_widget_images(session, notebook_cell)
 		if has_widget or cell_image_changed then
 			notebook.touch_outputs(notebook_cell)
+			if session.transport ~= "remote" then
+				for _, output_item in ipairs(widget_outputs) do
+					trust.mark_local_output(notebook_cell, output_item)
+				end
+			end
+			affected[notebook_cell.id] = notebook_cell
 		end
 		image_changed = cell_image_changed or image_changed
 	end
@@ -185,7 +201,9 @@ local function update_widget(session, cell, payload)
 		trust.invalidate(session.state)
 		vim.bo[session.state.buf].modified = true
 	end
-	refresh(session.state)
+	for _, affected_cell in pairs(affected) do
+		render.request_cell(session.state, affected_cell)
+	end
 end
 
 local function update_display(session, payload)
@@ -204,7 +222,8 @@ local function update_display(session, payload)
 		if live then
 			reference.item.data = payload.data or {}
 			reference.item.metadata = payload.metadata or {}
-			changed[cell.id] = cell
+			changed[cell.id] = changed[cell.id] or { cell = cell, outputs = {} }
+			table.insert(changed[cell.id].outputs, reference.item)
 		end
 	end
 	return changed
@@ -212,12 +231,14 @@ end
 
 local function append_error(session, cell, payload)
 	apply_pending_clear(session, cell)
-	table.insert(cell.outputs, {
+	local output_item = {
 		output_type = "error",
 		ename = payload.ename or "Error",
 		evalue = payload.evalue or "",
 		traceback = payload.traceback or {},
-	})
+	}
+	table.insert(cell.outputs, output_item)
+	return output_item
 end
 
 local function cancel_batch_tail(session, batch_id, reason)
@@ -342,6 +363,10 @@ local function handle_event(session, message)
 		return
 	end
 	local cell = session.state:cell_by_id(item.cell_id)
+	if message.type == "execution.state" and terminal_states[payload.state] then
+		finish_execution(session, item, payload.state, payload)
+		return
+	end
 	if not cell then
 		return
 	end
@@ -355,38 +380,45 @@ local function handle_event(session, message)
 		if payload.execution_count ~= nil and payload.execution_count ~= vim.NIL then
 			cell.execution_count = payload.execution_count
 		end
-		if terminal_states[state_name] then
-			finish_execution(session, item, state_name, payload)
-		else
-			cell.execution_status = state_name
-			refresh(session.state)
-		end
+		cell.execution_status = state_name
+		refresh(session.state)
 	elseif message.type == "execution.widget" then
 		update_widget(session, cell, payload)
 	elseif message.type == "execution.stream" then
-		append_stream(session, cell, payload)
-		mark_outputs_changed(session, cell, item.revision)
+		local output_item = append_stream(session, cell, payload)
+		mark_outputs_changed(session, cell, item.revision, { output_item }, item.outputs_cleared)
 	elseif message.type == "execution.display" then
-		append_display(session, cell, payload)
+		local output_item = append_display(session, cell, payload)
 		if payload.execution_count ~= nil and payload.execution_count ~= vim.NIL then
 			cell.execution_count = payload.execution_count
 		end
-		mark_outputs_changed(session, cell, item.revision)
+		mark_outputs_changed(session, cell, item.revision, { output_item }, item.outputs_cleared)
 	elseif message.type == "execution.display_update" then
 		local cleared = apply_pending_clear(session, cell)
 		local changed = update_display(session, payload)
 		if cleared then
-			changed[cell.id] = cell
+			changed[cell.id] = changed[cell.id] or { cell = cell, outputs = {} }
+			item.outputs_cleared = true
 		end
 		local any_changed = false
-		for _, target in pairs(changed) do
+		for _, change in pairs(changed) do
+			local target = change.cell
 			target.raw.outputs = target.outputs
 			notebook.touch_outputs(target)
+			trust.invalidate(session.state)
+			if session.transport ~= "remote" then
+				if item.outputs_cleared and target == cell then
+					trust.mark_local_execution(target, item.revision)
+				end
+				for _, output_item in ipairs(change.outputs) do
+					trust.mark_local_output(target, output_item)
+				end
+			end
+			render.request_cell(session.state, target)
 			any_changed = true
 		end
 		if any_changed then
 			vim.bo[session.state.buf].modified = true
-			refresh(session.state)
 		end
 	elseif message.type == "execution.clear_output" then
 		if payload.wait then
@@ -395,12 +427,13 @@ local function handle_event(session, message)
 			remove_display_refs(session, cell.id)
 			cell.outputs = {}
 			cell.clear_output_wait = false
-			mark_outputs_changed(session, cell, item.revision)
+			item.outputs_cleared = true
+			mark_outputs_changed(session, cell, item.revision, nil, true)
 		end
 	elseif message.type == "execution.error" then
-		append_error(session, cell, payload)
+		local output_item = append_error(session, cell, payload)
 		cell.execution_status = "failed"
-		mark_outputs_changed(session, cell, item.revision)
+		mark_outputs_changed(session, cell, item.revision, { output_item }, item.outputs_cleared)
 	elseif message.type == "execution.stdin_request" then
 		cell.execution_status = "waiting_input"
 		refresh(session.state)
@@ -629,6 +662,7 @@ function M._pump(session)
 		session.executions[item.execution_id] = item
 		if config.options.execution.clear_before_run then
 			clear_cell_for_execution(session, cell)
+			item.outputs_cleared = true
 		end
 		cell.execution_status = "queued"
 		refresh(session.state)

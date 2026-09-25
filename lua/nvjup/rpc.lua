@@ -97,9 +97,11 @@ function Client:start()
 	if self.process and not self.process:is_closing() then
 		return true
 	end
+	local maximum = (config.options.sidecar and config.options.sidecar.max_message_bytes) or (128 * 1024 * 1024)
+	local env = vim.tbl_extend("force", {}, self.env or {}, { NVJUP_MAX_MESSAGE_BYTES = tostring(maximum) })
 	local ok, process = pcall(vim.system, self.command, {
 		cwd = self.cwd,
-		env = self.env,
+		env = env,
 		stdin = true,
 		text = true,
 		stdout = function(err, data)
@@ -259,6 +261,22 @@ function Client:request(request_type, payload, context, callback)
 		self.pending[id] = nil
 		if callback then
 			callback(structured_error("request_encode_failed", tostring(encoded), false), {}, nil)
+		end
+		return nil
+	end
+	local maximum = (config.options.sidecar and config.options.sidecar.max_message_bytes) or (128 * 1024 * 1024)
+	if #encoded + 1 > maximum then
+		self.pending[id] = nil
+		if callback then
+			callback(
+				structured_error(
+					"request_message_too_large",
+					string.format("request message exceeds %d bytes", maximum),
+					false
+				),
+				{},
+				nil
+			)
 		end
 		return nil
 	end

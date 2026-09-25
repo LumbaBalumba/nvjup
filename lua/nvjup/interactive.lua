@@ -207,7 +207,8 @@ local function replay_after_crash()
 					break
 				end
 			end
-			if entry.state and entry.figure and trust.allows_interactive(entry.state, cell) then
+			local output_item = cell and (cell.outputs or {})[entry.output_index]
+			if entry.state and entry.figure and trust.allows_interactive(entry.state, cell, output_item) then
 				request_open(entry.state, entry)
 			end
 		end
@@ -404,12 +405,18 @@ function M.prepare_cell(state, cell)
 		return cell, {}
 	end
 
-	local trust_status = trust.status(state, cell)
+	local trust_statuses = {}
+	for output_index, item in ipairs(cell.outputs or {}) do
+		if interactive_payload(item) then
+			trust_statuses[output_index] = trust.status(state, cell, item)
+		end
+	end
+	local trust_token = vim.inspect(trust_statuses)
 	local prepared = cell.interactive_render_cache
 	if
 		prepared
 		and prepared.output_revision == cell.output_revision
-		and prepared.trust_status == trust_status
+		and prepared.trust_token == trust_token
 		and prepared.frame_generation == (cell.interactive_frame_generation or 0)
 	then
 		return prepared.cell, prepared.seen
@@ -427,6 +434,7 @@ function M.prepare_cell(state, cell)
 	for output_index, item in ipairs(cell.outputs or {}) do
 		local backend, figure = interactive_payload(item)
 		if backend then
+			local trust_status = trust_statuses[output_index]
 			if trust_status ~= "trusted_interactive" then
 				copy.outputs[output_index] = blocked_copy(item, trust_status)
 			else
@@ -479,7 +487,7 @@ function M.prepare_cell(state, cell)
 	end
 	cell.interactive_render_cache = {
 		output_revision = cell.output_revision,
-		trust_status = trust_status,
+		trust_token = trust_token,
 		frame_generation = cell.interactive_frame_generation or 0,
 		cell = copy,
 		seen = seen,
@@ -652,19 +660,23 @@ local function resize_focus_renderer(entry)
 end
 
 local function resolve_entry(state, cell)
-	if not trust.allows_interactive(state, cell) then
-		vim.notify("interactive output is blocked; use :NvJupTrustInteractive", vim.log.levels.WARN)
-		return nil
-	end
+	local blocked = false
 	for output_index, item in ipairs(cell.outputs or {}) do
 		if interactive_payload(item) then
-			local entry = cache[key(state, cell, output_index)]
-			if not entry then
-				M.prepare_cell(state, cell)
-				entry = cache[key(state, cell, output_index)]
+			if trust.allows_interactive(state, cell, item) then
+				local entry = cache[key(state, cell, output_index)]
+				if not entry then
+					M.prepare_cell(state, cell)
+					entry = cache[key(state, cell, output_index)]
+				end
+				return entry
 			end
-			return entry
+			blocked = true
 		end
+	end
+	if blocked then
+		vim.notify("interactive output is blocked; use :NvJupTrustInteractive", vim.log.levels.WARN)
+		return nil
 	end
 	vim.notify("current cell has no supported interactive output", vim.log.levels.INFO)
 	return nil

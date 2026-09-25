@@ -464,10 +464,31 @@ class RemoteContentsClient:
             return json.loads(raw)
 
     @staticmethod
-    def _entry(model: dict[str, Any]) -> dict[str, Any]:
+    def _entry(
+        model: dict[str, Any], *, expected_path: str | None = None
+    ) -> dict[str, Any]:
+        raw_name = model.get("name", "")
+        if not isinstance(raw_name, str):
+            raise ValueError("remote entry name must be a string")
+        if (
+            not raw_name
+            or len(raw_name) > 4096
+            or raw_name in {".", ".."}
+            or "/" in raw_name
+            or "\\" in raw_name
+            or "\x00" in raw_name
+        ):
+            raise ValueError("remote entry name must be a single basename")
+        path = _content_path(str(model.get("path", "")), allow_root=False)
+        if path.rsplit("/", 1)[-1] != raw_name:
+            raise ValueError("remote entry name is inconsistent with its path")
+        if expected_path is not None and path != _content_path(
+            expected_path, allow_root=False
+        ):
+            raise ValueError("remote entry path is inconsistent with the request")
         return {
-            "name": str(model.get("name", ""))[:4096],
-            "path": _content_path(str(model.get("path", ""))),
+            "name": raw_name,
+            "path": path,
             "type": str(model.get("type", "file"))[:64],
             "writable": bool(model.get("writable", False)),
             "size": model.get("size") if isinstance(model.get("size"), int) else None,
@@ -522,7 +543,15 @@ class RemoteContentsClient:
             raise TypeError("Jupyter Server returned an invalid directory model")
         if len(content) > self.max_entries:
             raise ValueError(f"remote directory exceeds {self.max_entries} entries")
-        entries = [self._entry(item) for item in content if isinstance(item, dict)]
+        entries = []
+        for item in content:
+            if not isinstance(item, dict):
+                raise TypeError("Jupyter Server returned an invalid directory entry")
+            entry = self._entry(item)
+            parent = entry["path"].rsplit("/", 1)[0] if "/" in entry["path"] else ""
+            if parent != normalized:
+                raise ValueError("remote entry path escapes the listed directory")
+            entries.append(entry)
         entries.sort(
             key=lambda item: (
                 item["type"] != "directory",
@@ -539,7 +568,7 @@ class RemoteContentsClient:
         )
         if not isinstance(model, dict):
             raise TypeError("Jupyter Server returned an invalid content model")
-        return self._entry(model)
+        return self._entry(model, expected_path=normalized)
 
     async def mkdir(self, path: str) -> dict[str, Any]:
         normalized = _content_path(path, allow_root=False)
@@ -550,7 +579,7 @@ class RemoteContentsClient:
             body={"type": "directory", "format": "json", "content": None},
             allow_root=False,
         )
-        return self._entry(model)
+        return self._entry(model, expected_path=normalized)
 
     async def touch(self, path: str) -> dict[str, Any]:
         return await self.upload(path, b"")
@@ -570,10 +599,17 @@ class RemoteContentsClient:
             },
             allow_root=False,
         )
-        return self._entry(model)
+        return self._entry(model, expected_path=normalized)
 
-    async def download(self, path: str) -> bytes:
+    async def download(self, path: str, max_bytes: int | None = None) -> bytes:
         normalized = _content_path(path, allow_root=False)
+        limit = (
+            self.max_file_bytes
+            if max_bytes is None
+            else min(self.max_file_bytes, max_bytes)
+        )
+        if limit < 0:
+            raise ValueError("download byte limit cannot be negative")
         async with self.http.get(
             self._url("/files", normalized),
             headers=self.headers(),
@@ -582,14 +618,14 @@ class RemoteContentsClient:
         ) as response:
             if response.status < 300:
                 declared = response.content_length
-                if declared is not None and declared > self.max_file_bytes:
-                    raise ValueError(f"file exceeds {self.max_file_bytes} bytes")
+                if declared is not None and declared > limit:
+                    raise ValueError(f"file exceeds {limit} bytes")
                 chunks: list[bytes] = []
                 size = 0
                 async for chunk in response.content.iter_chunked(64 * 1024):
                     size += len(chunk)
-                    if size > self.max_file_bytes:
-                        raise ValueError(f"file exceeds {self.max_file_bytes} bytes")
+                    if size > limit:
+                        raise ValueError(f"file exceeds {limit} bytes")
                     chunks.append(chunk)
                 return b"".join(chunks)
             if response.status not in {400, 404}:
@@ -619,8 +655,8 @@ class RemoteContentsClient:
             )
         else:
             raise RuntimeError("Jupyter Server returned an unsupported file format")
-        if len(result) > self.max_file_bytes:
-            raise ValueError(f"file exceeds {self.max_file_bytes} bytes")
+        if len(result) > limit:
+            raise ValueError(f"file exceeds {limit} bytes")
         return result
 
     async def rename(self, path: str, new_path: str) -> dict[str, Any]:
@@ -633,7 +669,7 @@ class RemoteContentsClient:
             body={"path": target},
             allow_root=False,
         )
-        return self._entry(model)
+        return self._entry(model, expected_path=target)
 
     async def delete(self, path: str) -> None:
         normalized = _content_path(path, allow_root=False)

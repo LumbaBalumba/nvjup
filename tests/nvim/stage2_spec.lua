@@ -371,6 +371,66 @@ test("uses the same LSP bindings as ordinary code buffers", function()
 	close_fixture(state)
 end)
 
+test("clears stale semantic highlights when no provider remains", function()
+	local buf = vim.api.nvim_create_buf(false, true)
+	local ns = vim.api.nvim_create_namespace("nvjup-stage2-semantic-empty")
+	local state = {
+		buf = buf,
+		lsp_semantic_ns = ns,
+		shadow = { version = 1, documents = {} },
+	}
+	vim.api.nvim_buf_set_lines(buf, 0, -1, false, { "value" })
+	vim.api.nvim_buf_set_extmark(buf, ns, 0, 0, { end_col = 1, hl_group = "Identifier" })
+	lsp.refresh_semantic_tokens(state)
+	assert(#vim.api.nvim_buf_get_extmarks(buf, ns, 0, -1, {}) == 0)
+	lsp.detach(state)
+	vim.api.nvim_buf_delete(buf, { force = true })
+end)
+
+test("invalidates semantic callbacks before detach cancellation", function()
+	local buf = vim.api.nvim_create_buf(false, true)
+	local ns = vim.api.nvim_create_namespace("nvjup-stage2-semantic-detach")
+	local callback
+	local cancelled = false
+	local client = {
+		server_capabilities = { semanticTokensProvider = { legend = { tokenTypes = { "variable" } } } },
+		offset_encoding = "utf-16",
+		supports_method = function()
+			return true
+		end,
+		request = function(_, _, _, handler)
+			callback = handler
+			return true, 17
+		end,
+		cancel_request = function(_, id)
+			assert(id == 17)
+			cancelled = true
+		end,
+	}
+	local original_get_clients = vim.lsp.get_clients
+	vim.lsp.get_clients = function()
+		return { client }
+	end
+	local state = {
+		buf = buf,
+		lsp_semantic_ns = ns,
+		shadow = {
+			version = 1,
+			documents = { python = { buf = buf, uri = "file:///semantic.py", lang = "python" } },
+		},
+	}
+	lsp.refresh_semantic_tokens(state)
+	local session = assert(lsp._sessions[buf])
+	local generation = session.semantic_generation
+	lsp.detach(state)
+	assert(cancelled)
+	assert(session.semantic_generation == generation + 1)
+	assert(lsp._sessions[buf] == nil)
+	assert(pcall(callback, nil, { data = { 0, 0, 1, 0, 0 } }))
+	vim.lsp.get_clients = original_get_clients
+	vim.api.nvim_buf_delete(buf, { force = true })
+end)
+
 if #failures > 0 then
 	print(table.concat(failures, "\n\n"))
 	vim.cmd("cquit " .. math.min(255, #failures))

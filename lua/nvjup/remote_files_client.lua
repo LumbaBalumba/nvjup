@@ -156,12 +156,18 @@ function Client:upload(path, content, callback)
 	self:request("upload", { path = path, content = encoded }, callback)
 end
 
-function Client:download_to(path, local_path, callback)
-	self:request("download_to", { path = path, local_path = local_path }, callback)
+function Client:download_to(path, local_path, max_bytes, callback)
+	if type(max_bytes) == "function" then
+		callback, max_bytes = max_bytes, nil
+	end
+	self:request("download_to", { path = path, local_path = local_path, max_bytes = max_bytes }, callback)
 end
 
-function Client:upload_from(path, local_path, callback)
-	self:request("upload_from", { path = path, local_path = local_path }, callback)
+function Client:upload_from(path, local_path, max_bytes, callback)
+	if type(max_bytes) == "function" then
+		callback, max_bytes = max_bytes, nil
+	end
+	self:request("upload_from", { path = path, local_path = local_path, max_bytes = max_bytes }, callback)
 end
 
 function Client:copy(path, new_path, callback)

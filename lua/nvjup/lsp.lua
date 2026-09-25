@@ -975,7 +975,13 @@ function M.refresh_semantic_tokens(state)
 	local responses = {}
 
 	local function finish()
-		if pending ~= 0 or generation ~= session.semantic_generation or manager.version ~= version then
+		if
+			pending ~= 0
+			or generation ~= session.semantic_generation
+			or manager.version ~= version
+			or sessions[state.buf] ~= session
+			or not vim.api.nvim_buf_is_valid(state.buf)
+		then
 			return
 		end
 		vim.api.nvim_buf_clear_namespace(state.buf, state.lsp_semantic_ns, 0, -1)
@@ -1027,8 +1033,15 @@ function M.refresh_semantic_tokens(state)
 			local sent, request_id = client:request("textDocument/semanticTokens/full", {
 				textDocument = { uri = document.uri },
 			}, function(err, result)
+				if
+					sessions[state.buf] ~= session
+					or not vim.api.nvim_buf_is_valid(state.buf)
+					or generation ~= session.semantic_generation
+				then
+					return
+				end
 				pending = pending - 1
-				if not err and result and result.data and generation == session.semantic_generation then
+				if not err and result and result.data then
 					table.insert(responses, { result = result, document = document, client = client })
 				end
 				finish()
@@ -1040,9 +1053,7 @@ function M.refresh_semantic_tokens(state)
 			end
 		end
 	end
-	if pending == 0 and #responses > 0 then
-		finish()
-	end
+	finish()
 end
 
 function M.status(state)
@@ -1073,6 +1084,7 @@ function M.detach(state)
 	if not session then
 		return
 	end
+	session.semantic_generation = (session.semantic_generation or 0) + 1
 	vim.diagnostic.reset(state.lsp_diagnostic_ns, state.buf)
 	vim.api.nvim_buf_clear_namespace(state.buf, state.lsp_semantic_ns, 0, -1)
 	if session.refresh_timer and not session.refresh_timer:is_closing() then

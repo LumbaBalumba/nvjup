@@ -251,6 +251,47 @@ test("renders PNG through Kitty Unicode placeholders and cleans it up", function
 	image._set_test_writer(nil)
 end)
 
+test("allocates and cleans more than 255 distinct Kitty image IDs", function()
+	local writes = {}
+	image._set_test_writer(function(value)
+		table.insert(writes, value)
+		return true
+	end)
+	local previous = config.options.render.images.backend
+	config.options.render.images.backend = "kitty"
+	local state = { buf = vim.api.nvim_get_current_buf() }
+	local png = "iVBORw0KGgoAAAANSUhEUgAAAAQAAAADCAYAAAC09K7GAAAAEklEQVR42mPwKdrwHxkzEBQAANiRHR2gDahVAAAAAElFTkSuQmCC"
+	local seen, ids = {}, {}
+	for index = 1, 300 do
+		local cell = {
+			id = "kitty-id-" .. index,
+			outputs = { { output_type = "display_data", data = { ["image/png"] = png }, metadata = {} } },
+		}
+		local _, rendered = image.render(state, cell, 20)
+		for key in pairs(rendered) do
+			seen[key] = true
+		end
+	end
+	for _, value in ipairs(writes) do
+		local id = value:match("a=t,f=100,i=(%d+)")
+		if id then
+			assert(not ids[id], "Kitty image ID was reused while live: " .. id)
+			ids[id] = true
+		end
+	end
+	assert(vim.tbl_count(ids) == 300)
+	image.finish_render(state, {})
+	local deleted = 0
+	for _, value in ipairs(writes) do
+		if value:find("a=d,d=I", 1, true) then
+			deleted = deleted + 1
+		end
+	end
+	assert(deleted >= 300)
+	config.options.render.images.backend = previous
+	image._set_test_writer(nil)
+end)
+
 test("caches image descriptors by output revision", function()
 	local cell = {
 		output_revision = 0,
