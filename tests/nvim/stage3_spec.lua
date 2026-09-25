@@ -147,6 +147,14 @@ test("builds the default Python sidecar command from the plugin root", function(
 	assert(command[2] == vim.fs.joinpath(root, "python", "nvjup_sidecar_main.py"))
 end)
 
+test("probes every runtime dependency required by the sidecar", function()
+	local command = rpc._probe_command("/tmp/python")
+	assert(command[1] == "/tmp/python" and command[2] == "-c")
+	assert(command[3]:find("sys.version_info >= (3, 11)", 1, true))
+	assert(command[3]:find("aiohttp", 1, true))
+	assert(command[3]:find("jupyter_client", 1, true))
+end)
+
 local function rpc_process_factory(record)
 	return function(command, _, on_exit)
 		table.insert(record.commands, vim.deepcopy(command))

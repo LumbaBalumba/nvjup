@@ -53,8 +53,16 @@ local function python_candidates()
 	return unique
 end
 
+local function probe_command(python)
+	return {
+		python,
+		"-c",
+		"import sys, aiohttp, jupyter_client; assert sys.version_info >= (3, 11)",
+	}
+end
+
 local function default_probe_factory(python, callback)
-	local ok, process = pcall(vim.system, { python, "-c", "import jupyter_client" }, {
+	local ok, process = pcall(vim.system, probe_command(python), {
 		text = true,
 		timeout = 3000,
 	}, function(result)
@@ -684,6 +692,7 @@ M.Client = Client
 M.new = Client.new
 M.default_command = default_command
 M.plugin_root = plugin_root
+M._probe_command = probe_command
 M._reset_python_resolver = reset_python_resolver
 
 return M
