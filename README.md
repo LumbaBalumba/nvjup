@@ -38,7 +38,7 @@ The install command below creates a plugin-local Python environment containing `
 | syntax highlighting | `nvim-treesitter` and parsers for the notebook languages |
 | completion UI and live-kernel completion | `nvim-cmp` |
 | outline/variable Telescope pickers; remote files | `telescope.nvim` (required for remote files) |
-| managed Google Colab runtimes | optional [`google-colab-cli`](https://github.com/googlecolab/google-colab-cli) executable |
+| managed Google Colab runtimes | optional [`google-colab-cli`](https://github.com/googlecolab/google-colab-cli) **0.6.0+** executable |
 | rendered Markdown | `render-markdown.nvim` plus Markdown parsers |
 | LaTeX and image integration | `snacks.nvim`, `pdflatex`, ImageMagick |
 | terminal images | Kitty or Ghostty; `chafa` is the fallback |
@@ -164,7 +164,7 @@ For a remote server, the simplest setup is interactive:
 :NvJupRemoteConnect
 ```
 
-Choose **Jupyter Server** to enter a URL, hidden token, TLS/origin policy, and kernelspec. For managed runtimes, install the official CLI with `uv tool install --python 3.12 google-colab-cli`, then choose **Google Colab** (or run `:NvJupColabConnect`) to authenticate only when needed, select CPU/GPU/TPU hardware, and connect. nvjup keeps only its imported connection copy in Neovim memory; the official CLI persists OAuth credentials and the runtime proxy/session token in its protected config/state files and owns the keepalive. Disconnecting nvjup does not stop the VM; nvjup reports a safely quoted stop command that preserves the allocation's CLI auth provider and state file. Static Jupyter configuration remains available under `kernel.remote`; see `:help nvjup-stage7`.
+Choose **Jupyter Lab** to enter a URL, hidden token, TLS/origin policy, and kernelspec. For managed runtimes, install any supported official CLI release with `uv tool install --python 3.12 'google-colab-cli>=0.6,<1'` (the AUR package also works), then choose **Google Colab** or run `:NvJupColabConnect`. nvjup supports CLI 0.6.0+ for CPU/GPU/TPU; high-memory choices are opt-in with `colab.high_memory = true` and require CLI 0.7.0+. nvjup keeps only its imported connection copy in Neovim memory; the official CLI persists OAuth credentials and the runtime proxy/session token in its protected config/state files and owns the keepalive. Disconnecting nvjup does not stop the VM; nvjup reports a safely quoted stop command that preserves the allocation's CLI auth provider and state file. Static Jupyter configuration remains available under `kernel.remote`; see `:help nvjup-stage7`.
 
 All defaults and advanced limits are documented in `:help nvjup-setup`.
 

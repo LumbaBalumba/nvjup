@@ -118,25 +118,46 @@ local function with_colab_options(callback)
 	end
 end
 
-test("offers supported Colab CPU GPU TPU and high-memory choices", function()
-	local labels = {}
-	for _, item in ipairs(colab.hardware()) do
-		labels[item.label] = true
-	end
-	for _, label in ipairs({
-		"CPU · standard",
-		"CPU · high-memory",
-		"GPU T4",
-		"GPU L4",
-		"GPU G4",
-		"GPU A100",
-		"GPU H100",
-		"TPU v5e1",
-		"TPU v6e1",
-	}) do
-		assert(labels[label], label)
-	end
-	assert(not labels["GPU L4 · high-memory"])
+test("offers Colab 0.6 CPU GPU and TPU choices by default", function()
+	with_colab_options(function()
+		local labels = {}
+		for _, item in ipairs(colab.hardware()) do
+			labels[item.label] = true
+		end
+		for _, label in ipairs({
+			"CPU",
+			"GPU T4",
+			"GPU L4",
+			"GPU G4",
+			"GPU A100",
+			"GPU H100",
+			"TPU v5e1",
+			"TPU v6e1",
+		}) do
+			assert(labels[label], label)
+		end
+		assert(not labels["CPU · high-memory"])
+
+		config.options.colab.high_memory = true
+		labels = {}
+		for _, item in ipairs(colab.hardware()) do
+			labels[item.label] = true
+		end
+		assert(labels["CPU · high-memory"])
+		assert(labels["GPU T4 · high-memory"])
+		assert(not labels["GPU L4 · high-memory"])
+	end)
+end)
+
+test("requires explicit CLI 0.7 opt-in for Colab high-memory", function()
+	with_colab_options(function()
+		local received
+		local operation = colab.provision({ kind = "cpu", high_mem = true }, function(err)
+			received = err
+		end)
+		assert(operation == nil)
+		assert(received and received.code == "invalid_hardware")
+	end)
 end)
 
 test("provisions Colab with cached OAuth credentials and bounded argv", function()
@@ -153,7 +174,7 @@ test("provisions Colab with cached OAuth credentials and bounded argv", function
 			return handle
 		end)
 		local err, profile
-		colab.provision({ kind = "gpu", accelerator = "T4", high_mem = true }, function(value, result)
+		colab.provision({ kind = "gpu", accelerator = "T4" }, function(value, result)
 			err, profile = value, result
 		end)
 		assert(vim.wait(1000, function()
@@ -172,7 +193,6 @@ test("provisions Colab with cached OAuth credentials and bounded argv", function
 			profile.colab_session,
 			"--gpu",
 			"T4",
-			"--high-mem",
 		}))
 	end)
 end)
@@ -526,6 +546,22 @@ test("rejects unsafe and oversized Colab CLI state", function()
 	}, path, "b")
 	profile, err = colab._read_session(path, "nvjup-safe", 4096)
 	assert(profile == nil and err:find("invalid runtime URL", 1, true))
+
+	-- google-colab-cli 0.6 session records do not include machine_shape.
+	vim.fn.writefile({
+		vim.json.encode({
+			["nvjup-safe"] = {
+				name = "nvjup-safe",
+				url = "https://runtime.example.test",
+				token = "secret",
+				endpoint = "endpoint",
+				variant = "GPU",
+				accelerator = "T4",
+			},
+		}),
+	}, path, "b")
+	profile, err = colab._read_session(path, "nvjup-safe", 4096)
+	assert(err == nil and profile.colab_hardware == "T4")
 	vim.fn.delete(path)
 end)
 

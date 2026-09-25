@@ -83,6 +83,7 @@ Options include:
       executable = "colab",
       auth = "oauth2", -- or "adc"
       state_path = false, -- official CLI default
+      high_memory = false, -- opt in with google-colab-cli 0.7.0+
       create_timeout_seconds = 300,
       max_output_bytes = 64 * 1024,
       max_state_bytes = 1024 * 1024,
@@ -326,13 +327,15 @@ lower-priority nvjup_kernel nvim-cmp source without starting a kernel on typing.
 
 Statusline plugins can call require('nvjup.statusline').component() or .get(0).
 The outline and variable pickers auto-detect Telescope and retain dependency-free
-fallbacks. <Leader>nK or :NvJupRemoteConnect first selects Jupyter Server or
+fallbacks. <Leader>nK or :NvJupRemoteConnect first selects Jupyter Lab or
 Google Colab. The Jupyter flow asks for URL, hidden token, TLS/origin policy and
-kernelspec. The Colab flow (also :NvJupColabConnect) invokes the optional official
-`colab` executable with argv only, performs OAuth only when the CLI requests it,
-and offers CPU, GPU, TPU and applicable high-memory environments. nvjup reads the
-bounded CLI session record, keeps only its imported connection copy in Neovim
-memory, probes kernelspecs, and prefers `python3`. The official CLI persists OAuth
+kernelspec. The Colab flow (also :NvJupColabConnect) supports the optional official
+`google-colab-cli` 0.6.0+ executable, invokes it with argv only, performs OAuth
+only when the CLI requests it, and offers CPU, GPU and TPU environments.
+`colab.high_memory = true` additionally exposes high-memory choices and requires
+CLI 0.7.0+. nvjup reads the bounded CLI session record, keeps only its
+imported connection copy in Neovim memory, probes kernelspecs, and prefers
+`python3`. The official CLI persists OAuth
 credentials and the runtime proxy/session token in protected config/state files
 and owns runtime keepalive. If allocation succeeds but setup does not reach
 profile activation (including probe failure, disconnect, or a dismissed kernel

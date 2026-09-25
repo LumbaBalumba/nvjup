@@ -66,6 +66,7 @@ M.defaults = {
 		executable = "colab",
 		auth = "oauth2",
 		state_path = false,
+		high_memory = false, -- requires google-colab-cli >= 0.7.0
 		create_timeout_seconds = 300,
 		max_output_bytes = 64 * 1024,
 		max_state_bytes = 1024 * 1024,

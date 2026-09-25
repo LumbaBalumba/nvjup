@@ -175,7 +175,10 @@ function M.check()
 	local remote_config = (config.options.kernel or {}).remote
 	local colab_executable = (config.options.colab or {}).executable or "colab"
 	if type(colab_executable) == "string" and vim.fn.executable(colab_executable) == 1 then
-		vim.health.ok("Google Colab CLI is available: " .. (vim.fn.exepath(colab_executable) or colab_executable))
+		vim.health.ok(
+			"Google Colab CLI is available (nvjup supports 0.6.0+): "
+				.. (vim.fn.exepath(colab_executable) or colab_executable)
+		)
 	else
 		vim.health.info("google-colab-cli is unavailable; Google Colab provisioning is optional")
 	end

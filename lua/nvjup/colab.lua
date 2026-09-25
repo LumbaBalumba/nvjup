@@ -79,6 +79,7 @@ local function options()
 	return {
 		executable = executable_argv(configured.executable),
 		auth = configured.auth == "adc" and "adc" or "oauth2",
+		high_memory = configured.high_memory == true,
 		state_path = type(configured.state_path) == "string" and configured.state_path ~= "" and vim.fs.normalize(
 			vim.fn.expand(configured.state_path)
 		) or vim.fs.joinpath(vim.fn.expand("~"), ".config", "colab-cli", "sessions.json"),
@@ -283,14 +284,17 @@ end
 
 function M.hardware()
 	local result = {}
+	local high_memory = options().high_memory
 	local function add(label, kind, accelerator, high_mem)
 		table.insert(result, { label = label, kind = kind, accelerator = accelerator, high_mem = high_mem == true })
 	end
-	add("CPU · standard", "cpu")
-	add("CPU · high-memory", "cpu", nil, true)
+	add("CPU", "cpu")
+	if high_memory then
+		add("CPU · high-memory", "cpu", nil, true)
+	end
 	for _, gpu in ipairs({ "T4", "L4", "G4", "A100", "H100" }) do
 		add("GPU " .. gpu, "gpu", gpu)
-		if gpu ~= "L4" then
+		if high_memory and gpu ~= "L4" then
 			add("GPU " .. gpu .. " · high-memory", "gpu", gpu, true)
 		end
 	end
@@ -305,7 +309,7 @@ function M.provision(hardware, callback)
 	local tpu = { v5e1 = true, v6e1 = true }
 	local valid = type(hardware) == "table"
 		and ((hardware.kind == "cpu" and hardware.accelerator == nil) or (hardware.kind == "gpu" and gpu[hardware.accelerator]) or (hardware.kind == "tpu" and tpu[hardware.accelerator]))
-		and not (hardware.high_mem and (hardware.accelerator == "L4" or hardware.kind == "tpu"))
+		and not (hardware.high_mem and (not opts.high_memory or hardware.accelerator == "L4" or hardware.kind == "tpu"))
 	if not valid then
 		callback(error_result("invalid_hardware", "invalid Google Colab hardware selection"))
 		return nil
