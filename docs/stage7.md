@@ -99,7 +99,7 @@ require("nvjup").setup({
 })
 ```
 
-`token` may instead be a string or a function of `(notebook_path, notebook_state)`. `token_env` avoids storing credentials in the Neovim config. Tokens are sent only in the HTTP `Authorization` header and are not included in status, health, or errors. URL query/fragment components are discarded. TLS verification defaults to on; disabling it produces a health warning. `origin` is never synthesized and is sent only when explicitly configured.
+`token` may instead be a string or a function of `(notebook_path, notebook_state)`. `token_env` avoids storing credentials in the Neovim config. Ordinary Jupyter tokens are sent only in the HTTP `Authorization` header. Managed Colab profiles use the runtime proxy token in Colab's required header and query parameters instead, without a Jupyter `Authorization` header. Tokens are never included in status, health, or errors. URL query/fragment components are discarded. TLS verification defaults to on; disabling it produces a health warning. `origin` is never synthesized and is sent only when explicitly configured.
 
 REST calls and WebSocket frames have time/size bounds, channel queues apply backpressure, unexpected channel loss fails the active request, and idle sessions make at most `reconnect_attempts` reconnects (bounded to 0–5). Interrupt, restart, shutdown, execution, stdin, completion, inspection, and variables all share the remote transport. Restart reconnects the channel; shutdown deletes the owned server kernel. Remote output does **not** receive the ephemeral trust reserved for explicitly run local kernels. Existing-kernel attachment and multi-user authentication flows outside token auth are not enabled.
 

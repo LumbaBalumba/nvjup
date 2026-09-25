@@ -63,9 +63,12 @@ Kernel lifecycle:
 
 `kernel.start` normally owns a local ZeroMQ kernel. An optional `remote` object
 selects an owned Jupyter Server kernel and contains `url`, an optional `token`,
-`verify_ssl`, optional explicit `origin`, and bounded `reconnect_attempts`.
-Credentials are transported only to the sidecar and never echoed in responses or
-events. Remote channels must negotiate `v1.kernel.websocket.jupyter.org`; legacy
+`verify_ssl`, optional explicit `origin`, bounded `reconnect_attempts`, and an
+optional `provider`. `provider = "colab"` switches REST, Contents, and WebSocket
+authentication to Colab runtime-proxy query parameters and headers; ordinary
+Jupyter behavior remains the default. Credentials are transported only to the
+sidecar and never echoed in responses or events. Remote channels must negotiate
+`v1.kernel.websocket.jupyter.org`; legacy
 unbounded framing is rejected. Existing-kernel attachment is not part of v1.
 
 Execution:

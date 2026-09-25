@@ -6,6 +6,7 @@ import io
 import json
 import os
 import queue
+import re
 import socket
 import subprocess
 import sys
@@ -14,20 +15,325 @@ import time
 from collections.abc import Callable
 from pathlib import Path
 from typing import Any
+from urllib.parse import quote, quote_plus
 from urllib.request import Request, urlopen
 
 import pytest
+from aiohttp import web
 
 ROOT = Path(__file__).resolve().parents[2]
 SIDECAR = ROOT / "python" / "nvjup_sidecar_main.py"
 sys.path.insert(0, str(ROOT / "python"))
 
 from nvjup_sidecar.remote import (  # noqa: E402
+    WS_PROTOCOL,
     RemoteContentsClient,
+    RemoteKernelClient,
+    RemoteKernelManager,
     _deserialize_v1,
     _serialize_v1,
 )
 from nvjup_sidecar.server import Execution, KernelSession, SidecarServer  # noqa: E402
+
+
+class _RemoteResponse:
+    def __init__(self, payload: bytes = b"{}", status: int = 200) -> None:
+        self.status = status
+        self._payload = payload
+        self.content_length = len(payload)
+        self.content = self
+        self.protocol = WS_PROTOCOL
+        self.closed = False
+
+    async def __aenter__(self) -> _RemoteResponse:
+        return self
+
+    async def __aexit__(self, *_args: object) -> None:
+        return None
+
+    async def read(self, _size: int = -1) -> bytes:
+        return self._payload
+
+    async def text(self) -> str:
+        return self._payload.decode("utf-8", "replace")
+
+    async def json(self) -> Any:
+        return json.loads(self._payload)
+
+    async def close(self) -> None:
+        self.closed = True
+
+    async def iter_chunked(self, _size: int) -> Any:
+        if self._payload:
+            yield self._payload
+
+    def __aiter__(self) -> Any:
+        async def empty() -> Any:
+            if False:
+                yield None
+
+        return empty()
+
+
+class _RemoteHTTP:
+    def __init__(self) -> None:
+        self.calls: list[tuple[str, str, dict[str, Any]]] = []
+        self.closed = False
+
+    def request(self, method: str, url: str, **kwargs: Any) -> _RemoteResponse:
+        self.calls.append((method, url, kwargs))
+        return _RemoteResponse()
+
+    def get(self, url: str, **kwargs: Any) -> _RemoteResponse:
+        return self.request("GET", url, **kwargs)
+
+    async def ws_connect(self, url: str, **kwargs: Any) -> _RemoteResponse:
+        self.calls.append(("WS", url, kwargs))
+        return _RemoteResponse()
+
+    async def close(self) -> None:
+        self.closed = True
+
+
+def test_colab_transport_applies_proxy_auth_without_jupyter_authorization() -> None:
+    async def exercise() -> None:
+        http = _RemoteHTTP()
+        manager = object.__new__(RemoteKernelManager)
+        manager.base_url = "https://runtime.example"
+        manager.token = "proxy-secret"
+        manager.provider = "colab"
+        manager.verify_ssl = True
+        manager.origin = None
+        manager.http = http
+        manager.kernel_id = "kernel/id"
+        await manager._request("GET", "/api/kernels")
+        _, _, rest = http.calls[-1]
+        assert rest["params"] == {
+            "authuser": "0",
+            "colab-runtime-proxy-token": "proxy-secret",
+        }
+        assert rest["headers"] == {
+            "X-Colab-Runtime-Proxy-Token": "proxy-secret",
+            "X-Colab-Client-Agent": "nvjup",
+        }
+        assert "Authorization" not in rest["headers"]
+
+        contents = object.__new__(RemoteContentsClient)
+        contents.base_url = "https://runtime.example"
+        contents.token = "proxy-secret"
+        contents.provider = "colab"
+        contents.verify_ssl = True
+        contents.origin = None
+        contents.http = http
+        await contents._json_request(
+            "GET", "/api/contents", "folder", params={"content": 1}
+        )
+        _, _, content_call = http.calls[-1]
+        assert content_call["params"] == {
+            "content": 1,
+            "authuser": "0",
+            "colab-runtime-proxy-token": "proxy-secret",
+        }
+        assert content_call["headers"]["X-Colab-Client-Agent"] == "nvjup"
+        assert "Authorization" not in content_call["headers"]
+
+        contents.max_file_bytes = 1024
+        assert await contents.download("folder/data.bin") == b"{}"
+        _, _, file_call = http.calls[-1]
+        assert file_call["params"] == {
+            "authuser": "0",
+            "colab-runtime-proxy-token": "proxy-secret",
+        }
+        assert file_call["headers"]["X-Colab-Runtime-Proxy-Token"] == "proxy-secret"
+
+        client = RemoteKernelClient(manager)
+        await client.connect()
+        method, url, ws = http.calls[-1]
+        assert method == "WS"
+        assert "session_id=" + client.session_id in url
+        assert "authuser=0" in url
+        assert "colab-runtime-proxy-token=proxy-secret" in url
+        assert ws["headers"]["X-Colab-Runtime-Proxy-Token"] == "proxy-secret"
+        assert "Authorization" not in ws["headers"]
+        await client.close()
+
+    asyncio.run(exercise())
+
+
+def test_colab_transport_errors_redact_proxy_tokens() -> None:
+    token = "proxy/+ secret?&=%"
+
+    def mixed_escape_case(value: str) -> str:
+        upper = False
+
+        def replace(match: re.Match[str]) -> str:
+            nonlocal upper
+            upper = not upper
+            escape = match.group(0)
+            return escape.upper() if upper else escape.lower()
+
+        return re.sub(r"%[0-9A-Fa-f]{2}", replace, value)
+
+    encoded = mixed_escape_case(quote(token, safe=""))
+    form_encoded = mixed_escape_case(quote_plus(token, safe=""))
+
+    class FailingHTTP(_RemoteHTTP):
+        def request(self, method: str, url: str, **kwargs: Any) -> _RemoteResponse:
+            self.calls.append((method, url, kwargs))
+            detail = (
+                f"arbitrary backend echo {encoded}; form echo {form_encoded} rejected"
+            ).encode()
+            return _RemoteResponse(detail, status=403)
+
+    def assert_redacted(error: pytest.ExceptionInfo[RuntimeError]) -> None:
+        message = str(error.value)
+        assert token not in message
+        assert quote(token, safe="") not in message
+        assert quote_plus(token, safe="") not in message
+        assert encoded not in message
+        assert form_encoded not in message
+        assert "<redacted>" in message
+
+    async def exercise() -> None:
+        http = FailingHTTP()
+        manager = object.__new__(RemoteKernelManager)
+        manager.base_url = "https://runtime.example"
+        manager.token = token
+        manager.provider = "colab"
+        manager.verify_ssl = True
+        manager.http = http
+        with pytest.raises(RuntimeError) as caught:
+            await manager._request("GET", "/api")
+        assert_redacted(caught)
+
+        contents = object.__new__(RemoteContentsClient)
+        contents.base_url = "https://runtime.example"
+        contents.token = token
+        contents.provider = "colab"
+        contents.verify_ssl = True
+        contents.origin = None
+        contents.http = http
+        with pytest.raises(RuntimeError) as caught:
+            await contents._json_request("GET", "/api/contents", "file")
+        assert_redacted(caught)
+
+    asyncio.run(exercise())
+
+
+def test_colab_websocket_errors_redact_encoded_reserved_character_tokens() -> None:
+    token = "proxy/+ secret?&=%"
+
+    class FailingWebSocketHTTP(_RemoteHTTP):
+        async def ws_connect(self, url: str, **kwargs: Any) -> _RemoteResponse:
+            self.calls.append(("WS", url, kwargs))
+            raise RuntimeError(f"WebSocket handshake failed for {url}")
+
+    async def exercise() -> None:
+        manager = object.__new__(RemoteKernelManager)
+        manager.base_url = "https://runtime.example"
+        manager.token = token
+        manager.provider = "colab"
+        manager.verify_ssl = True
+        manager.origin = None
+        manager.http = FailingWebSocketHTTP()
+        manager.kernel_id = "kernel/id"
+        client = RemoteKernelClient(manager)
+        with pytest.raises(RuntimeError) as caught:
+            await client.connect()
+        message = str(caught.value)
+        assert "colab-runtime-proxy-token=<redacted>" in message
+        assert token not in message
+        assert quote(token, safe="") not in message
+        assert quote_plus(token, safe="") not in message
+
+    asyncio.run(exercise())
+
+
+def test_colab_websocket_redirect_does_not_forward_proxy_credentials() -> None:
+    async def exercise() -> None:
+        target_hits: list[dict[str, Any]] = []
+
+        async def target(request: web.Request) -> web.StreamResponse:
+            target_hits.append(
+                {"headers": dict(request.headers), "query": dict(request.query)}
+            )
+            websocket = web.WebSocketResponse(protocols=(WS_PROTOCOL,))
+            await websocket.prepare(request)
+            await websocket.close()
+            return websocket
+
+        target_app = web.Application()
+        target_app.router.add_get("/{path:.*}", target)
+        target_runner = web.AppRunner(target_app)
+        await target_runner.setup()
+        target_site = web.TCPSite(target_runner, "127.0.0.1", 0)
+        await target_site.start()
+        target_socket = target_site._server.sockets[0]
+        target_url = f"http://127.0.0.1:{target_socket.getsockname()[1]}/sink"
+
+        async def redirect(_request: web.Request) -> web.StreamResponse:
+            raise web.HTTPFound(target_url)
+
+        source_app = web.Application()
+        source_app.router.add_get("/{path:.*}", redirect)
+        source_runner = web.AppRunner(source_app)
+        await source_runner.setup()
+        source_site = web.TCPSite(source_runner, "127.0.0.1", 0)
+        await source_site.start()
+        source_socket = source_site._server.sockets[0]
+        source_url = f"http://127.0.0.1:{source_socket.getsockname()[1]}"
+
+        try:
+            colab_manager = RemoteKernelManager(
+                source_url, "proxy-secret", True, None, 5, 0, "colab"
+            )
+            colab_manager.kernel_id = "kernel"
+            with pytest.raises(RuntimeError, match="redirect refused"):
+                await RemoteKernelClient(colab_manager).connect()
+            await colab_manager.http.close()
+            assert target_hits == []
+
+            jupyter_manager = RemoteKernelManager(
+                source_url, "jupyter-secret", True, None, 5, 0, "jupyter"
+            )
+            jupyter_manager.kernel_id = "kernel"
+            jupyter_client = RemoteKernelClient(jupyter_manager)
+            await jupyter_client.connect()
+            await jupyter_client.close()
+            await jupyter_manager.http.close()
+            assert len(target_hits) == 1
+            assert "X-Colab-Runtime-Proxy-Token" not in target_hits[0]["headers"]
+            assert "colab-runtime-proxy-token" not in target_hits[0]["query"]
+        finally:
+            await source_runner.cleanup()
+            await target_runner.cleanup()
+
+    asyncio.run(exercise())
+
+
+def test_ordinary_jupyter_transport_auth_is_unchanged() -> None:
+    async def exercise() -> None:
+        http = _RemoteHTTP()
+        manager = object.__new__(RemoteKernelManager)
+        manager.base_url = "https://jupyter.example"
+        manager.token = "jupyter-secret"
+        manager.provider = "jupyter"
+        manager.verify_ssl = True
+        manager.http = http
+        assert manager.headers() == {"Authorization": "token jupyter-secret"}
+        await manager._request("GET", "/api")
+        _, _, call = http.calls[-1]
+        assert call["headers"] == {"Authorization": "token jupyter-secret"}
+        assert call["params"] is None
+
+        contents = object.__new__(RemoteContentsClient)
+        contents.token = "jupyter-secret"
+        contents.provider = "jupyter"
+        contents.origin = None
+        assert contents.headers() == {"Authorization": "token jupyter-secret"}
+        assert contents.params({"content": 1}) == {"content": 1}
+
+    asyncio.run(exercise())
 
 
 def test_remote_entry_names_are_basenames_consistent_with_paths() -> None:

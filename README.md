@@ -15,7 +15,7 @@ A Neovim-native editor for Jupyter notebooks. Open an `.ipynb` file and work wit
 - **Rich output** — text, tracebacks, tables, sanitized HTML, PNG, JPEG, SVG, PDF, progress bars, basic widgets, and ipympl frames.
 - **Markdown and LaTeX** — rendered notebook cells through `render-markdown.nvim` and `Snacks.image`, while code cells remain code.
 - **Interactive figures** — sandboxed Plotly and Bokeh rendering with an in-Neovim focus view or an optional Awrit window.
-- **Remote Jupyter** — connect through an in-Neovim wizard and browse local/remote files in a two-panel Telescope UI.
+- **Remote Jupyter and Colab** — connect to a server or provision a CPU/GPU/TPU Colab runtime, then browse local/remote files in a two-panel Telescope UI.
 - **Large notebook support** — dirty-cell highlighting/rendering, targeted output updates, bounded payloads, and coalesced event processing.
 
 Notebook HTML and arbitrary notebook JavaScript are never executed. Existing interactive output is blocked until explicitly trusted; output produced by a local kernel receives revision-scoped ephemeral trust.
@@ -38,6 +38,7 @@ The install command below creates a plugin-local Python environment containing `
 | syntax highlighting | `nvim-treesitter` and parsers for the notebook languages |
 | completion UI and live-kernel completion | `nvim-cmp` |
 | outline/variable Telescope pickers; remote files | `telescope.nvim` (required for remote files) |
+| managed Google Colab runtimes | optional [`google-colab-cli`](https://github.com/googlecolab/google-colab-cli) executable |
 | rendered Markdown | `render-markdown.nvim` plus Markdown parsers |
 | LaTeX and image integration | `snacks.nvim`, `pdflatex`, ImageMagick |
 | terminal images | Kitty or Ghostty; `chafa` is the fallback |
@@ -163,7 +164,7 @@ For a remote server, the simplest setup is interactive:
 :NvJupRemoteConnect
 ```
 
-The wizard asks for the URL, hidden token, TLS/origin policy, and kernelspec. Credentials remain in Neovim memory. Static remote configuration is also available under `kernel.remote`; see `:help nvjup-stage7`.
+Choose **Jupyter Server** to enter a URL, hidden token, TLS/origin policy, and kernelspec. For managed runtimes, install the official CLI with `uv tool install --python 3.12 google-colab-cli`, then choose **Google Colab** (or run `:NvJupColabConnect`) to authenticate only when needed, select CPU/GPU/TPU hardware, and connect. nvjup keeps only its imported connection copy in Neovim memory; the official CLI persists OAuth credentials and the runtime proxy/session token in its protected config/state files and owns the keepalive. Disconnecting nvjup does not stop the VM; nvjup reports a safely quoted stop command that preserves the allocation's CLI auth provider and state file. Static Jupyter configuration remains available under `kernel.remote`; see `:help nvjup-stage7`.
 
 All defaults and advanced limits are documented in `:help nvjup-setup`.
 

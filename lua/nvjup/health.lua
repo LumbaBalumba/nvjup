@@ -173,6 +173,12 @@ function M.check()
 	vim.health.start("nvjup remote and optional integrations")
 	local remote_status = remote_api.status()
 	local remote_config = (config.options.kernel or {}).remote
+	local colab_executable = (config.options.colab or {}).executable or "colab"
+	if type(colab_executable) == "string" and vim.fn.executable(colab_executable) == 1 then
+		vim.health.ok("Google Colab CLI is available: " .. (vim.fn.exepath(colab_executable) or colab_executable))
+	else
+		vim.health.info("google-colab-cli is unavailable; Google Colab provisioning is optional")
+	end
 	if remote_status.connected then
 		if remote_status.url:match("^https://") then
 			vim.health.ok("remote Jupyter Server uses HTTPS")
@@ -184,7 +190,13 @@ function M.check()
 		if remote_status.verify_ssl == false then
 			vim.health.warn("remote TLS certificate verification is disabled")
 		end
-		if remote_status.source == "session" then
+		if remote_status.provider == "colab" then
+			vim.health.ok("nvjup's Colab connection copy is held only in Neovim memory")
+			vim.health.info(
+				"the official Colab CLI persists OAuth and runtime session credentials in its config/state files"
+			)
+			vim.health.info("Colab runtime: " .. tostring(remote_status.colab_hardware or "unknown hardware"))
+		elseif remote_status.source == "session" then
 			vim.health.ok("remote connection was established in the nvjup UI; credentials are memory-only")
 		elseif type(remote_config) == "table" and type(remote_config.token_env) == "string" then
 			vim.health.ok("remote Jupyter token environment variable is configured")

@@ -4,7 +4,7 @@ Stage 8 extends the remote Jupyter Server transport with a bounded file-exchange
 
 ## Connection
 
-The normal workflow is entirely interactive: `:NvJupRemoteConnect` or `<leader>nK` asks for URL/authentication/TLS/origin, probes the server, offers its kernelspecs, stores credentials only in Neovim memory, and starts the chosen kernel. The resulting connection is reused by this file manager. Static configuration remains available when desired:
+The normal workflow is entirely interactive: `:NvJupRemoteConnect` or `<leader>nK` selects a Jupyter Server or Google Colab. The Jupyter flow asks for URL/authentication/TLS/origin. The Colab flow (also `:NvJupColabConnect`) uses the optional official `google-colab-cli`, requests OAuth only when its cached credentials cannot be used, offers CPU/GPU/TPU hardware, and provisions the runtime. Both flows probe kernelspecs and reuse the resulting connection in this file manager. nvjup retains only its imported Colab connection copy in Neovim memory; the official CLI persists OAuth credentials and the runtime proxy/session token in its protected config/state files and owns the keepalive. Disconnecting nvjup leaves the VM running. Until profile activation, cancellation, probe failure, and kernel-picker dismissal report the session ID and a safely quoted recovery command; after activation, disconnect reports the same command. It preserves the allocation's global `--auth` and `--config` arguments. Static Jupyter configuration remains available when desired:
 
 ```lua
 require("nvjup").setup({

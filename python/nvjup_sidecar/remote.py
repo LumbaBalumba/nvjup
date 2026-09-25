@@ -5,17 +5,100 @@ import base64
 import binascii
 import contextlib
 import json
+import re
 import uuid
 from collections.abc import Awaitable, Callable
 from datetime import UTC, datetime
 from typing import Any, Self
-from urllib.parse import quote, urlsplit, urlunsplit
+from urllib.parse import quote, quote_plus, urlencode, urlsplit, urlunsplit
 
 import aiohttp
 
 WS_PROTOCOL = "v1.kernel.websocket.jupyter.org"
 MAX_MESSAGE_BYTES = 16 * 1024 * 1024
 MAX_CONTENT_MODEL_BYTES = 16 * 1024 * 1024
+COLAB_PROVIDER = "colab"
+
+
+def _auth_headers(token: str, provider: str) -> dict[str, str]:
+    if provider == COLAB_PROVIDER:
+        return {
+            "X-Colab-Runtime-Proxy-Token": token,
+            "X-Colab-Client-Agent": "nvjup",
+        }
+    return {"Authorization": f"token {token}"} if token else {}
+
+
+def _auth_params(
+    token: str, provider: str, params: dict[str, Any] | None = None
+) -> dict[str, Any] | None:
+    merged = dict(params or {})
+    if provider == COLAB_PROVIDER:
+        merged.update({"authuser": "0", "colab-runtime-proxy-token": token})
+    return merged or None
+
+
+def _percent_escape_pattern(value: str) -> str:
+    """Match a URL-encoded value while ignoring hex-digit case only."""
+    parts: list[str] = []
+    index = 0
+    while index < len(value):
+        if (
+            index + 2 < len(value)
+            and value[index] == "%"
+            and re.fullmatch(r"[0-9A-Fa-f]{2}", value[index + 1 : index + 3])
+        ):
+            high, low = value[index + 1], value[index + 2]
+            parts.append(
+                "%"
+                + (f"[{high.lower()}{high.upper()}]" if high.isalpha() else high)
+                + (f"[{low.lower()}{low.upper()}]" if low.isalpha() else low)
+            )
+            index += 3
+            continue
+        parts.append(re.escape(value[index]))
+        index += 1
+    return "".join(parts)
+
+
+def _redact_token(message: object, token: str) -> str:
+    text = str(message)
+    if not token:
+        return text
+    # aiohttp/yarl errors may echo an arbitrary response body, not just a URL.
+    # First redact named query values, then raw and URL/form-encoded copies of
+    # the exact token. Percent hex digits are case-insensitive by definition.
+    text = re.sub(
+        r"([?&]colab-runtime-proxy-token=)[^&#\s'\"\)>]*",
+        r"\1<redacted>",
+        text,
+        flags=re.IGNORECASE,
+    )
+    encoded = {quote(token, safe=""), quote_plus(token, safe="")}
+    for value in sorted(encoded, key=len, reverse=True):
+        if value:
+            text = re.sub(_percent_escape_pattern(value), "<redacted>", text)
+    return text.replace(token, "<redacted>")
+
+
+async def _reject_colab_redirect(
+    _session: aiohttp.ClientSession,
+    _context: aiohttp.TraceConfigCtx,
+    params: aiohttp.TraceRequestRedirectParams,
+) -> None:
+    if "X-Colab-Runtime-Proxy-Token" in params.headers:
+        raise RuntimeError("Google Colab credentialed WebSocket redirect refused")
+
+
+def _http_session(timeout: float, provider: str) -> aiohttp.ClientSession:
+    traces: list[aiohttp.TraceConfig] = []
+    if provider == COLAB_PROVIDER:
+        trace = aiohttp.TraceConfig()
+        trace.on_request_redirect.append(_reject_colab_redirect)
+        traces.append(trace)
+    return aiohttp.ClientSession(
+        timeout=aiohttp.ClientTimeout(total=timeout), trace_configs=traces
+    )
 
 
 def _clean_base_url(value: str) -> str:
@@ -111,26 +194,36 @@ class RemoteKernelClient:
     async def connect(self) -> None:
         ws_scheme = "wss" if self.manager.base_url.startswith("https://") else "ws"
         http = urlsplit(self.manager.base_url)
+        query = _auth_params(
+            self.manager.token,
+            self.manager.provider,
+            {"session_id": self.session_id},
+        )
         url = urlunsplit(
             (
                 ws_scheme,
                 http.netloc,
                 f"{http.path}/api/kernels/{quote(self.manager.kernel_id, safe='')}/channels",
-                f"session_id={self.session_id}",
+                urlencode(query or {}),
                 "",
             )
         )
         headers = self.manager.headers()
         if self.manager.origin:
             headers["Origin"] = self.manager.origin
-        self.ws = await self.manager.http.ws_connect(
-            url,
-            headers=headers,
-            protocols=(WS_PROTOCOL,),
-            heartbeat=30,
-            max_msg_size=MAX_MESSAGE_BYTES,
-            ssl=self.manager.verify_ssl,
-        )
+        try:
+            self.ws = await self.manager.http.ws_connect(
+                url,
+                headers=headers,
+                protocols=(WS_PROTOCOL,),
+                heartbeat=30,
+                max_msg_size=MAX_MESSAGE_BYTES,
+                ssl=self.manager.verify_ssl,
+            )
+        except Exception as exc:
+            if self.manager.provider == COLAB_PROVIDER:
+                raise RuntimeError(_redact_token(exc, self.manager.token)) from None
+            raise
         if self.ws.protocol != WS_PROTOCOL:
             await self.ws.close()
             self.ws = None
@@ -156,7 +249,12 @@ class RemoteKernelClient:
                 await self.receiver_task
             self.receiver_task = None
         if self.ws and not self.ws.closed:
-            await self.ws.close()
+            try:
+                await self.ws.close()
+            except Exception as exc:
+                if self.manager.provider == COLAB_PROVIDER:
+                    raise RuntimeError(_redact_token(exc, self.manager.token)) from None
+                raise
         self.ws = None
 
     async def _receive(self) -> None:
@@ -180,6 +278,10 @@ class RemoteKernelClient:
                 queue = self.queues.get(channel)
                 if queue is not None:
                     await queue.put(message)
+        except Exception as exc:
+            if self.manager.provider == COLAB_PROVIDER:
+                raise RuntimeError(_redact_token(exc, self.manager.token)) from None
+            raise
         finally:
             self.closed = True
             for queue in self.queues.values():
@@ -214,7 +316,12 @@ class RemoteKernelClient:
             "content": content,
             "buffers": [],
         }
-        await self.ws.send_bytes(_serialize_v1(message, channel))
+        try:
+            await self.ws.send_bytes(_serialize_v1(message, channel))
+        except Exception as exc:
+            if self.manager.provider == COLAB_PROVIDER:
+                raise RuntimeError(_redact_token(exc, self.manager.token)) from None
+            raise
         return str(header["msg_id"])
 
     def _schedule(
@@ -227,18 +334,23 @@ class RemoteKernelClient:
                 raise RuntimeError("remote kernel WebSocket is closed")
             header = self._header(message_type, self.session_id)
             header["msg_id"] = message_id
-            await self.ws.send_bytes(
-                _serialize_v1(
-                    {
-                        "header": header,
-                        "parent_header": {},
-                        "metadata": {},
-                        "content": content,
-                        "buffers": [],
-                    },
-                    channel,
+            try:
+                await self.ws.send_bytes(
+                    _serialize_v1(
+                        {
+                            "header": header,
+                            "parent_header": {},
+                            "metadata": {},
+                            "content": content,
+                            "buffers": [],
+                        },
+                        channel,
+                    )
                 )
-            )
+            except Exception as exc:
+                if self.manager.provider == COLAB_PROVIDER:
+                    raise RuntimeError(_redact_token(exc, self.manager.token)) from None
+                raise
 
         task = asyncio.create_task(send())
         task.add_done_callback(self._send_done)
@@ -399,17 +511,19 @@ class RemoteContentsClient:
         timeout: float,
         max_file_bytes: int,
         max_entries: int,
+        provider: str = "jupyter",
     ) -> None:
         self.base_url = _clean_base_url(base_url)
         self.token = token
+        self.provider = provider if provider == COLAB_PROVIDER else "jupyter"
+        if self.provider == COLAB_PROVIDER and not token:
+            raise ValueError("Google Colab runtime proxy token is required")
         self.verify_ssl = verify_ssl
         self.origin = origin
         self.timeout = max(1.0, min(timeout, 300.0))
         self.max_file_bytes = max(1, min(max_file_bytes, 512 * 1024 * 1024))
         self.max_entries = max(1, min(max_entries, 100_000))
-        self.http = aiohttp.ClientSession(
-            timeout=aiohttp.ClientTimeout(total=self.timeout)
-        )
+        self.http = _http_session(self.timeout, self.provider)
 
     async def __aenter__(self) -> Self:
         return self
@@ -422,10 +536,13 @@ class RemoteContentsClient:
             await self.http.close()
 
     def headers(self) -> dict[str, str]:
-        headers = {"Authorization": f"token {self.token}"} if self.token else {}
+        headers = _auth_headers(self.token, self.provider)
         if self.origin:
             headers["Origin"] = self.origin
         return headers
+
+    def params(self, params: dict[str, Any] | None = None) -> dict[str, Any] | None:
+        return _auth_params(self.token, self.provider, params)
 
     def _url(self, prefix: str, path: str) -> str:
         encoded = quote(_content_path(path), safe="/")
@@ -442,26 +559,31 @@ class RemoteContentsClient:
         allow_root: bool = True,
     ) -> Any:
         normalized = _content_path(path, allow_root=allow_root)
-        async with self.http.request(
-            method,
-            self._url(prefix, normalized),
-            headers=self.headers(),
-            ssl=self.verify_ssl,
-            params=params,
-            json=body,
-            allow_redirects=False,
-        ) as response:
-            raw = await response.content.read(MAX_CONTENT_MODEL_BYTES + 1)
-            if len(raw) > MAX_CONTENT_MODEL_BYTES:
-                raise ValueError("remote content response exceeds 16 MB")
-            if response.status >= 300:
-                detail = raw.decode("utf-8", "replace")[:1024].replace("\n", " ")
-                raise RuntimeError(
-                    f"Jupyter Server returned HTTP {response.status}: {detail}"
-                )
-            if response.status == 204 or not raw:
-                return None
-            return json.loads(raw)
+        try:
+            async with self.http.request(
+                method,
+                self._url(prefix, normalized),
+                headers=self.headers(),
+                ssl=self.verify_ssl,
+                params=self.params(params),
+                json=body,
+                allow_redirects=False,
+            ) as response:
+                raw = await response.content.read(MAX_CONTENT_MODEL_BYTES + 1)
+                if len(raw) > MAX_CONTENT_MODEL_BYTES:
+                    raise ValueError("remote content response exceeds 16 MB")
+                if response.status >= 300:
+                    detail = raw.decode("utf-8", "replace")[:1024].replace("\n", " ")
+                    raise RuntimeError(
+                        f"Jupyter Server returned HTTP {response.status}: {detail}"
+                    )
+                if response.status == 204 or not raw:
+                    return None
+                return json.loads(raw)
+        except Exception as exc:
+            if self.provider == COLAB_PROVIDER:
+                raise RuntimeError(_redact_token(exc, self.token)) from None
+            raise
 
     @staticmethod
     def _entry(
@@ -610,29 +732,35 @@ class RemoteContentsClient:
         )
         if limit < 0:
             raise ValueError("download byte limit cannot be negative")
-        async with self.http.get(
-            self._url("/files", normalized),
-            headers=self.headers(),
-            ssl=self.verify_ssl,
-            allow_redirects=False,
-        ) as response:
-            if response.status < 300:
-                declared = response.content_length
-                if declared is not None and declared > limit:
-                    raise ValueError(f"file exceeds {limit} bytes")
-                chunks: list[bytes] = []
-                size = 0
-                async for chunk in response.content.iter_chunked(64 * 1024):
-                    size += len(chunk)
-                    if size > limit:
+        try:
+            async with self.http.get(
+                self._url("/files", normalized),
+                headers=self.headers(),
+                params=self.params(),
+                ssl=self.verify_ssl,
+                allow_redirects=False,
+            ) as response:
+                if response.status < 300:
+                    declared = response.content_length
+                    if declared is not None and declared > limit:
                         raise ValueError(f"file exceeds {limit} bytes")
-                    chunks.append(chunk)
-                return b"".join(chunks)
-            if response.status not in {400, 404}:
-                detail = (await response.text())[:1024].replace("\n", " ")
-                raise RuntimeError(
-                    f"Jupyter Server returned HTTP {response.status}: {detail}"
-                )
+                    chunks: list[bytes] = []
+                    size = 0
+                    async for chunk in response.content.iter_chunked(64 * 1024):
+                        size += len(chunk)
+                        if size > limit:
+                            raise ValueError(f"file exceeds {limit} bytes")
+                        chunks.append(chunk)
+                    return b"".join(chunks)
+                if response.status not in {400, 404}:
+                    detail = (await response.text())[:1024].replace("\n", " ")
+                    raise RuntimeError(
+                        f"Jupyter Server returned HTTP {response.status}: {detail}"
+                    )
+        except Exception as exc:
+            if self.provider == COLAB_PROVIDER:
+                raise RuntimeError(_redact_token(exc, self.token)) from None
+            raise
         model = await self._json_request(
             "GET", "/api/contents", normalized, params={"content": 1}, allow_root=False
         )
@@ -687,40 +815,50 @@ class RemoteKernelManager:
         origin: str | None,
         timeout: float,
         reconnect_attempts: int,
+        provider: str = "jupyter",
     ) -> None:
         self.base_url = _clean_base_url(base_url)
         self.token = token
+        self.provider = provider if provider == COLAB_PROVIDER else "jupyter"
+        if self.provider == COLAB_PROVIDER and not token:
+            raise ValueError("Google Colab runtime proxy token is required")
         self.verify_ssl = verify_ssl
         self.origin = origin
         self.timeout = max(1.0, min(timeout, 120.0))
         self.reconnect_attempts = max(0, min(reconnect_attempts, 5))
         self.reconnect_count = 0
-        self.http = aiohttp.ClientSession(
-            timeout=aiohttp.ClientTimeout(total=self.timeout)
-        )
+        self.http = _http_session(self.timeout, self.provider)
         self.kernel_id = ""
         self.client_instance: RemoteKernelClient | None = None
 
     def headers(self) -> dict[str, str]:
-        return {"Authorization": f"token {self.token}"} if self.token else {}
+        return _auth_headers(self.token, self.provider)
 
     async def _request(self, method: str, path: str, **kwargs: Any) -> Any:
-        async with self.http.request(
-            method,
-            self.base_url + path,
-            headers=self.headers(),
-            ssl=self.verify_ssl,
-            allow_redirects=False,
-            **kwargs,
-        ) as response:
-            if response.status >= 300:
-                detail = (await response.text())[:1024].replace("\n", " ")
-                raise RuntimeError(
-                    f"Jupyter Server returned HTTP {response.status}: {detail}"
-                )
-            if response.status == 204:
-                return None
-            return await response.json()
+        try:
+            async with self.http.request(
+                method,
+                self.base_url + path,
+                headers=self.headers(),
+                params=_auth_params(
+                    self.token, self.provider, kwargs.pop("params", None)
+                ),
+                ssl=self.verify_ssl,
+                allow_redirects=False,
+                **kwargs,
+            ) as response:
+                if response.status >= 300:
+                    detail = (await response.text())[:1024].replace("\n", " ")
+                    raise RuntimeError(
+                        f"Jupyter Server returned HTTP {response.status}: {detail}"
+                    )
+                if response.status == 204:
+                    return None
+                return await response.json()
+        except Exception as exc:
+            if self.provider == COLAB_PROVIDER:
+                raise RuntimeError(_redact_token(exc, self.token)) from None
+            raise
 
     @classmethod
     async def create(
@@ -733,8 +871,17 @@ class RemoteKernelManager:
         timeout: float,
         reconnect_attempts: int,
         kernel_name: str,
+        provider: str = "jupyter",
     ) -> RemoteKernelManager:
-        manager = cls(base_url, token, verify_ssl, origin, timeout, reconnect_attempts)
+        manager = cls(
+            base_url,
+            token,
+            verify_ssl,
+            origin,
+            timeout,
+            reconnect_attempts,
+            provider,
+        )
         try:
             model = await manager._request(
                 "POST", "/api/kernels", json={"name": kernel_name}

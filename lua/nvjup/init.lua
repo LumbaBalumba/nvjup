@@ -280,12 +280,21 @@ end
 function M.setup(options)
 	config.setup(options)
 	group = vim.api.nvim_create_augroup("NvJup", { clear = true })
-	for _, name in ipairs({ "NvJupRemoteConnect", "NvJupRemoteDisconnect", "NvJupRemoteStatus", "NvJupRemoteFiles" }) do
+	for _, name in ipairs({
+		"NvJupRemoteConnect",
+		"NvJupColabConnect",
+		"NvJupRemoteDisconnect",
+		"NvJupRemoteStatus",
+		"NvJupRemoteFiles",
+	}) do
 		pcall(vim.api.nvim_del_user_command, name)
 	end
 	vim.api.nvim_create_user_command("NvJupRemoteConnect", function()
 		require("nvjup.remote_connection").open()
-	end, { desc = "Connect to or manage a remote Jupyter Server" })
+	end, { desc = "Connect to or manage a remote Jupyter environment" })
+	vim.api.nvim_create_user_command("NvJupColabConnect", function()
+		require("nvjup.remote_connection").connect_colab()
+	end, { desc = "Create and connect to a Google Colab runtime" })
 	vim.api.nvim_create_user_command("NvJupRemoteDisconnect", function()
 		require("nvjup.remote_connection").disconnect()
 	end, { desc = "Disconnect the in-memory remote Jupyter session" })

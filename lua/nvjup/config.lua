@@ -62,6 +62,14 @@ M.defaults = {
 		shutdown_on_close = true,
 		remote = false,
 	},
+	colab = {
+		executable = "colab",
+		auth = "oauth2",
+		state_path = false,
+		create_timeout_seconds = 300,
+		max_output_bytes = 64 * 1024,
+		max_state_bytes = 1024 * 1024,
+	},
 	execution = {
 		trust_local_kernel = true,
 		allow_stdin = true,

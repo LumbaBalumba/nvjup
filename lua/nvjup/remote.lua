@@ -30,9 +30,12 @@ local function normalized(state, options)
 		token = vim.env[options.token_env]
 	end
 	local files = config.options.remote_files or {}
+	local provider = options.provider == "colab" and "colab" or "jupyter"
 	return {
 		url = options.url:gsub("/+$", ""),
 		token = type(token) == "string" and token or "",
+		provider = provider,
+		auth = provider == "colab" and "proxy_token" or (options.auth or "token"),
 		verify_ssl = options.verify_ssl ~= false,
 		origin = type(options.origin) == "string" and options.origin ~= "" and options.origin or nil,
 		reconnect_attempts = math.max(0, math.min(tonumber(options.reconnect_attempts) or 2, 5)),
@@ -46,6 +49,25 @@ local function normalized(state, options)
 		),
 		max_entries = math.max(1, math.min(tonumber(options.max_entries) or files.max_entries or 10000, 100000)),
 		kernel_name = type(options.kernel_name) == "string" and options.kernel_name ~= "" and options.kernel_name
+			or nil,
+		colab_session = provider == "colab" and type(options.colab_session) == "string" and options.colab_session:sub(
+			1,
+			64
+		) or nil,
+		colab_endpoint = provider == "colab"
+				and type(options.colab_endpoint) == "string"
+				and options.colab_endpoint:sub(1, 512)
+			or nil,
+		colab_hardware = provider == "colab"
+				and type(options.colab_hardware) == "string"
+				and options.colab_hardware:sub(1, 128)
+			or nil,
+		colab_recovery_argv = provider == "colab" and type(options.colab_recovery_argv) == "table" and vim.deepcopy(
+			options.colab_recovery_argv
+		) or nil,
+		colab_recovery_command = provider == "colab"
+				and type(options.colab_recovery_command) == "string"
+				and options.colab_recovery_command:sub(1, 32768)
 			or nil,
 	}
 end
@@ -96,6 +118,12 @@ function M.status(state)
 		url = options and options.url:gsub("/+$", "") or nil,
 		kernel_name = options and options.kernel_name or nil,
 		verify_ssl = options and options.verify_ssl ~= false,
+		provider = options and (options.provider == "colab" and "colab" or "jupyter") or nil,
+		colab_session = options and options.colab_session or nil,
+		colab_hardware = options and options.colab_hardware or nil,
+		colab_recovery_argv = options and options.colab_recovery_argv and vim.deepcopy(options.colab_recovery_argv)
+			or nil,
+		colab_recovery_command = options and options.colab_recovery_command or nil,
 		has_token = options
 				and ((type(options.token) == "string" and options.token ~= "") or type(options.token) == "function" or options.token_env ~= nil)
 			or false,

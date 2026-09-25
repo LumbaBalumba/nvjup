@@ -789,6 +789,7 @@ class SidecarServer:
                 timeout=float(request["payload"].get("timeout", 30)),
                 reconnect_attempts=int(remote.get("reconnect_attempts", 2)),
                 kernel_name=kernel_name,
+                provider=str(remote.get("provider") or "jupyter"),
             )
             client = manager.client()
         else:
@@ -1019,6 +1020,7 @@ class SidecarServer:
             float(remote.get("file_timeout_seconds", 60)),
             int(remote.get("max_file_bytes", 64 * 1024 * 1024)),
             int(remote.get("max_entries", 10_000)),
+            str(remote.get("provider") or "jupyter"),
         )
         if self.contents_client and self.contents_identity != identity:
             await self.contents_client.close()
@@ -1032,6 +1034,7 @@ class SidecarServer:
                 timeout=identity[4],
                 max_file_bytes=identity[5],
                 max_entries=identity[6],
+                provider=identity[7],
             )
             self.contents_identity = identity
         return self.contents_client

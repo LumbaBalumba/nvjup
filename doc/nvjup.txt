@@ -79,6 +79,14 @@ Options include:
       --   token_env = "JUPYTER_TOKEN", verify_ssl = true,
       --   reconnect_attempts = 2 },
     },
+    colab = {
+      executable = "colab",
+      auth = "oauth2", -- or "adc"
+      state_path = false, -- official CLI default
+      create_timeout_seconds = 300,
+      max_output_bytes = 64 * 1024,
+      max_state_bytes = 1024 * 1024,
+    },
     execution = {
       trust_local_kernel = true,
       repeat_policy = "queue", -- queue, cancel, or replace
@@ -318,12 +326,23 @@ lower-priority nvjup_kernel nvim-cmp source without starting a kernel on typing.
 
 Statusline plugins can call require('nvjup.statusline').component() or .get(0).
 The outline and variable pickers auto-detect Telescope and retain dependency-free
-fallbacks. <Leader>nK or :NvJupRemoteConnect opens the complete remote connection
-UI: URL, hidden token entry, TLS/origin policy, live server probe, kernelspec
-selection, and owned-kernel startup. Credentials remain only in Neovim memory.
-Reopen it for status/reconnect/disconnect, or use :NvJupRemoteStatus and
-:NvJupRemoteDisconnect. Static `kernel.remote` configuration remains optional.
-Remote channels use authenticated REST and bounded WebSocket v1. See docs/stage7.md.
+fallbacks. <Leader>nK or :NvJupRemoteConnect first selects Jupyter Server or
+Google Colab. The Jupyter flow asks for URL, hidden token, TLS/origin policy and
+kernelspec. The Colab flow (also :NvJupColabConnect) invokes the optional official
+`colab` executable with argv only, performs OAuth only when the CLI requests it,
+and offers CPU, GPU, TPU and applicable high-memory environments. nvjup reads the
+bounded CLI session record, keeps only its imported connection copy in Neovim
+memory, probes kernelspecs, and prefers `python3`. The official CLI persists OAuth
+credentials and the runtime proxy/session token in protected config/state files
+and owns runtime keepalive. If allocation succeeds but setup does not reach
+profile activation (including probe failure, disconnect, or a dismissed kernel
+picker), nvjup reports the generated session ID and a safely quoted stop command
+that preserves the allocation's `--auth` provider and `--config` state file.
+Disconnecting nvjup does not stop the VM. Reopen the UI for
+status/reconnect/disconnect, or use
+:NvJupRemoteStatus and :NvJupRemoteDisconnect. Static `kernel.remote`
+configuration remains optional. Remote channels use authenticated REST and
+bounded WebSocket v1. See docs/stage7.md and docs/stage8.md.
 
 ==============================================================================
 10. REMOTE JUPYTER FILES                              *nvjup-remote-files*
@@ -368,7 +387,8 @@ local panel and edits that copy. Telescope is required. See docs/stage8.md.
 :NvJupOutline           Open cell outline through Telescope or vim.ui.select().
 :NvJupVariables         Inspect public variables in the live kernel.
 :NvJupRemoteConnect     Connect/manage remote Jupyter entirely in the nvjup UI.
-:NvJupRemoteDisconnect  Stop remote kernels and clear in-memory credentials.
+:NvJupColabConnect      Provision and connect to a managed Google Colab runtime.
+:NvJupRemoteDisconnect  Stop remote kernels and clear nvjup's in-memory connection copy.
 :NvJupRemoteStatus      Show URL, selected kernel, auth, TLS, and profile source.
 :NvJupRemoteFiles       Open the two-panel local/remote file manager.
 :NvJupRunCurrent        Run current code cell.
