@@ -318,8 +318,10 @@ test("plays trusted Matplotlib JSHTML frames through Kitty animation commands", 
 	image._set_test_writer(nil)
 end)
 
-test("bounds cumulative decoded pixels across animation frames", function()
-	image._set_test_writer(function()
+test("downsamples animation frames to the cumulative pixel budget", function()
+	local writes = {}
+	image._set_test_writer(function(value)
+		table.insert(writes, value)
 		return true
 	end)
 	local previous_backend = config.options.render.images.backend
@@ -340,8 +342,11 @@ test("bounds cumulative decoded pixels across animation frames", function()
 		id = "stage4-pixel-budget-animation",
 		outputs = { { output_type = "display_data", data = { ["text/html"] = html }, metadata = {} } },
 	}
-	local lines = image.render(state, cell, 80)
-	assert(lines[1][1][1]:find("total pixel limit", 1, true), vim.inspect(lines))
+	local _, seen = image.render(state, cell, 80)
+	local entry = assert(image._placements[next(seen)])
+	assert(entry.status == "ready")
+	assert(entry.animation_frame_count == 1)
+	assert(not table.concat(writes):find("a=f,f=100", 1, true))
 	image.finish_render(state, {})
 	config.options.render.images.backend = previous_backend
 	config.options.interactive.require_trust = previous_trust
@@ -376,6 +381,34 @@ test("rejects Matplotlib JSHTML frames with inconsistent dimensions", function()
 	image.finish_render(state, {})
 	config.options.render.images.backend = previous_backend
 	config.options.interactive.require_trust = previous_trust
+	image._set_test_writer(nil)
+end)
+
+test("rejects JSHTML frames outside animation dimension limits", function()
+	image._set_test_writer(function()
+		return true
+	end)
+	local previous_backend = config.options.render.images.backend
+	local previous_trust = config.options.interactive.require_trust
+	local previous_width = config.options.render.images.animations.max_width_px
+	config.options.render.images.backend = "kitty"
+	config.options.interactive.require_trust = false
+	config.options.render.images.animations.max_width_px = 3
+	local png = "iVBORw0KGgoAAAANSUhEUgAAAAQAAAADCAYAAAC09K7GAAAAEklEQVR42mPwKdrwHxkzEBQAANiRHR2gDahVAAAAAElFTkSuQmCC"
+	local html = '<script>function Animation(frames, img_id, slider_id, interval, loop_select_id) {}frames[0]="data:image/png;base64,'
+		.. png
+		.. '";new Animation(frames, img_id, slider_id, 100, loop_select_id);</script>'
+	local state = { buf = vim.api.nvim_get_current_buf() }
+	local cell = {
+		id = "stage4-animation-dimensions",
+		outputs = { { output_type = "display_data", data = { ["text/html"] = html }, metadata = {} } },
+	}
+	local lines = image.render(state, cell, 80)
+	assert(lines[1][1][1]:find("dimension limit", 1, true), vim.inspect(lines))
+	image.finish_render(state, {})
+	config.options.render.images.backend = previous_backend
+	config.options.interactive.require_trust = previous_trust
+	config.options.render.images.animations.max_width_px = previous_width
 	image._set_test_writer(nil)
 end)
 
@@ -427,16 +460,123 @@ test("decodes embedded Matplotlib HTML5 video into bounded Kitty frames", functi
 			},
 		},
 	}
-	local lines = image.render(state, cell, 80)
+	local lines, seen = image.render(state, cell, 80)
 	assert(#lines == 1 and lines[1][1][1]:find("rendering", 1, true))
-	assert(vim.wait(15000, function()
-		local commands = table.concat(writes)
-		return commands:find("a=f,f=100", 1, true) ~= nil and commands:find("s=3,v=1", 1, true) ~= nil
-	end, 10))
+	assert(
+		vim.wait(15000, function()
+			local commands = table.concat(writes)
+			return commands:find("a=f,f=100", 1, true) ~= nil and commands:find("s=3,v=1", 1, true) ~= nil
+		end, 10),
+		vim.inspect(image._placements[next(seen)])
+	)
 	image.finish_render(state, {})
 	config.options.render.images.backend = previous_backend
 	config.options.interactive.require_trust = previous_trust
 	image._set_test_writer(nil)
+end)
+
+test("fails closed when animation metadata cannot be probed", function()
+	image._set_test_writer(function()
+		return true
+	end)
+	local directory = vim.fn.tempname() .. "-animation-probe-tools"
+	assert(vim.uv.fs_mkdir(directory, 448))
+	local marker = vim.fs.joinpath(directory, "ffmpeg-ran")
+	local ffprobe = vim.fs.joinpath(directory, "ffprobe")
+	local ffmpeg = vim.fs.joinpath(directory, "ffmpeg")
+	vim.fn.writefile({ "#!/bin/sh", "exit 1" }, ffprobe)
+	vim.fn.writefile({ "#!/bin/sh", "touch " .. vim.fn.shellescape(marker), "exit 0" }, ffmpeg)
+	assert(vim.uv.fs_chmod(ffprobe, 493))
+	assert(vim.uv.fs_chmod(ffmpeg, 493))
+	local previous_path = vim.env.PATH
+	local previous_backend = config.options.render.images.backend
+	local previous_trust = config.options.interactive.require_trust
+	vim.env.PATH = directory .. ":" .. previous_path
+	config.options.render.images.backend = "kitty"
+	config.options.interactive.require_trust = false
+	local state = { buf = vim.api.nvim_get_current_buf() }
+	local cell = {
+		id = "stage4-animation-probe-failure",
+		outputs = {
+			{ output_type = "display_data", data = { ["video/mp4"] = vim.base64.encode("fake") }, metadata = {} },
+		},
+	}
+	local _, seen = image.render(state, cell, 80)
+	local entry = assert(image._placements[next(seen)])
+	assert(
+		vim.wait(5000, function()
+			return entry.status == "failed"
+		end, 10),
+		vim.inspect(entry)
+	)
+	assert(entry.error == "could not inspect animation")
+	assert(vim.uv.fs_stat(marker) == nil)
+	image.finish_render(state, {})
+	image._set_test_writer(nil)
+	config.options.render.images.backend = previous_backend
+	config.options.interactive.require_trust = previous_trust
+	vim.env.PATH = previous_path
+	vim.fn.delete(directory, "rf")
+end)
+
+test("retries video conversion with fewer frames when the bounded pipe overflows", function()
+	local directory = vim.fn.tempname() .. "-animation-retry-tools"
+	assert(vim.uv.fs_mkdir(directory, 448))
+	local ffprobe = vim.fs.joinpath(directory, "ffprobe")
+	local ffmpeg = vim.fs.joinpath(directory, "ffmpeg")
+	vim.fn.writefile({
+		"#!/usr/bin/env python3",
+		"import json, sys",
+		"assert sys.argv[sys.argv.index('-f') + 1] == 'mov'",
+		"print(json.dumps({'streams': [{'avg_frame_rate': '2/1', 'width': 4, 'height': 3}], 'format': {'duration': '1'}}))",
+	}, ffprobe)
+	vim.fn.writefile({
+		"#!/usr/bin/env python3",
+		"import base64, os, sys",
+		"assert sys.argv[sys.argv.index('-f') + 1] == 'mov'",
+		"frame = base64.b64decode('iVBORw0KGgoAAAANSUhEUgAAAAQAAAADCAYAAAC09K7GAAAAEklEQVR42mPwKdrwHxkzEBQAANiRHR2gDahVAAAAAElFTkSuQmCC')",
+		"count = int(sys.argv[sys.argv.index('-frames:v') + 1])",
+		"os.write(1, frame if count == 1 else frame * 1000)",
+	}, ffmpeg)
+	assert(vim.uv.fs_chmod(ffprobe, 493))
+	assert(vim.uv.fs_chmod(ffmpeg, 493))
+	local previous_path = vim.env.PATH
+	local previous_backend = config.options.render.images.backend
+	local previous_trust = config.options.interactive.require_trust
+	local previous_bytes = config.options.render.images.animations.max_bytes
+	vim.env.PATH = directory .. ":" .. previous_path
+	config.options.render.images.backend = "kitty"
+	config.options.interactive.require_trust = false
+	config.options.render.images.animations.max_bytes = 1024
+	local writes = {}
+	image._set_test_writer(function(value)
+		table.insert(writes, value)
+		return true
+	end)
+	local state = { buf = vim.api.nvim_get_current_buf() }
+	local cell = {
+		id = "stage4-animation-retry",
+		outputs = {
+			{ output_type = "display_data", data = { ["video/mp4"] = vim.base64.encode("fake") }, metadata = {} },
+		},
+	}
+	local _, seen = image.render(state, cell, 80)
+	local entry = assert(image._placements[next(seen)])
+	assert(
+		vim.wait(10000, function()
+			return entry.status == "ready"
+		end, 10),
+		vim.inspect(entry)
+	)
+	assert(entry.animation_frame_count == 1)
+	assert(not table.concat(writes):find("a=f,f=100", 1, true))
+	image.finish_render(state, {})
+	image._set_test_writer(nil)
+	config.options.render.images.backend = previous_backend
+	config.options.interactive.require_trust = previous_trust
+	config.options.render.images.animations.max_bytes = previous_bytes
+	vim.env.PATH = previous_path
+	vim.fn.delete(directory, "rf")
 end)
 
 test("cancels superseded animation decoder processes", function()
@@ -447,7 +587,7 @@ test("cancels superseded animation decoder processes", function()
 	local ffmpeg = vim.fs.joinpath(directory, "ffmpeg")
 	vim.fn.writefile({
 		"#!/bin/sh",
-		'printf \'%s\' \'{"streams":[{"avg_frame_rate":"2/1"}],"format":{"duration":"1"}}\'',
+		'printf \'%s\' \'{"streams":[{"avg_frame_rate":"2/1","width":4,"height":3}],"format":{"duration":"1"}}\'',
 	}, ffprobe)
 	vim.fn.writefile({
 		"#!/usr/bin/env python3",

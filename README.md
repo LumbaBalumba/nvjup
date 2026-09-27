@@ -159,7 +159,7 @@ require("nvjup").setup({
 
 Python kernels use `kernel.python_path` when set, then an `ipykernel`-capable project `.venv` or `venv`, `kernel.system_python`, and finally a system Python. Non-Python notebooks use their registered kernelspec. The Python running nvjup's sidecar is selected separately.
 
-Matplotlib animations use safe native Kitty frames rather than executing generated HTML/JavaScript. Return `HTML(animation.to_jshtml())` or `HTML(animation.to_html5_video())`; the latter requires `ffmpeg`. As in Jupyter, setting `matplotlib.rcParams["animation.html"]` also enables the animation object's rich representation.
+Matplotlib animations use safe native Kitty frames rather than executing generated HTML/JavaScript. Return `HTML(animation.to_jshtml())` or `HTML(animation.to_html5_video())`; direct `video/mp4` and `image/gif` outputs are supported too, and those formats require `ffmpeg`. Long or high-resolution media is sampled evenly to the configured frame, pixel, and pipe budgets while preserving its playback duration. As in Jupyter, setting `matplotlib.rcParams["animation.html"]` also enables the animation object's rich representation.
 
 For a remote server, the simplest setup is interactive:
 

@@ -29,7 +29,7 @@ a=p,U=1,i=<id>,p=1,c=<cols>,r=<rows>,q=2
 
 The second command creates an explicit virtual placement. Extmark virtual lines contain U+10EEEE placeholders with Kitty row/column diacritics, and a per-image foreground highlight encodes the 24-bit image ID. This makes placement viewport-aware: terminal images follow Neovim redraw, scrolling, resize, folds, and window visibility because the placement is anchored to rendered placeholder cells rather than absolute screen coordinates.
 
-Matplotlib JSHTML PNG frames are extracted without evaluating JavaScript. HTML5 MP4 and GIF inputs are converted asynchronously with `ffmpeg`; frames use Kitty's `a=f` transport and terminal-driven `a=a` playback. Uploads yield between bounded frame batches, and superseded conversions are cancelled.
+Matplotlib JSHTML PNG frames are extracted without evaluating JavaScript. Embedded or direct MP4 and GIF inputs are converted asynchronously with `ffmpeg`; frames use Kitty's `a=f` transport and terminal-driven `a=a` playback. Long JSHTML sources are sampled evenly before decoding. Video/GIF conversion chooses a bounded rate from the source duration and dimensions, and retries with fewer frames if compressed PNG output reaches the pipe budget. Playback retains the original duration. Uploads yield between bounded frame batches, and superseded conversions are cancelled.
 
 No Kitty remote-control socket or `allow_remote_control` setting is used. tmux escape passthrough is wrapped when `$TMUX` is present.
 
@@ -48,7 +48,7 @@ Headless Neovim never writes graphics escapes merely because it inherited `KITTY
 
 ## Conversion and security
 
-PNG is validated and transmitted directly. Other static formats are written to private temporary files and converted asynchronously. Safe SVG prefers `rsvg-convert` with explicit maximum dimensions; JPEG/PDF and the SVG fallback use ImageMagick. Animation input, retained memory, frame stream bytes, frame count, per-frame and cumulative pixels, duration, FPS, dimensions, and conversion time are independently bounded. `ffmpeg` writes PNG frames through a capped pipe rather than an unbounded temporary directory. Temporary inputs and running converters are removed or cancelled after success, failure, timeout, replacement, or detach.
+PNG is validated and transmitted directly. Other static formats are written to private temporary files and converted asynchronously. Safe SVG prefers `rsvg-convert` with explicit maximum dimensions; JPEG/PDF and the SVG fallback use ImageMagick. Animation input, retained memory, frame stream bytes, frame count, per-frame and cumulative pixels, duration, FPS, dimensions, and conversion time are independently bounded. Frame, pixel, FPS, and compressed-stream budgets trigger uniform adaptive sampling; hard input-byte, duration, dimension, and single-frame limits reject the output. `ffmpeg` writes PNG frames through a capped pipe rather than an unbounded temporary directory. Temporary inputs and running converters are removed or cancelled after success, failure, timeout, replacement, or detach.
 
 Stream text applies terminal carriage-return overwrite semantics. This lets tqdm and similar progress bars update one virtual line while execution is running instead of displaying every historical frame.
 

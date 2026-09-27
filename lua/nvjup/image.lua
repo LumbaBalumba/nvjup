@@ -966,21 +966,19 @@ local function parse_jshtml_frames(html)
 	local max_total_pixels = animation_number("max_total_pixels", 32 * 1024 * 1024)
 	local max_fps = animation_number("max_fps", 30)
 	local max_duration_ms = animation_number("max_duration_seconds", 60) * 1000
+	local max_width = math.floor(animation_number("max_width_px", 1280))
+	local max_height = math.floor(animation_number("max_height_px", 960))
 	local encoded_limit = math.ceil(maximum / 3) * 4
 	if #html > encoded_limit + math.ceil(encoded_limit / 10) + 2 * 1024 * 1024 then
 		return nil, nil, string.format("animation exceeds %d byte limit", maximum)
 	end
 	local interval = tonumber(html:match("new%s+Animation%s*%(%s*frames%s*,%s*[%w_]+%s*,%s*[%w_]+%s*,%s*([%d%.]+)"))
 		or 100
-	local gap_ms = math.max(math.ceil(1000 / max_fps), math.min(10000, math.floor(interval + 0.5)))
-	local frames = {}
-	local decoded_total = 0
-	local total_pixels = 0
-	local retained_total = #html
-	local largest_encoded_frame = 0
-	local canvas_width, canvas_height
+	local source_gap_ms = math.max(1, math.floor(interval + 0.5))
 	local prefix = "data:image/png;base64,"
 	local position = 1
+	local source_frames = 0
+	local first_start, first_stop
 	while true do
 		local start = html:find(prefix, position, true)
 		if not start then
@@ -991,53 +989,99 @@ local function parse_jshtml_frames(html)
 		if not stop then
 			return nil, nil, "invalid Matplotlib JS animation frame"
 		end
-		local payload = html:sub(payload_start, stop - 1):gsub("\\\r\n", ""):gsub("\\\n", "")
-		local normalized = normalize_base64(payload)
-		local bytes = normalized and decode_base64(normalized) or nil
-		if not bytes or bytes:sub(1, 8) ~= "\137PNG\r\n\26\n" then
-			return nil, nil, "invalid Matplotlib JS animation frame"
+		source_frames = source_frames + 1
+		if source_frames == 1 then
+			first_start, first_stop = payload_start, stop - 1
 		end
-		local width, height = png_dimensions(bytes)
-		if not width or not height or width <= 0 or height <= 0 then
-			return nil, nil, "invalid Matplotlib JS animation frame dimensions"
-		end
-		if width * height > max_pixels then
-			return nil, nil, string.format("animation frame exceeds %d pixel limit", max_pixels)
-		end
-		total_pixels = total_pixels + width * height
-		if total_pixels > max_total_pixels then
-			return nil, nil, string.format("animation exceeds %d total pixel limit", max_total_pixels)
-		end
-		if canvas_width and (width ~= canvas_width or height ~= canvas_height) then
-			return nil, nil, "Matplotlib animation frames have inconsistent dimensions"
-		end
-		canvas_width, canvas_height = canvas_width or width, canvas_height or height
-		decoded_total = decoded_total + #bytes
-		if decoded_total > maximum then
-			return nil, nil, string.format("animation exceeds %d byte limit", maximum)
-		end
-		if retained_total + #bytes > maximum then
-			return nil, nil, string.format("animation peak data exceeds %d byte limit", maximum)
-		end
-		local canonical = vim.base64.encode(bytes)
-		largest_encoded_frame = math.max(largest_encoded_frame, #canonical)
-		retained_total = retained_total + #canonical + (#frames == 0 and #bytes or 0)
-		if retained_total + 2 * largest_encoded_frame > maximum then
-			return nil, nil, string.format("animation retained data exceeds %d byte limit", maximum)
-		end
-		table.insert(frames, { bytes = #frames == 0 and bytes or nil, base64 = canonical })
-		if #frames > max_frames then
-			return nil, nil, string.format("animation exceeds %d frame limit", max_frames)
+		if source_frames * source_gap_ms > max_duration_ms then
+			return nil, nil, string.format("animation exceeds %.0f second limit", max_duration_ms / 1000)
 		end
 		position = stop + 1
 	end
-	if #frames == 0 then
+	if source_frames == 0 then
 		return nil, nil, "Matplotlib JS animation contains no frames"
 	end
-	if #frames * gap_ms > max_duration_ms then
-		return nil, nil, string.format("animation exceeds %.0f second limit", max_duration_ms / 1000)
+	local duration_ms = source_frames * source_gap_ms
+	local function decode_frame(payload_start, payload_stop)
+		local payload = html:sub(payload_start, payload_stop):gsub("\\\r\n", ""):gsub("\\\n", "")
+		local normalized = normalize_base64(payload)
+		local bytes = normalized and decode_base64(normalized) or nil
+		if not bytes or bytes:sub(1, 8) ~= "\137PNG\r\n\26\n" then
+			return nil, nil, nil, "invalid Matplotlib JS animation frame"
+		end
+		local width, height = png_dimensions(bytes)
+		if not width or not height or width <= 0 or height <= 0 then
+			return nil, nil, nil, "invalid Matplotlib JS animation frame dimensions"
+		end
+		return bytes, width, height
 	end
-	frames.total_pixels = total_pixels
+	local first, canvas_width, canvas_height, first_error = decode_frame(first_start, first_stop)
+	if not first then
+		return nil, nil, first_error
+	end
+	if canvas_width > max_width or canvas_height > max_height then
+		return nil, nil, string.format("animation frame exceeds %dx%d dimension limit", max_width, max_height)
+	end
+	local frame_pixels = canvas_width * canvas_height
+	if frame_pixels > max_pixels or frame_pixels > max_total_pixels then
+		return nil, nil, string.format("animation frame exceeds %d pixel limit", math.min(max_pixels, max_total_pixels))
+	end
+	local fps_frames = math.max(1, math.floor(duration_ms * max_fps / 1000))
+	local pixel_frames = math.max(1, math.floor(max_total_pixels / frame_pixels))
+	local target_frames = math.min(source_frames, max_frames, fps_frames, pixel_frames)
+	local selected = {}
+	if target_frames == 1 then
+		selected[1] = true
+	else
+		for slot = 1, target_frames do
+			local source_index = math.floor((slot - 1) * (source_frames - 1) / (target_frames - 1) + 1.5)
+			selected[source_index] = true
+		end
+	end
+	local frames = {}
+	local decoded_total = 0
+	local retained_total = #html
+	local largest_encoded_frame = 0
+	position = 1
+	local source_index = 0
+	while #frames < target_frames do
+		local start = html:find(prefix, position, true)
+		if not start then
+			break
+		end
+		local payload_start = start + #prefix
+		local stop = html:find('"', payload_start, true)
+		source_index = source_index + 1
+		if selected[source_index] then
+			local bytes, width, height, err
+			if source_index == 1 then
+				bytes, width, height = first, canvas_width, canvas_height
+			else
+				bytes, width, height, err = decode_frame(payload_start, stop - 1)
+			end
+			if not bytes then
+				return nil, nil, err
+			end
+			if width ~= canvas_width or height ~= canvas_height then
+				return nil, nil, "Matplotlib animation frames have inconsistent dimensions"
+			end
+			decoded_total = decoded_total + #bytes
+			if decoded_total > maximum or retained_total + #bytes > maximum then
+				return nil, nil, string.format("animation peak data exceeds %d byte limit", maximum)
+			end
+			local canonical = vim.base64.encode(bytes)
+			largest_encoded_frame = math.max(largest_encoded_frame, #canonical)
+			retained_total = retained_total + #canonical + (#frames == 0 and #bytes or 0)
+			if retained_total + 2 * largest_encoded_frame > maximum then
+				return nil, nil, string.format("animation retained data exceeds %d byte limit", maximum)
+			end
+			table.insert(frames, { bytes = #frames == 0 and bytes or nil, base64 = canonical })
+		end
+		position = stop + 1
+	end
+	frames.total_pixels = #frames * frame_pixels
+	frames.source_frame_count = source_frames
+	local gap_ms = math.max(1, math.floor(duration_ms / #frames + 0.5))
 	return frames, gap_ms
 end
 
@@ -1056,6 +1100,7 @@ end
 local function transmit_animation_frames(state, entry, descriptor, frames, gap_ms, available_width, limits)
 	entry.png_bytes = frames[1].bytes
 	entry.animation_frame_count = #frames
+	entry.animation_source_frame_count = frames.source_frame_count or #frames
 	if entry.backend == "chafa" then
 		prepare_chafa(state, entry, { mime = "image/png" }, frames[1].bytes, limits)
 		return
@@ -1076,6 +1121,9 @@ local function transmit_animation_frames(state, entry, descriptor, frames, gap_m
 	for _, placement in pairs(placements) do
 		if placement ~= entry then
 			active_pixels = active_pixels + (placement.animation_pixels or 0)
+			if placement.previous then
+				active_pixels = active_pixels + (placement.previous.animation_pixels or 0)
+			end
 		end
 	end
 	if active_pixels + total_pixels > maximum_pixels then
@@ -1208,8 +1256,11 @@ local function convert_animation(state, entry, descriptor, source, retained_sour
 	source = nil
 	entry.status = "pending"
 	local timeout = animation_number("conversion_timeout_ms", 30000)
+	local deadline_ms = vim.uv.hrtime() / 1000000 + timeout
+	local input_format = descriptor.source_mime == "image/gif" and "gif" or "mov"
 	local maximum = animation_number("max_bytes", 64 * 1024 * 1024)
 	local max_frames = math.floor(animation_number("max_frames", 240))
+	local max_total_pixels = animation_number("max_total_pixels", 32 * 1024 * 1024)
 	local max_fps = animation_number("max_fps", 30)
 	local max_duration = animation_number("max_duration_seconds", 60)
 	local max_width = math.floor(animation_number("max_width_px", 1280))
@@ -1217,6 +1268,9 @@ local function convert_animation(state, entry, descriptor, source, retained_sour
 	local cancelled = false
 	local cleaned = false
 	local active_cancel
+	local function remaining_timeout()
+		return math.max(0, math.floor(deadline_ms - vim.uv.hrtime() / 1000000))
+	end
 	local function cleanup()
 		if cleaned then
 			return
@@ -1255,19 +1309,43 @@ local function convert_animation(state, entry, descriptor, source, retained_sour
 		end
 		cleanup()
 	end
-	local function run_conversion(rate, duration)
+	local function run_conversion(rate, duration, source_width, source_height, frame_cap)
 		if cancelled or placements[entry.key] ~= entry then
 			entry.cancel()
+			return
+		end
+		local remaining = remaining_timeout()
+		if remaining <= 0 then
+			fail("animation conversion timed out")
 			return
 		end
 		if duration and duration > max_duration then
 			fail(string.format("animation exceeds %.0f second limit", max_duration))
 			return
 		end
-		local fps = math.max(0.2, math.min(max_fps, rate or 10))
+		local target_frames = math.min(max_frames, frame_cap or max_frames)
+		if source_width and source_height and source_width > 0 and source_height > 0 then
+			local scale = math.min(1, max_width / source_width, max_height / source_height)
+			local output_width = math.max(1, math.floor(source_width * scale + 0.5))
+			local output_height = math.max(1, math.floor(source_height * scale + 0.5))
+			target_frames =
+				math.min(target_frames, math.max(1, math.floor(max_total_pixels / (output_width * output_height))))
+		end
+		if duration and duration > 0 then
+			target_frames = math.min(target_frames, math.max(1, math.floor(duration * max_fps)))
+			if rate and rate > 0 then
+				target_frames = math.min(target_frames, math.max(1, math.floor(duration * rate + 0.5)))
+			end
+		end
+		local fps = duration and duration > 0 and (target_frames / duration) or math.min(max_fps, rate or 10)
+		fps = math.max(1 / max_duration, math.min(max_fps, fps))
 		local gap_ms = math.max(1, math.floor(1000 / fps + 0.5))
-		local filter =
-			string.format("fps=%.6g,scale=%d:%d:force_original_aspect_ratio=decrease", fps, max_width, max_height)
+		local filter = string.format(
+			"fps=%.6g,scale=w=min(iw\\,%d):h=min(ih\\,%d):force_original_aspect_ratio=decrease",
+			fps,
+			max_width,
+			max_height
+		)
 		local stream_limit = math.max(1, math.floor(math.max(0, maximum - retained_source_size) / 6))
 		local command = {
 			"ffmpeg",
@@ -1276,15 +1354,19 @@ local function convert_animation(state, entry, descriptor, source, retained_sour
 			"error",
 			"-protocol_whitelist",
 			"file,pipe",
+			"-f",
+			input_format,
 			"-i",
 			input,
+			"-map",
+			"0:v:0",
 			"-an",
 			"-t",
 			tostring(max_duration),
 			"-vf",
 			filter,
 			"-frames:v",
-			tostring(max_frames + 1),
+			tostring(target_frames),
 			"-compression_level",
 			"6",
 			"-f",
@@ -1300,7 +1382,10 @@ local function convert_animation(state, entry, descriptor, source, retained_sour
 				return
 			end
 			local frames, err
-			if result.overflow then
+			if result.overflow and target_frames > 1 then
+				run_conversion(rate, duration, source_width, source_height, math.max(1, math.floor(target_frames / 2)))
+				return
+			elseif result.overflow then
 				err = string.format("animation frame stream exceeds %d byte limit", stream_limit)
 			elseif result.code == 0 then
 				frames, err = parse_converted_frames(result.stdout, maximum, max_frames, retained_source_size)
@@ -1317,45 +1402,78 @@ local function convert_animation(state, entry, descriptor, source, retained_sour
 				entry.status = "failed"
 				entry.error = err
 			else
+				if duration and duration > 0 then
+					gap_ms = math.max(1, math.floor(duration * 1000 / #frames + 0.5))
+				end
 				transmit_animation_frames(state, entry, descriptor, frames, gap_ms, available_width, limits)
 			end
 			refresh_when_ready(state, entry)
-		end, timeout)
+		end, remaining)
 	end
 	if vim.fn.executable("ffprobe") ~= 1 then
-		run_conversion(nil, nil)
+		fail("ffprobe is required for video animations")
 		return
 	end
-	active_cancel = run_bounded({
-		"ffprobe",
-		"-v",
-		"error",
-		"-protocol_whitelist",
-		"file,pipe",
-		"-select_streams",
-		"v:0",
-		"-show_entries",
-		"stream=avg_frame_rate:format=duration",
-		"-of",
-		"json",
-		input,
-	}, function(result)
-		active_cancel = nil
-		if cancelled or placements[entry.key] ~= entry then
-			cleanup()
-			return
-		end
-		local rate, duration
-		if result.code == 0 then
-			local ok, payload = pcall(vim.json.decode, result.stdout or "")
-			if ok and type(payload) == "table" then
-				local stream = type(payload.streams) == "table" and payload.streams[1] or nil
-				rate = stream and animation_frame_rate(stream.avg_frame_rate) or nil
-				duration = type(payload.format) == "table" and tonumber(payload.format.duration) or nil
+	local probe_timeout = math.min(remaining_timeout(), 5000)
+	if probe_timeout <= 0 then
+		fail("animation conversion timed out")
+		return
+	end
+	active_cancel = run_bounded_binary(
+		{
+			"ffprobe",
+			"-v",
+			"error",
+			"-protocol_whitelist",
+			"file,pipe",
+			"-f",
+			input_format,
+			"-select_streams",
+			"v:0",
+			"-show_entries",
+			"stream=avg_frame_rate,width,height,duration:format=duration",
+			"-of",
+			"json",
+			input,
+		},
+		64 * 1024,
+		function(result)
+			active_cancel = nil
+			if cancelled or placements[entry.key] ~= entry then
+				cleanup()
+				return
 			end
-		end
-		run_conversion(rate, duration)
-	end, math.min(timeout, 5000))
+			if result.overflow then
+				fail("animation inspection output exceeded 65536 byte limit")
+				return
+			end
+			if result.code ~= 0 then
+				fail(result.code == 124 and "animation inspection timed out" or "could not inspect animation")
+				return
+			end
+			local ok, payload = pcall(vim.json.decode, result.stdout or "")
+			local stream = ok and type(payload) == "table" and type(payload.streams) == "table" and payload.streams[1]
+				or nil
+			local rate = stream and animation_frame_rate(stream.avg_frame_rate) or nil
+			local source_width = stream and tonumber(stream.width) or nil
+			local source_height = stream and tonumber(stream.height) or nil
+			local duration = stream and tonumber(stream.duration)
+				or (ok and type(payload.format) == "table" and tonumber(payload.format.duration) or nil)
+			if
+				not duration
+				or duration <= 0
+				or not source_width
+				or source_width <= 0
+				or not source_height
+				or source_height <= 0
+			then
+				fail("could not inspect animation dimensions and duration")
+				return
+			end
+			run_conversion(rate, duration, source_width, source_height)
+		end,
+		probe_timeout
+	)
 end
 
 local function prepare_animation(state, entry, descriptor, available_width, limits)

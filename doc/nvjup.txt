@@ -220,8 +220,11 @@ rendering also needs pdflatex and ImageMagick. The projected Markdown byte
 count, not the physical .ipynb size with saved outputs, controls
 markdown_max_bytes. Matplotlib `to_jshtml()` animations are decoded without
 executing their generated JavaScript and sent as bounded native Kitty animation
-frames. Embedded HTML5 video and GIF animation additionally require ffmpeg.
-Loaded and remote animations follow the same explicit interactive trust policy
+frames. Embedded or direct MP4 and GIF animation additionally require ffmpeg.
+Media exceeding the configured frame, pixel, or conversion-stream budget is
+sampled evenly while preserving its playback duration; hard byte and duration
+limits still reject the output. Loaded and remote animations follow the same
+explicit interactive trust policy
 as Plotly/Bokeh; fresh local execution receives revision-scoped trust. Cell
 frames use the full window text area and continue across wrapped and
 display-math rows. The default
