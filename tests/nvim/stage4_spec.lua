@@ -354,6 +354,40 @@ test("downsamples animation frames to the cumulative pixel budget", function()
 	image._set_test_writer(nil)
 end)
 
+test("uses a separate aggregate pixel budget for active animations", function()
+	image._set_test_writer(function()
+		return true
+	end)
+	local previous_backend = config.options.render.images.backend
+	local previous_trust = config.options.interactive.require_trust
+	local previous_pixels = config.options.render.images.animations.max_total_pixels
+	local previous_active_pixels = config.options.render.images.animations.max_active_pixels
+	config.options.render.images.backend = "kitty"
+	config.options.interactive.require_trust = false
+	config.options.render.images.animations.max_total_pixels = 12
+	config.options.render.images.animations.max_active_pixels = 24
+	local png = "iVBORw0KGgoAAAANSUhEUgAAAAQAAAADCAYAAAC09K7GAAAAEklEQVR42mPwKdrwHxkzEBQAANiRHR2gDahVAAAAAElFTkSuQmCC"
+	local html = '<script>function Animation(frames, img_id, slider_id, interval, loop_select_id) {}frames[0]="data:image/png;base64,'
+		.. png
+		.. '";new Animation(frames, img_id, slider_id, 100, loop_select_id);</script>'
+	local state = { buf = vim.api.nvim_get_current_buf() }
+	for index = 1, 2 do
+		local cell = {
+			id = "stage4-active-animation-" .. index,
+			outputs = { { output_type = "display_data", data = { ["text/html"] = html }, metadata = {} } },
+		}
+		local _, seen = image.render(state, cell, 80)
+		local entry = assert(image._placements[next(seen)])
+		assert(entry.status == "ready", vim.inspect(entry))
+	end
+	image.finish_render(state, {})
+	config.options.render.images.backend = previous_backend
+	config.options.interactive.require_trust = previous_trust
+	config.options.render.images.animations.max_total_pixels = previous_pixels
+	config.options.render.images.animations.max_active_pixels = previous_active_pixels
+	image._set_test_writer(nil)
+end)
+
 test("rejects Matplotlib JSHTML frames with inconsistent dimensions", function()
 	image._set_test_writer(function()
 		return true

@@ -965,7 +965,7 @@ local function parse_jshtml_frames(html)
 	local max_pixels = image_options().max_pixels or (16 * 1024 * 1024)
 	local max_total_pixels = animation_number("max_total_pixels", 32 * 1024 * 1024)
 	local max_fps = animation_number("max_fps", 30)
-	local max_duration_ms = animation_number("max_duration_seconds", 60) * 1000
+	local max_duration_ms = animation_number("max_duration_seconds", 30 * 60) * 1000
 	local max_width = math.floor(animation_number("max_width_px", 1280))
 	local max_height = math.floor(animation_number("max_height_px", 960))
 	local encoded_limit = math.ceil(maximum / 3) * 4
@@ -1116,7 +1116,7 @@ local function transmit_animation_frames(state, entry, descriptor, frames, gap_m
 		entry.previous = nil
 	end
 	local total_pixels = frames.total_pixels or 0
-	local maximum_pixels = animation_number("max_total_pixels", 32 * 1024 * 1024)
+	local maximum_pixels = animation_number("max_active_pixels", 128 * 1024 * 1024)
 	local active_pixels = 0
 	for _, placement in pairs(placements) do
 		if placement ~= entry then
@@ -1128,7 +1128,7 @@ local function transmit_animation_frames(state, entry, descriptor, frames, gap_m
 	end
 	if active_pixels + total_pixels > maximum_pixels then
 		entry.status = "failed"
-		entry.error = string.format("active animations exceed %d total pixel limit", maximum_pixels)
+		entry.error = string.format("active animations exceed %d pixel limit", maximum_pixels)
 		return
 	end
 	entry.animation_pixels = total_pixels
@@ -1255,14 +1255,14 @@ local function convert_animation(state, entry, descriptor, source, retained_sour
 	end
 	source = nil
 	entry.status = "pending"
-	local timeout = animation_number("conversion_timeout_ms", 30000)
+	local timeout = animation_number("conversion_timeout_ms", 120000)
 	local deadline_ms = vim.uv.hrtime() / 1000000 + timeout
 	local input_format = descriptor.source_mime == "image/gif" and "gif" or "mov"
 	local maximum = animation_number("max_bytes", 64 * 1024 * 1024)
 	local max_frames = math.floor(animation_number("max_frames", 240))
 	local max_total_pixels = animation_number("max_total_pixels", 32 * 1024 * 1024)
 	local max_fps = animation_number("max_fps", 30)
-	local max_duration = animation_number("max_duration_seconds", 60)
+	local max_duration = animation_number("max_duration_seconds", 30 * 60)
 	local max_width = math.floor(animation_number("max_width_px", 1280))
 	local max_height = math.floor(animation_number("max_height_px", 960))
 	local cancelled = false

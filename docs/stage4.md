@@ -48,7 +48,7 @@ Headless Neovim never writes graphics escapes merely because it inherited `KITTY
 
 ## Conversion and security
 
-PNG is validated and transmitted directly. Other static formats are written to private temporary files and converted asynchronously. Safe SVG prefers `rsvg-convert` with explicit maximum dimensions; JPEG/PDF and the SVG fallback use ImageMagick. Animation input, retained memory, frame stream bytes, frame count, per-frame and cumulative pixels, duration, FPS, dimensions, and conversion time are independently bounded. Frame, pixel, FPS, and compressed-stream budgets trigger uniform adaptive sampling; hard input-byte, duration, dimension, and single-frame limits reject the output. `ffmpeg` writes PNG frames through a capped pipe rather than an unbounded temporary directory. Temporary inputs and running converters are removed or cancelled after success, failure, timeout, replacement, or detach.
+PNG is validated and transmitted directly. Other static formats are written to private temporary files and converted asynchronously. Safe SVG prefers `rsvg-convert` with explicit maximum dimensions; JPEG/PDF and the SVG fallback use ImageMagick. Animation input, retained memory, frame stream bytes, frame count, per-frame and cumulative pixels, duration, FPS, dimensions, and conversion time are independently bounded. `max_total_pixels` is the per-animation decoded-frame budget; `max_active_pixels` separately bounds all animations retained by the notebook, including images preserved while replacements are converting. Frame, pixel, FPS, and compressed-stream budgets trigger uniform adaptive sampling; hard input-byte, duration, dimension, and single-frame limits reject the output. `ffmpeg` writes PNG frames through a capped pipe rather than an unbounded temporary directory. Temporary inputs and running converters are removed or cancelled after success, failure, timeout, replacement, or detach.
 
 Stream text applies terminal carriage-return overwrite semantics. This lets tqdm and similar progress bars update one virtual line while execution is running instead of displaying every historical frame.
 
@@ -92,11 +92,12 @@ require("nvjup").setup({
         max_bytes = 64 * 1024 * 1024,
         max_frames = 240,
         max_total_pixels = 32 * 1024 * 1024,
-        max_duration_seconds = 60,
+        max_active_pixels = 128 * 1024 * 1024,
+        max_duration_seconds = 30 * 60,
         max_fps = 30,
         max_width_px = 1280,
         max_height_px = 960,
-        conversion_timeout_ms = 30000,
+        conversion_timeout_ms = 120000,
       },
     },
   },
