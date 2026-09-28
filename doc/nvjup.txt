@@ -68,6 +68,11 @@ Options include:
           max_width_px = 1280,
           max_height_px = 960,
           conversion_timeout_ms = 120000,
+          video_frame_limit_policy = "stream",
+          stream_buffer_frames = 12,
+          stream_buffer_bytes = 32 * 1024 * 1024,
+          stream_max_frame_bytes = 8 * 1024 * 1024,
+          stream_max_source_fps = 120,
         },
       },
     },
@@ -222,9 +227,12 @@ count, not the physical .ipynb size with saved outputs, controls
 markdown_max_bytes. Matplotlib `to_jshtml()` animations are decoded without
 executing their generated JavaScript and sent as bounded native Kitty animation
 frames. Embedded or direct MP4 and GIF animation additionally require ffmpeg.
-Media exceeding the configured frame, pixel, or conversion-stream budget is
-sampled evenly while preserving its playback duration; hard byte and duration
-limits still reject the output. max_total_pixels bounds one animation, while
+MP4 media exceeding max_frames uses bounded real-time streaming by default.
+ffmpeg decodes at the source clock into a small frame/byte-capped buffer; late
+frames are dropped to preserve wall-clock playback, Kitty retains only the
+current frame, and playback stops at EOF. GIF and shorter animations use the
+bounded preload path. Set video_frame_limit_policy="sample" to restore uniform
+sampling. max_total_pixels bounds one preloaded animation, while
 max_active_pixels bounds all animations retained across the notebook. Loaded
 and remote animations follow the same
 explicit interactive trust policy

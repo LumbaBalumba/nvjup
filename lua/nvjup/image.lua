@@ -1162,6 +1162,222 @@ local function transmit_animation_frames(state, entry, descriptor, frames, gap_m
 	vim.schedule(upload_batch)
 end
 
+local function png_stream_frame_end(data, maximum)
+	if #data < 8 then
+		return nil
+	end
+	if data:sub(1, 8) ~= "\137PNG\r\n\26\n" then
+		return false, "video stream produced invalid PNG data"
+	end
+	local cursor = 9
+	while true do
+		if #data < cursor + 7 then
+			return nil
+		end
+		local a, b, c, d = data:byte(cursor, cursor + 3)
+		local length = ((a * 256 + b) * 256 + c) * 256 + d
+		if length > maximum then
+			return false, string.format("streamed frame exceeds %d byte limit", maximum)
+		end
+		local kind = data:sub(cursor + 4, cursor + 7)
+		local chunk_end = cursor + 12 + length - 1
+		if chunk_end > maximum then
+			return false, string.format("streamed frame exceeds %d byte limit", maximum)
+		end
+		if #data < chunk_end then
+			return nil
+		end
+		if kind == "IEND" then
+			return chunk_end
+		end
+		cursor = chunk_end + 1
+	end
+end
+
+local function run_png_stream(command, maximum, inactivity_timeout, on_frame, on_exit)
+	local stdout = vim.uv.new_pipe(false)
+	local stderr = vim.uv.new_pipe(false)
+	local timer = vim.uv.new_timer()
+	local handle
+	local buffer = ""
+	local errors = {}
+	local error_size = 0
+	local exited, stdout_done, stderr_done = false, false, false
+	local exit_code, exit_signal = 1, 0
+	local completed, cancelled, terminating, timed_out = false, false, false, false
+	local paused = false
+	local stream_error
+	local read_stdout
+	local function close(value)
+		if value and not value:is_closing() then
+			value:close()
+		end
+	end
+	local function stop_timer()
+		if timer then
+			timer:stop()
+			close(timer)
+			timer = nil
+		end
+	end
+	local function terminate()
+		if terminating then
+			return
+		end
+		terminating = true
+		if handle and not handle:is_closing() then
+			pcall(handle.kill, handle, 15)
+			vim.defer_fn(function()
+				if handle and not handle:is_closing() then
+					pcall(handle.kill, handle, 9)
+				end
+			end, 500)
+		end
+	end
+	local function arm_timer()
+		if not timer then
+			return
+		end
+		timer:stop()
+		timer:start(inactivity_timeout, 0, function()
+			timed_out = true
+			terminate()
+		end)
+	end
+	local function pause_stdout()
+		paused = true
+		stdout:read_stop()
+		if timer then
+			timer:stop()
+		end
+	end
+	local function maybe_finish()
+		if completed or not (exited and stdout_done and stderr_done) then
+			return
+		end
+		completed = true
+		stop_timer()
+		close(handle)
+		if cancelled then
+			buffer = ""
+			return
+		end
+		if buffer ~= "" and not stream_error then
+			stream_error = "video stream ended with a truncated PNG frame"
+		end
+		buffer = ""
+		on_exit({
+			code = timed_out and 124 or exit_code,
+			signal = exit_signal,
+			stderr = table.concat(errors),
+			error = stream_error,
+		})
+	end
+	local args = {}
+	for index = 2, #command do
+		table.insert(args, command[index])
+	end
+	handle = vim.uv.spawn(command[1], { args = args, stdio = { nil, stdout, stderr } }, function(code, signal)
+		exit_code, exit_signal, exited = code, signal, true
+		vim.schedule(maybe_finish)
+	end)
+	if not handle then
+		stdout_done, stderr_done, exited, exit_code = true, true, true, 127
+		close(stdout)
+		close(stderr)
+		vim.schedule(maybe_finish)
+	else
+		arm_timer()
+		read_stdout = function(err, data)
+			if err and not stream_error then
+				stream_error = tostring(err)
+				terminate()
+			end
+			if data then
+				arm_timer()
+				buffer = buffer .. data
+				while buffer ~= "" do
+					local frame_end, frame_error = png_stream_frame_end(buffer, maximum)
+					if frame_end == nil then
+						if #buffer > maximum then
+							stream_error = string.format("streamed frame exceeds %d byte limit", maximum)
+							terminate()
+						end
+						break
+					end
+					if frame_end == false then
+						stream_error = frame_error
+						terminate()
+						break
+					end
+					local ok, callback_error, should_pause = on_frame(buffer:sub(1, frame_end))
+					if ok == "pause" then
+						pause_stdout()
+						break
+					end
+					buffer = buffer:sub(frame_end + 1)
+					if ok == false then
+						stream_error = callback_error or "streamed frame rejected"
+						terminate()
+						break
+					end
+					if should_pause then
+						pause_stdout()
+						break
+					end
+				end
+			else
+				stdout_done = true
+				close(stdout)
+				vim.schedule(maybe_finish)
+			end
+		end
+		stdout:read_start(read_stdout)
+		stderr:read_start(function(err, data)
+			if err and error_size < 16384 then
+				table.insert(errors, tostring(err))
+			end
+			if data then
+				if error_size < 16384 then
+					local remaining = 16384 - error_size
+					local piece = data:sub(1, remaining)
+					table.insert(errors, piece)
+					error_size = error_size + #piece
+				end
+			else
+				stderr_done = true
+				close(stderr)
+				vim.schedule(maybe_finish)
+			end
+		end)
+	end
+	local function cancel()
+		if completed or cancelled then
+			return
+		end
+		cancelled = true
+		stop_timer()
+		terminate()
+		buffer = ""
+		stdout_done, stderr_done = true, true
+		close(stdout)
+		close(stderr)
+		vim.schedule(maybe_finish)
+	end
+	local function resume()
+		if completed or cancelled or not paused then
+			return
+		end
+		paused = false
+		arm_timer()
+		read_stdout(nil, "")
+		if not paused and not stdout_done then
+			stdout:read_start(read_stdout)
+		end
+	end
+	return cancel, resume
+end
+
 local function parse_converted_frames(data, maximum, max_frames, retained_source_size)
 	if type(data) ~= "string" or data == "" then
 		return nil, "animation conversion produced no frames"
@@ -1309,6 +1525,219 @@ local function convert_animation(state, entry, descriptor, source, retained_sour
 		end
 		cleanup()
 	end
+	local function run_streaming_video(rate, duration)
+		local buffer_frames = math.max(2, math.floor(animation_number("stream_buffer_frames", 12)))
+		local prebuffer_frames = math.min(buffer_frames, math.max(2, math.ceil(rate * 0.5)))
+		local buffer_bytes_limit = math.floor(animation_number("stream_buffer_bytes", 32 * 1024 * 1024))
+		local max_frame_bytes =
+			math.min(buffer_bytes_limit, math.floor(animation_number("stream_max_frame_bytes", 8 * 1024 * 1024)))
+		local max_pixels = image_options().max_pixels or (16 * 1024 * 1024)
+		local estimated_frames = math.max(1, math.floor(duration * rate + 0.5))
+		local queue = {}
+		local queue_bytes = 0
+		local decoded_frames, displayed_frames, dropped_frames = 0, 0, 0
+		local canvas_width, canvas_height
+		local process_done = false
+		local playback_started = false
+		local start_ns, start_index
+		local pump_scheduled = false
+		local playback_timer = vim.uv.new_timer()
+		local process_cancel, process_resume
+		local function close_playback_timer()
+			if playback_timer then
+				playback_timer:stop()
+				if not playback_timer:is_closing() then
+					playback_timer:close()
+				end
+				playback_timer = nil
+			end
+		end
+		local function complete_stream()
+			close_playback_timer()
+			active_cancel = nil
+			cleanup()
+			entry.cancel = nil
+			entry.streaming = false
+			entry.stream_complete = true
+			entry.stream_frames_decoded = decoded_frames
+			entry.stream_frames_displayed = displayed_frames
+			entry.stream_frames_dropped = dropped_frames
+			refresh_when_ready(state, entry)
+		end
+		local function display_frame(frame)
+			local canonical = vim.base64.encode(frame.bytes)
+			if not entry.image_id then
+				local frames = { { bytes = frame.bytes, base64 = canonical } }
+				frames.total_pixels = frame.width * frame.height
+				frames.source_frame_count = estimated_frames
+				transmit_animation_frames(
+					state,
+					entry,
+					descriptor,
+					frames,
+					math.max(1, math.floor(1000 / rate + 0.5)),
+					available_width,
+					limits
+				)
+				if entry.status == "failed" then
+					fail(entry.error)
+					return false
+				end
+				entry.streaming = true
+				entry.stream_buffer_frames = buffer_frames
+				refresh_when_ready(state, entry)
+			else
+				entry.png_bytes = frame.bytes
+				tty_write(encode_transmit(entry.image_id, canonical, entry.rows, entry.cols))
+			end
+			displayed_frames = displayed_frames + 1
+			entry.animation_frame_count = displayed_frames
+			entry.animation_source_frame_count = estimated_frames
+			entry.stream_frames_decoded = decoded_frames
+			entry.stream_frames_displayed = displayed_frames
+			entry.stream_frames_dropped = dropped_frames
+			return true
+		end
+		local pump
+		local function schedule_pump()
+			if pump_scheduled or cancelled then
+				return
+			end
+			pump_scheduled = true
+			vim.schedule(function()
+				pump_scheduled = false
+				if not cancelled then
+					pump()
+				end
+			end)
+		end
+		pump = function()
+			if cancelled or placements[entry.key] ~= entry then
+				entry.cancel()
+				return
+			end
+			if not playback_started then
+				if #queue < prebuffer_frames and not process_done then
+					return
+				end
+				if #queue == 0 then
+					if process_done then
+						fail("video stream produced no frames")
+					end
+					return
+				end
+				playback_started = true
+				start_ns = vim.uv.hrtime()
+				start_index = queue[1].index
+			end
+			local target_index = start_index + math.floor((vim.uv.hrtime() - start_ns) / 1000000000 * rate)
+			while #queue > 1 and queue[2].index <= target_index do
+				local skipped = table.remove(queue, 1)
+				queue_bytes = queue_bytes - #skipped.bytes
+				dropped_frames = dropped_frames + 1
+			end
+			if #queue > 0 and queue[1].index <= target_index then
+				local frame = table.remove(queue, 1)
+				queue_bytes = queue_bytes - #frame.bytes
+				if not display_frame(frame) then
+					return
+				end
+			end
+			if process_resume and #queue < buffer_frames and queue_bytes < buffer_bytes_limit then
+				process_resume()
+			end
+			if process_done and #queue == 0 then
+				complete_stream()
+			end
+		end
+		local filter = string.format(
+			"scale=w=min(iw\\,%d):h=min(ih\\,%d):force_original_aspect_ratio=decrease",
+			max_width,
+			max_height
+		)
+		local command = {
+			"ffmpeg",
+			"-nostdin",
+			"-v",
+			"error",
+			"-protocol_whitelist",
+			"file,pipe",
+			"-f",
+			input_format,
+			"-re",
+			"-i",
+			input,
+			"-map",
+			"0:v:0",
+			"-an",
+			"-t",
+			tostring(duration),
+			"-vf",
+			filter,
+			"-fps_mode",
+			"passthrough",
+			"-compression_level",
+			"6",
+			"-f",
+			"image2pipe",
+			"-vcodec",
+			"png",
+			"pipe:1",
+		}
+		local stream_timeout = math.max(timeout, math.ceil(3000 / rate))
+		process_cancel, process_resume = run_png_stream(command, max_frame_bytes, stream_timeout, function(bytes)
+			if #queue >= buffer_frames or queue_bytes + #bytes > buffer_bytes_limit then
+				return "pause"
+			end
+			decoded_frames = decoded_frames + 1
+			local width, height = png_dimensions(bytes)
+			if not width or not height or width <= 0 or height <= 0 then
+				return false, "video stream produced invalid frame dimensions"
+			end
+			if width > max_width or height > max_height or width * height > max_pixels then
+				return false, "streamed video frame exceeds configured dimensions"
+			end
+			if canvas_width and (width ~= canvas_width or height ~= canvas_height) then
+				return false, "video stream produced inconsistent frame dimensions"
+			end
+			canvas_width, canvas_height = canvas_width or width, canvas_height or height
+			table.insert(queue, { bytes = bytes, width = width, height = height, index = decoded_frames })
+			queue_bytes = queue_bytes + #bytes
+			schedule_pump()
+			return true, nil, #queue >= buffer_frames or queue_bytes >= buffer_bytes_limit
+		end, function(result)
+			if cancelled or placements[entry.key] ~= entry then
+				cleanup()
+				return
+			end
+			if result.error or result.code ~= 0 then
+				local stderr = (result.stderr or ""):gsub("%s+$", "")
+				fail(
+					result.error
+						or (result.code == 124 and "video stream stalled")
+						or (stderr ~= "" and stderr)
+						or "video stream failed"
+				)
+				return
+			end
+			process_done = true
+			cleanup()
+			schedule_pump()
+		end)
+		active_cancel = function()
+			close_playback_timer()
+			if process_cancel then
+				process_cancel()
+				process_cancel = nil
+				process_resume = nil
+			end
+			queue = {}
+			queue_bytes = 0
+		end
+		local tick_ms = math.max(4, math.min(50, math.floor(500 / rate)))
+		playback_timer:start(tick_ms, tick_ms, schedule_pump)
+	end
+
 	local function run_conversion(rate, duration, source_width, source_height, frame_cap)
 		if cancelled or placements[entry.key] ~= entry then
 			entry.cancel()
@@ -1470,7 +1899,20 @@ local function convert_animation(state, entry, descriptor, source, retained_sour
 				fail("could not inspect animation dimensions and duration")
 				return
 			end
-			run_conversion(rate, duration, source_width, source_height)
+			local policy = animation_options().video_frame_limit_policy or "stream"
+			local estimated_frames = rate and rate > 0 and duration * rate or 0
+			if descriptor.source_mime == "video/mp4" and policy == "stream" and estimated_frames > max_frames then
+				local max_source_fps = animation_number("stream_max_source_fps", 120)
+				if rate > max_source_fps then
+					fail(string.format("video frame rate exceeds %.0f FPS streaming limit", max_source_fps))
+				elseif duration > max_duration then
+					fail(string.format("animation exceeds %.0f second limit", max_duration))
+				else
+					run_streaming_video(rate, duration)
+				end
+			else
+				run_conversion(rate, duration, source_width, source_height)
+			end
 		end,
 		probe_timeout
 	)

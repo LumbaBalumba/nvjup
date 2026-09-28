@@ -613,6 +613,96 @@ test("retries video conversion with fewer frames when the bounded pipe overflows
 	vim.fn.delete(directory, "rf")
 end)
 
+test("streams over-limit MP4 frames in real time without Kitty preloading", function()
+	local directory = vim.fn.tempname() .. "-video-stream-tools"
+	assert(vim.uv.fs_mkdir(directory, 448))
+	local ffprobe = vim.fs.joinpath(directory, "ffprobe")
+	local ffmpeg = vim.fs.joinpath(directory, "ffmpeg")
+	vim.fn.writefile({
+		"#!/usr/bin/env python3",
+		"import json",
+		"print(json.dumps({'streams': [{'avg_frame_rate': '50/1', 'width': 4, 'height': 3, 'duration': '0.2'}], 'format': {'duration': '0.2'}}))",
+	}, ffprobe)
+	vim.fn.writefile({
+		"#!/usr/bin/env python3",
+		"import base64, os, sys, time",
+		"assert '-re' in sys.argv",
+		"frame = base64.b64decode('iVBORw0KGgoAAAANSUhEUgAAAAQAAAADCAYAAAC09K7GAAAAEklEQVR42mPwKdrwHxkzEBQAANiRHR2gDahVAAAAAElFTkSuQmCC')",
+		"for _ in range(10):",
+		"    os.write(1, frame)",
+		"    time.sleep(0.02)",
+	}, ffmpeg)
+	assert(vim.uv.fs_chmod(ffprobe, 493))
+	assert(vim.uv.fs_chmod(ffmpeg, 493))
+	local previous_path = vim.env.PATH
+	local previous_backend = config.options.render.images.backend
+	local previous_trust = config.options.interactive.require_trust
+	local previous_frames = config.options.render.images.animations.max_frames
+	local previous_buffer = config.options.render.images.animations.stream_buffer_frames
+	vim.env.PATH = directory .. ":" .. previous_path
+	config.options.render.images.backend = "kitty"
+	config.options.interactive.require_trust = false
+	config.options.render.images.animations.max_frames = 3
+	config.options.render.images.animations.stream_buffer_frames = 3
+	local writes = {}
+	image._set_test_writer(function(value)
+		table.insert(writes, value)
+		return true
+	end)
+	local state = { buf = vim.api.nvim_get_current_buf() }
+	local cell = {
+		id = "stage4-streaming-video",
+		outputs = {
+			{ output_type = "display_data", data = { ["video/mp4"] = vim.base64.encode("fake") }, metadata = {} },
+		},
+	}
+	local _, seen = image.render(state, cell, 80)
+	local entry = assert(image._placements[next(seen)])
+	assert(
+		vim.wait(2000, function()
+			return entry.streaming or entry.status == "failed"
+		end, 5),
+		vim.inspect(entry)
+	)
+	vim.uv.sleep(100)
+	assert(
+		vim.wait(5000, function()
+			return entry.stream_complete or entry.status == "failed"
+		end, 5),
+		vim.inspect(entry)
+	)
+	assert(entry.status == "ready", vim.inspect(entry))
+	assert(entry.stream_frames_decoded == 10)
+	assert(entry.stream_frames_displayed >= 2 and entry.stream_frames_displayed <= 10)
+	assert(entry.stream_frames_dropped > 0)
+	assert(entry.stream_frames_displayed + entry.stream_frames_dropped == entry.stream_frames_decoded)
+	local commands = table.concat(writes)
+	assert(commands:find("a=t,f=100", 1, true))
+	assert(not commands:find("a=f,f=100", 1, true))
+	assert(not commands:find("s=3,v=1", 1, true))
+	local streamed_id
+	local replacements = 0
+	for image_id in commands:gmatch("a=t,f=100,i=(%d+)") do
+		streamed_id = streamed_id or image_id
+		assert(image_id == streamed_id)
+		replacements = replacements + 1
+	end
+	assert(replacements == entry.stream_frames_displayed)
+	local write_count = #writes
+	vim.wait(100, function()
+		return false
+	end, 10)
+	assert(#writes == write_count)
+	image.finish_render(state, {})
+	image._set_test_writer(nil)
+	config.options.render.images.backend = previous_backend
+	config.options.interactive.require_trust = previous_trust
+	config.options.render.images.animations.max_frames = previous_frames
+	config.options.render.images.animations.stream_buffer_frames = previous_buffer
+	vim.env.PATH = previous_path
+	vim.fn.delete(directory, "rf")
+end)
+
 test("cancels superseded animation decoder processes", function()
 	local directory = vim.fn.tempname() .. "-animation-tools"
 	assert(vim.uv.fs_mkdir(directory, 448))
