@@ -337,6 +337,26 @@ local function encode_transmit(image_id, png_base64, rows, cols)
 	return table.concat(commands)
 end
 
+local function encode_stream_frame(image_id, png_base64)
+	local commands = {}
+	local position = 1
+	local first = true
+	while position <= #png_base64 do
+		local stop = math.min(position + KITTY_CHUNK - 1, #png_base64)
+		local chunk = png_base64:sub(position, stop)
+		local more = stop < #png_base64 and 1 or 0
+		if first then
+			table.insert(commands, string.format("\27_Ga=f,f=100,i=%d,r=1,q=2,m=%d;%s\27\\", image_id, more, chunk))
+			first = false
+		else
+			table.insert(commands, string.format("\27_Ga=f,m=%d,q=2;%s\27\\", more, chunk))
+		end
+		position = stop + 1
+	end
+	table.insert(commands, string.format("\27_Ga=a,i=%d,c=1,q=2\27\\", image_id))
+	return table.concat(commands)
+end
+
 local function encode_animation_frame(image_id, png_base64, gap_ms)
 	local commands = {}
 	local position = 1
@@ -1588,7 +1608,7 @@ local function convert_animation(state, entry, descriptor, source, retained_sour
 				refresh_when_ready(state, entry)
 			else
 				entry.png_bytes = frame.bytes
-				tty_write(encode_transmit(entry.image_id, canonical, entry.rows, entry.cols))
+				tty_write(encode_stream_frame(entry.image_id, canonical))
 			end
 			displayed_frames = displayed_frames + 1
 			entry.animation_frame_count = displayed_frames

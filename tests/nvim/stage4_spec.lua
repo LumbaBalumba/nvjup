@@ -677,17 +677,24 @@ test("streams over-limit MP4 frames in real time without Kitty preloading", func
 	assert(entry.stream_frames_dropped > 0)
 	assert(entry.stream_frames_displayed + entry.stream_frames_dropped == entry.stream_frames_decoded)
 	local commands = table.concat(writes)
-	assert(commands:find("a=t,f=100", 1, true))
-	assert(not commands:find("a=f,f=100", 1, true))
+	local streamed_id = assert(commands:match("a=t,f=100,i=(%d+)"))
 	assert(not commands:find("s=3,v=1", 1, true))
-	local streamed_id
+	local roots = 0
+	for _ in commands:gmatch("a=t,f=100,i=%d+") do
+		roots = roots + 1
+	end
+	assert(roots == 1)
 	local replacements = 0
-	for image_id in commands:gmatch("a=t,f=100,i=(%d+)") do
-		streamed_id = streamed_id or image_id
+	for image_id in commands:gmatch("a=f,f=100,i=(%d+),r=1") do
 		assert(image_id == streamed_id)
 		replacements = replacements + 1
 	end
-	assert(replacements == entry.stream_frames_displayed)
+	assert(replacements == entry.stream_frames_displayed - 1)
+	local placements = 0
+	for _ in commands:gmatch("a=p,U=1,i=%d+") do
+		placements = placements + 1
+	end
+	assert(placements == 1)
 	local write_count = #writes
 	vim.wait(100, function()
 		return false
