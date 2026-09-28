@@ -337,7 +337,7 @@ local function encode_transmit(image_id, png_base64, rows, cols)
 	return table.concat(commands)
 end
 
-local function encode_stream_frame(image_id, png_base64)
+local function encode_stream_frame(image_id, png_base64, frame_exists)
 	local commands = {}
 	local position = 1
 	local first = true
@@ -346,14 +346,18 @@ local function encode_stream_frame(image_id, png_base64)
 		local chunk = png_base64:sub(position, stop)
 		local more = stop < #png_base64 and 1 or 0
 		if first then
-			table.insert(commands, string.format("\27_Ga=f,f=100,i=%d,r=1,q=2,m=%d;%s\27\\", image_id, more, chunk))
+			local target = frame_exists and ",r=2" or ""
+			table.insert(
+				commands,
+				string.format("\27_Ga=f,f=100,i=%d%s,X=1,q=2,m=%d;%s\27\\", image_id, target, more, chunk)
+			)
 			first = false
 		else
 			table.insert(commands, string.format("\27_Ga=f,m=%d,q=2;%s\27\\", more, chunk))
 		end
 		position = stop + 1
 	end
-	table.insert(commands, string.format("\27_Ga=a,i=%d,c=1,q=2\27\\", image_id))
+	table.insert(commands, string.format("\27_Ga=a,i=%d,c=2,q=2\27\\", image_id))
 	return table.concat(commands)
 end
 
@@ -1608,7 +1612,8 @@ local function convert_animation(state, entry, descriptor, source, retained_sour
 				refresh_when_ready(state, entry)
 			else
 				entry.png_bytes = frame.bytes
-				tty_write(encode_stream_frame(entry.image_id, canonical))
+				tty_write(encode_stream_frame(entry.image_id, canonical, entry.stream_frame_initialized))
+				entry.stream_frame_initialized = true
 			end
 			displayed_frames = displayed_frames + 1
 			entry.animation_frame_count = displayed_frames

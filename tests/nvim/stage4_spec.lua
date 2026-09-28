@@ -684,12 +684,22 @@ test("streams over-limit MP4 frames in real time without Kitty preloading", func
 		roots = roots + 1
 	end
 	assert(roots == 1)
-	local replacements = 0
-	for image_id in commands:gmatch("a=f,f=100,i=(%d+),r=1") do
+	local streamed_frames = 0
+	for image_id in commands:gmatch("a=f,f=100,i=(%d+)[,][^;]*X=1") do
 		assert(image_id == streamed_id)
-		replacements = replacements + 1
+		streamed_frames = streamed_frames + 1
 	end
-	assert(replacements == entry.stream_frames_displayed - 1)
+	assert(streamed_frames == entry.stream_frames_displayed - 1)
+	local edits = 0
+	for _ in commands:gmatch("a=f,f=100,i=%d+,r=2,X=1") do
+		edits = edits + 1
+	end
+	assert(edits == math.max(0, entry.stream_frames_displayed - 2))
+	local current_updates = 0
+	for _ in commands:gmatch("a=a,i=%d+,c=2") do
+		current_updates = current_updates + 1
+	end
+	assert(current_updates == entry.stream_frames_displayed - 1)
 	local placements = 0
 	for _ in commands:gmatch("a=p,U=1,i=%d+") do
 		placements = placements + 1

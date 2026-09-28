@@ -229,9 +229,9 @@ executing their generated JavaScript and sent as bounded native Kitty animation
 frames. Embedded or direct MP4 and GIF animation additionally require ffmpeg.
 MP4 media exceeding max_frames uses bounded real-time streaming by default.
 ffmpeg decodes at the source clock into a small frame/byte-capped buffer; late
-frames are dropped to preserve wall-clock playback, Kitty's current root frame
-is edited in place without deleting its virtual placement, and playback stops
-at EOF. GIF and shorter animations use the
+frames are dropped to preserve wall-clock playback, one reusable auxiliary
+Kitty frame is edited while the root and virtual placement stay stable, and
+playback stops at EOF. GIF and shorter animations use the
 bounded preload path. Set video_frame_limit_policy="sample" to restore uniform
 sampling. max_total_pixels bounds one preloaded animation, while
 max_active_pixels bounds all animations retained across the notebook. Loaded
