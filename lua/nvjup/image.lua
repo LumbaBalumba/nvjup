@@ -337,7 +337,7 @@ local function encode_transmit(image_id, png_base64, rows, cols)
 	return table.concat(commands)
 end
 
-local function encode_stream_frame(image_id, png_base64, frame_exists)
+local function encode_stream_frame(image_id, png_base64, target_frame, frame_exists)
 	local commands = {}
 	local position = 1
 	local first = true
@@ -346,10 +346,10 @@ local function encode_stream_frame(image_id, png_base64, frame_exists)
 		local chunk = png_base64:sub(position, stop)
 		local more = stop < #png_base64 and 1 or 0
 		if first then
-			local target = frame_exists and ",r=2" or ""
+			local edit = frame_exists and string.format(",r=%d", target_frame) or ""
 			table.insert(
 				commands,
-				string.format("\27_Ga=f,f=100,i=%d%s,X=1,q=2,m=%d;%s\27\\", image_id, target, more, chunk)
+				string.format("\27_Ga=f,f=100,i=%d%s,X=1,q=2,m=%d;%s\27\\", image_id, edit, more, chunk)
 			)
 			first = false
 		else
@@ -357,8 +357,21 @@ local function encode_stream_frame(image_id, png_base64, frame_exists)
 		end
 		position = stop + 1
 	end
-	table.insert(commands, string.format("\27_Ga=a,i=%d,c=2,q=2\27\\", image_id))
+	table.insert(commands, string.format("\27_Ga=a,i=%d,c=%d,q=2\27\\", image_id, target_frame))
 	return table.concat(commands)
+end
+
+local function encode_stream_frame_file(image_id, path, target_frame, frame_exists)
+	local edit = frame_exists and string.format(",r=%d", target_frame) or ""
+	local payload = vim.base64.encode(path)
+	return string.format(
+		"\27_Ga=f,f=100,t=t,i=%d%s,X=1,q=2;%s\27\\\27_Ga=a,i=%d,c=%d,q=2\27\\",
+		image_id,
+		edit,
+		payload,
+		image_id,
+		target_frame
+	)
 end
 
 local function encode_animation_frame(image_id, png_base64, gap_ms)
@@ -1557,6 +1570,9 @@ local function convert_animation(state, entry, descriptor, source, retained_sour
 			math.min(buffer_bytes_limit, math.floor(animation_number("stream_max_frame_bytes", 8 * 1024 * 1024)))
 		local max_pixels = image_options().max_pixels or (16 * 1024 * 1024)
 		local estimated_frames = math.max(1, math.floor(duration * rate + 0.5))
+		local transport = animation_options().stream_transport or "auto"
+		local file_transport = transport == "temp_file"
+			or (transport == "auto" and not vim.env.SSH_CONNECTION and not vim.env.SSH_TTY)
 		local queue = {}
 		local queue_bytes = 0
 		local decoded_frames, displayed_frames, dropped_frames = 0, 0, 0
@@ -1589,7 +1605,7 @@ local function convert_animation(state, entry, descriptor, source, retained_sour
 			refresh_when_ready(state, entry)
 		end
 		local function display_frame(frame)
-			local canonical = vim.base64.encode(frame.bytes)
+			local canonical = (not entry.image_id or not file_transport) and vim.base64.encode(frame.bytes) or nil
 			if not entry.image_id then
 				local frames = { { bytes = frame.bytes, base64 = canonical } }
 				frames.total_pixels = frame.width * frame.height
@@ -1612,8 +1628,24 @@ local function convert_animation(state, entry, descriptor, source, retained_sour
 				refresh_when_ready(state, entry)
 			else
 				entry.png_bytes = frame.bytes
-				tty_write(encode_stream_frame(entry.image_id, canonical, entry.stream_frame_initialized))
-				entry.stream_frame_initialized = true
+				local target_frame = entry.stream_next_frame or 2
+				local initialized = entry.stream_frames_initialized or 0
+				if file_transport then
+					local path = vim.fn.tempname() .. "-tty-graphics-protocol.png"
+					if not write_bytes(path, frame.bytes) or not vim.uv.fs_chmod(path, 384) then
+						pcall(os.remove, path)
+						fail("could not create streamed frame transport")
+						return false
+					end
+					tty_write(encode_stream_frame_file(entry.image_id, path, target_frame, initialized >= 2))
+					vim.defer_fn(function()
+						pcall(os.remove, path)
+					end, 5000)
+				else
+					tty_write(encode_stream_frame(entry.image_id, canonical, target_frame, initialized >= 2))
+				end
+				entry.stream_frames_initialized = math.min(2, initialized + 1)
+				entry.stream_next_frame = target_frame == 2 and 3 or 2
 			end
 			displayed_frames = displayed_frames + 1
 			entry.animation_frame_count = displayed_frames

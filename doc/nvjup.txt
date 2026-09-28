@@ -71,6 +71,7 @@ Options include:
           video_frame_limit_policy = "stream",
           stream_buffer_frames = 12,
           stream_buffer_bytes = 32 * 1024 * 1024,
+          stream_transport = "auto", -- auto, temp_file, or direct
           stream_max_frame_bytes = 8 * 1024 * 1024,
           stream_max_source_fps = 120,
         },
@@ -229,9 +230,11 @@ executing their generated JavaScript and sent as bounded native Kitty animation
 frames. Embedded or direct MP4 and GIF animation additionally require ffmpeg.
 MP4 media exceeding max_frames uses bounded real-time streaming by default.
 ffmpeg decodes at the source clock into a small frame/byte-capped buffer; late
-frames are dropped to preserve wall-clock playback, one reusable auxiliary
-Kitty frame is edited while the root and virtual placement stay stable, and
-playback stops at EOF. GIF and shorter animations use the
+frames are dropped to preserve wall-clock playback, two reusable auxiliary
+Kitty frames are updated alternately while the root and virtual placement stay
+stable. Local streams use Kitty temporary-file transfer instead of enqueueing
+frame pixels on Neovim's TUI channel; auto falls back to direct transfer over
+SSH. Playback stops at EOF. GIF and shorter animations use the
 bounded preload path. Set video_frame_limit_policy="sample" to restore uniform
 sampling. max_total_pixels bounds one preloaded animation, while
 max_active_pixels bounds all animations retained across the notebook. Loaded

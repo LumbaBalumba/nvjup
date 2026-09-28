@@ -639,11 +639,13 @@ test("streams over-limit MP4 frames in real time without Kitty preloading", func
 	local previous_trust = config.options.interactive.require_trust
 	local previous_frames = config.options.render.images.animations.max_frames
 	local previous_buffer = config.options.render.images.animations.stream_buffer_frames
+	local previous_transport = config.options.render.images.animations.stream_transport
 	vim.env.PATH = directory .. ":" .. previous_path
 	config.options.render.images.backend = "kitty"
 	config.options.interactive.require_trust = false
 	config.options.render.images.animations.max_frames = 3
 	config.options.render.images.animations.stream_buffer_frames = 3
+	config.options.render.images.animations.stream_transport = "temp_file"
 	local writes = {}
 	image._set_test_writer(function(value)
 		table.insert(writes, value)
@@ -685,18 +687,21 @@ test("streams over-limit MP4 frames in real time without Kitty preloading", func
 	end
 	assert(roots == 1)
 	local streamed_frames = 0
-	for image_id in commands:gmatch("a=f,f=100,i=(%d+)[,][^;]*X=1") do
+	for image_id in commands:gmatch("a=f,f=100,[^;]*i=(%d+)[,][^;]*X=1") do
 		assert(image_id == streamed_id)
 		streamed_frames = streamed_frames + 1
 	end
 	assert(streamed_frames == entry.stream_frames_displayed - 1)
 	local edits = 0
-	for _ in commands:gmatch("a=f,f=100,i=%d+,r=2,X=1") do
+	for _ in commands:gmatch("a=f,f=100,[^;]*i=%d+,r=[23],X=1") do
 		edits = edits + 1
 	end
-	assert(edits == math.max(0, entry.stream_frames_displayed - 2))
+	assert(edits == math.max(0, entry.stream_frames_displayed - 3))
 	local current_updates = 0
-	for _ in commands:gmatch("a=a,i=%d+,c=2") do
+	local previous_frame
+	for current_frame in commands:gmatch("a=a,i=%d+,c=([23])") do
+		assert(current_frame ~= previous_frame)
+		previous_frame = current_frame
 		current_updates = current_updates + 1
 	end
 	assert(current_updates == entry.stream_frames_displayed - 1)
@@ -705,6 +710,23 @@ test("streams over-limit MP4 frames in real time without Kitty preloading", func
 		placements = placements + 1
 	end
 	assert(placements == 1)
+	assert(commands:find("t=t", 1, true))
+	assert(#commands < 256 * 1024, "stream commands must not enqueue frame pixels on the TUI channel")
+	local transported = 0
+	local transport_paths = {}
+	for payload in commands:gmatch("t=t,[^;]*;([A-Za-z0-9+/=]+)\27\\") do
+		local path = vim.base64.decode(payload)
+		table.insert(transport_paths, path)
+		assert(path:find("tty%-graphics%-protocol"))
+		local file = assert(io.open(path, "rb"))
+		assert(file:read(8) == "\137PNG\r\n\26\n")
+		file:close()
+		transported = transported + 1
+	end
+	assert(transported == entry.stream_frames_displayed - 1)
+	for _, path in ipairs(transport_paths) do
+		os.remove(path)
+	end
 	local write_count = #writes
 	vim.wait(100, function()
 		return false
@@ -716,6 +738,7 @@ test("streams over-limit MP4 frames in real time without Kitty preloading", func
 	config.options.interactive.require_trust = previous_trust
 	config.options.render.images.animations.max_frames = previous_frames
 	config.options.render.images.animations.stream_buffer_frames = previous_buffer
+	config.options.render.images.animations.stream_transport = previous_transport
 	vim.env.PATH = previous_path
 	vim.fn.delete(directory, "rf")
 end)

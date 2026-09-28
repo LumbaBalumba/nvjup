@@ -29,7 +29,7 @@ a=p,U=1,i=<id>,p=1,c=<cols>,r=<rows>,q=2
 
 The second command creates an explicit virtual placement. Extmark virtual lines contain U+10EEEE placeholders with Kitty row/column diacritics, and a per-image foreground highlight encodes the 24-bit image ID. This makes placement viewport-aware: terminal images follow Neovim redraw, scrolling, resize, folds, and window visibility because the placement is anchored to rendered placeholder cells rather than absolute screen coordinates.
 
-Matplotlib JSHTML PNG frames are extracted without evaluating JavaScript. Embedded or direct MP4 and GIF inputs are converted asynchronously with `ffmpeg`. Short MP4 and GIF outputs use Kitty's `a=f` transport and terminal-driven `a=a` playback. MP4 outputs exceeding `max_frames` instead use real-time streaming: ffmpeg reads at the source clock, a bounded ring absorbs I/O jitter, late frames are dropped against a monotonic playback clock, and each displayed PNG edits one reusable auxiliary Kitty frame under the same ID while the root and virtual placement remain stable. Streaming stops at EOF and never loops. Long JSHTML and GIF sources continue to use uniform bounded sampling. Uploads yield between bounded frame batches, and superseded conversions or streams are cancelled.
+Matplotlib JSHTML PNG frames are extracted without evaluating JavaScript. Embedded or direct MP4 and GIF inputs are converted asynchronously with `ffmpeg`. Short MP4 and GIF outputs use Kitty's `a=f` transport and terminal-driven `a=a` playback. MP4 outputs exceeding `max_frames` instead use real-time streaming: ffmpeg reads at the source clock, a bounded ring absorbs I/O jitter, late frames are dropped against a monotonic playback clock, and each displayed PNG edits one of two reusable auxiliary Kitty frames under the same ID while the root and virtual placement remain stable. Local frame pixels use Kitty's temporary-file transport rather than flooding Neovim's TUI channel; `auto` falls back to direct transfer for SSH sessions. Streaming stops at EOF and never loops. Long JSHTML and GIF sources continue to use uniform bounded sampling. Uploads yield between bounded frame batches, and superseded conversions or streams are cancelled.
 
 No Kitty remote-control socket or `allow_remote_control` setting is used. tmux escape passthrough is wrapped when `$TMUX` is present.
 
@@ -101,6 +101,7 @@ require("nvjup").setup({
         video_frame_limit_policy = "stream",
         stream_buffer_frames = 12,
         stream_buffer_bytes = 32 * 1024 * 1024,
+        stream_transport = "auto", -- auto, temp_file, or direct
         stream_max_frame_bytes = 8 * 1024 * 1024,
         stream_max_source_fps = 120,
       },
