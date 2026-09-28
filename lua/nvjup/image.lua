@@ -13,6 +13,16 @@ local placements = {}
 local allocated_image_ids = {}
 local retiring_image_ids = {}
 local test_writer
+local stream_output_pause_until_ns = 0
+
+function M.pause_streaming(ms)
+	local duration = math.max(0, tonumber(ms) or 0) * 1000000
+	stream_output_pause_until_ns = math.max(stream_output_pause_until_ns, vim.uv.hrtime() + duration)
+end
+
+local function stream_output_paused()
+	return vim.uv.hrtime() < stream_output_pause_until_ns
+end
 
 -- Kitty's Unicode-placeholder protocol indexes rows/columns with this fixed
 -- sequence of combining marks. Keep enough entries for the enlarged Plotly
@@ -1694,9 +1704,14 @@ local function convert_animation(state, entry, descriptor, source, retained_sour
 				dropped_frames = dropped_frames + 1
 			end
 			if #queue > 0 and queue[1].index <= target_index then
+				if stream_output_paused() and not entry.image_id then
+					return
+				end
 				local frame = table.remove(queue, 1)
 				queue_bytes = queue_bytes - #frame.bytes
-				if not display_frame(frame) then
+				if stream_output_paused() then
+					dropped_frames = dropped_frames + 1
+				elseif not display_frame(frame) then
 					return
 				end
 			end

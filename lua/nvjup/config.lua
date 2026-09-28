@@ -38,6 +38,7 @@ M.defaults = {
 				stream_max_frame_bytes = 8 * 1024 * 1024,
 				stream_max_source_fps = 120,
 				stream_transport = "auto", -- auto, temp_file, or direct
+				stream_ui_quiet_ms = 150,
 			},
 		},
 	},

@@ -666,7 +666,16 @@ test("streams over-limit MP4 frames in real time without Kitty preloading", func
 		end, 5),
 		vim.inspect(entry)
 	)
-	vim.uv.sleep(100)
+	vim.wait(30, function()
+		return false
+	end, 5)
+	local writes_before_pause = #writes
+	image.pause_streaming(100)
+	vim.wait(70, function()
+		return false
+	end, 5)
+	assert(#writes == writes_before_pause, "stream output must pause while the TUI layout changes")
+	vim.uv.sleep(30)
 	assert(
 		vim.wait(5000, function()
 			return entry.stream_complete or entry.status == "failed"

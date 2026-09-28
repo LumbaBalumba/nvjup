@@ -322,9 +322,17 @@ function M.setup(options)
 		callback = interactive.shutdown,
 	})
 
+	vim.api.nvim_create_autocmd({ "WinNew", "WinClosed" }, {
+		group = group,
+		callback = function()
+			image.pause_streaming(config.options.render.images.animations.stream_ui_quiet_ms)
+		end,
+	})
+
 	vim.api.nvim_create_autocmd("WinResized", {
 		group = group,
 		callback = function()
+			image.pause_streaming(config.options.render.images.animations.stream_ui_quiet_ms)
 			for _, state in pairs(notebook.all()) do
 				render.refresh_window(state)
 			end

@@ -72,6 +72,7 @@ Options include:
           stream_buffer_frames = 12,
           stream_buffer_bytes = 32 * 1024 * 1024,
           stream_transport = "auto", -- auto, temp_file, or direct
+          stream_ui_quiet_ms = 150,
           stream_max_frame_bytes = 8 * 1024 * 1024,
           stream_max_source_fps = 120,
         },
@@ -234,7 +235,9 @@ frames are dropped to preserve wall-clock playback, two reusable auxiliary
 Kitty frames are updated alternately while the root and virtual placement stay
 stable. Local streams use Kitty temporary-file transfer instead of enqueueing
 frame pixels on Neovim's TUI channel; auto falls back to direct transfer over
-SSH. Playback stops at EOF. GIF and shorter animations use the
+SSH. Frame output pauses briefly around window layout changes to prevent Kitty
+APC data from interleaving with TUI redraws or leaking into adjacent buffers.
+Playback stops at EOF. GIF and shorter animations use the
 bounded preload path. Set video_frame_limit_policy="sample" to restore uniform
 sampling. max_total_pixels bounds one preloaded animation, while
 max_active_pixels bounds all animations retained across the notebook. Loaded
