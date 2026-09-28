@@ -287,8 +287,10 @@ test("plays trusted Matplotlib JSHTML frames through Kitty animation commands", 
 	end)
 	local previous_backend = config.options.render.images.backend
 	local previous_trust = config.options.interactive.require_trust
+	local previous_transport = config.options.render.images.animations.stream_transport
 	config.options.render.images.backend = "kitty"
 	config.options.interactive.require_trust = false
+	config.options.render.images.animations.stream_transport = "temp_file"
 	local first = "iVBORw0KGgoAAAANSUhEUgAAAAQAAAADCAYAAAC09K7GAAAAEklEQVR42mPwKdrwHxkzEBQAANiRHR2gDahVAAAAAElFTkSuQmCC"
 	local second = first
 	local html = table.concat({
@@ -312,9 +314,21 @@ test("plays trusted Matplotlib JSHTML frames through Kitty animation commands", 
 	local commands = table.concat(writes)
 	assert(commands:find("a=f,f=100", 1, true))
 	assert(commands:find("z=120", 1, true))
+	assert(#commands < 4096, "preloaded frame pixels must not be queued on the TUI channel")
+	local transported = 0
+	for payload in commands:gmatch("t=t,[^;]*;([A-Za-z0-9+/=]+)\27\\") do
+		local path = vim.base64.decode(payload)
+		local file = assert(io.open(path, "rb"))
+		assert(file:read(8) == "\137PNG\r\n\26\n")
+		file:close()
+		os.remove(path)
+		transported = transported + 1
+	end
+	assert(transported == 2)
 	image.finish_render(state, {})
 	config.options.render.images.backend = previous_backend
 	config.options.interactive.require_trust = previous_trust
+	config.options.render.images.animations.stream_transport = previous_transport
 	image._set_test_writer(nil)
 end)
 
@@ -688,10 +702,10 @@ test("streams over-limit MP4 frames in real time without Kitty preloading", func
 	assert(entry.stream_frames_dropped > 0)
 	assert(entry.stream_frames_displayed + entry.stream_frames_dropped == entry.stream_frames_decoded)
 	local commands = table.concat(writes)
-	local streamed_id = assert(commands:match("a=t,f=100,i=(%d+)"))
+	local streamed_id = assert(commands:match("a=t,f=100,[^;]*i=(%d+)"))
 	assert(not commands:find("s=3,v=1", 1, true))
 	local roots = 0
-	for _ in commands:gmatch("a=t,f=100,i=%d+") do
+	for _ in commands:gmatch("a=t,f=100,[^;]*i=%d+") do
 		roots = roots + 1
 	end
 	assert(roots == 1)
@@ -732,7 +746,7 @@ test("streams over-limit MP4 frames in real time without Kitty preloading", func
 		file:close()
 		transported = transported + 1
 	end
-	assert(transported == entry.stream_frames_displayed - 1)
+	assert(transported == entry.stream_frames_displayed)
 	for _, path in ipairs(transport_paths) do
 		os.remove(path)
 	end

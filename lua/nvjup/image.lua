@@ -189,6 +189,12 @@ local function animation_options()
 	return image_options().animations or {}
 end
 
+local function use_temp_file_transport()
+	local transport = animation_options().stream_transport or "auto"
+	local ssh = (vim.env.SSH_CONNECTION or "") ~= "" or (vim.env.SSH_TTY or "") ~= ""
+	return transport == "temp_file" or (transport == "auto" and not ssh)
+end
+
 local function normalize_data(value, maximum)
 	if type(value) == "string" then
 		if maximum and #value > maximum then
@@ -347,6 +353,18 @@ local function encode_transmit(image_id, png_base64, rows, cols)
 	return table.concat(commands)
 end
 
+local function encode_transmit_file(image_id, path, rows, cols)
+	local payload = vim.base64.encode(path)
+	return string.format(
+		"\27_Ga=t,f=100,t=t,i=%d,q=2;%s\27\\\27_Ga=p,U=1,i=%d,p=1,c=%d,r=%d,q=2\27\\",
+		image_id,
+		payload,
+		image_id,
+		cols,
+		rows
+	)
+end
+
 local function encode_stream_frame(image_id, png_base64, target_frame, frame_exists)
 	local commands = {}
 	local position = 1
@@ -382,6 +400,11 @@ local function encode_stream_frame_file(image_id, path, target_frame, frame_exis
 		image_id,
 		target_frame
 	)
+end
+
+local function encode_animation_frame_file(image_id, path, gap_ms)
+	local payload = vim.base64.encode(path)
+	return string.format("\27_Ga=f,f=100,t=t,i=%d,q=2,z=%d;%s\27\\", image_id, gap_ms, payload)
 end
 
 local function encode_animation_frame(image_id, png_base64, gap_ms)
@@ -631,6 +654,21 @@ local function write_bytes(path, bytes)
 	file:write(bytes)
 	file:close()
 	return true
+end
+
+local function create_kitty_temp_file(bytes)
+	local path = vim.fn.tempname() .. "-tty-graphics-protocol.png"
+	if not write_bytes(path, bytes) or not vim.uv.fs_chmod(path, 384) then
+		pcall(os.remove, path)
+		return nil
+	end
+	return path
+end
+
+local function cleanup_kitty_temp_file(path)
+	vim.defer_fn(function()
+		pcall(os.remove, path)
+	end, 5000)
 end
 
 local function read_bytes(path)
@@ -1181,7 +1219,19 @@ local function transmit_animation_frames(state, entry, descriptor, frames, gap_m
 	entry.animation_pixels = total_pixels
 	entry.cols, entry.rows = grid_dimensions(descriptor, available_width, entry.png_bytes, limits)
 	entry.image_id = next_id()
-	tty_write(encode_transmit(entry.image_id, frames[1].base64, entry.rows, entry.cols))
+	local file_transport = use_temp_file_transport()
+	if file_transport then
+		local path = create_kitty_temp_file(frames[1].bytes)
+		if not path then
+			entry.status = "failed"
+			entry.error = "could not create animation frame transport"
+			return
+		end
+		tty_write(encode_transmit_file(entry.image_id, path, entry.rows, entry.cols))
+		cleanup_kitty_temp_file(path)
+	else
+		tty_write(encode_transmit(entry.image_id, frames[1].base64, entry.rows, entry.cols))
+	end
 	entry.status = "ready"
 	if #frames == 1 then
 		return
@@ -1194,7 +1244,21 @@ local function transmit_animation_frames(state, entry, descriptor, frames, gap_m
 		end
 		local transmitted = 0
 		while frame_index <= #frames and transmitted < 2 do
-			tty_write(encode_animation_frame(entry.image_id, frames[frame_index].base64, gap_ms))
+			local frame = frames[frame_index]
+			if file_transport then
+				local bytes = frame.bytes or decode_base64(frame.base64)
+				local path = bytes and create_kitty_temp_file(bytes) or nil
+				if not path then
+					entry.status = "failed"
+					entry.error = "could not create animation frame transport"
+					entry.animation_loading = false
+					return
+				end
+				tty_write(encode_animation_frame_file(entry.image_id, path, gap_ms))
+				cleanup_kitty_temp_file(path)
+			else
+				tty_write(encode_animation_frame(entry.image_id, frame.base64, gap_ms))
+			end
 			frame_index = frame_index + 1
 			transmitted = transmitted + 1
 		end
@@ -1580,9 +1644,7 @@ local function convert_animation(state, entry, descriptor, source, retained_sour
 			math.min(buffer_bytes_limit, math.floor(animation_number("stream_max_frame_bytes", 8 * 1024 * 1024)))
 		local max_pixels = image_options().max_pixels or (16 * 1024 * 1024)
 		local estimated_frames = math.max(1, math.floor(duration * rate + 0.5))
-		local transport = animation_options().stream_transport or "auto"
-		local file_transport = transport == "temp_file"
-			or (transport == "auto" and not vim.env.SSH_CONNECTION and not vim.env.SSH_TTY)
+		local file_transport = use_temp_file_transport()
 		local queue = {}
 		local queue_bytes = 0
 		local decoded_frames, displayed_frames, dropped_frames = 0, 0, 0
@@ -1641,16 +1703,13 @@ local function convert_animation(state, entry, descriptor, source, retained_sour
 				local target_frame = entry.stream_next_frame or 2
 				local initialized = entry.stream_frames_initialized or 0
 				if file_transport then
-					local path = vim.fn.tempname() .. "-tty-graphics-protocol.png"
-					if not write_bytes(path, frame.bytes) or not vim.uv.fs_chmod(path, 384) then
-						pcall(os.remove, path)
+					local path = create_kitty_temp_file(frame.bytes)
+					if not path then
 						fail("could not create streamed frame transport")
 						return false
 					end
 					tty_write(encode_stream_frame_file(entry.image_id, path, target_frame, initialized >= 2))
-					vim.defer_fn(function()
-						pcall(os.remove, path)
-					end, 5000)
+					cleanup_kitty_temp_file(path)
 				else
 					tty_write(encode_stream_frame(entry.image_id, canonical, target_frame, initialized >= 2))
 				end

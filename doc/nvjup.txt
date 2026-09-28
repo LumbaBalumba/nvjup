@@ -233,8 +233,8 @@ MP4 media exceeding max_frames uses bounded real-time streaming by default.
 ffmpeg decodes at the source clock into a small frame/byte-capped buffer; late
 frames are dropped to preserve wall-clock playback, two reusable auxiliary
 Kitty frames are updated alternately while the root and virtual placement stay
-stable. Local streams use Kitty temporary-file transfer instead of enqueueing
-frame pixels on Neovim's TUI channel; auto falls back to direct transfer over
+stable. Local preload and streaming frames use Kitty temporary-file transfer
+instead of enqueueing pixels on Neovim's TUI channel; auto falls back to direct transfer over
 SSH. Frame output pauses briefly around window layout changes to prevent Kitty
 APC data from interleaving with TUI redraws or leaking into adjacent buffers.
 Playback stops at EOF. GIF and shorter animations use the
