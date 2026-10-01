@@ -145,8 +145,8 @@ Options include:
     },
     keymaps = {
       cursor_down = "j",
-      comment_line = "gcc",
-      comment_visual = "gc",
+      comment_line = "<leader>/",
+      comment_visual = "<leader>/",
       next_cell = "]c",
       previous_cell = "[c",
       -- Set any action to false to disable its mapping.
@@ -161,8 +161,8 @@ j / k, Down / Up        Move within source; cross directly to the adjacent
                         cell when moving beyond the first or last source line.
 h / l, Left / Right     Move horizontally and wrap only within the current
                         cell; never enter a marker or adjacent cell.
-gcc                     Toggle the current line using its cell language.
-gc (Visual)             Toggle selected source lines per cell language.
+<Leader>/              Toggle the current line using its cell language.
+<Leader>/ (Visual)     Toggle selected source lines per cell language.
 ]c                      Next cell.
 [c                      Previous cell.
 ]C                      Next code cell.

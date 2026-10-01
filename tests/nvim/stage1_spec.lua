@@ -396,8 +396,8 @@ test("comments source lines with each cell language", function()
 		vim.api.nvim_buf_get_lines(state.buf, state.cells[3].range.start_row, state.cells[3].range.start_row + 1, false)[1]
 			== "// values.mean()"
 	)
-	assert(vim.fn.maparg("gcc", "n", false, true).buffer == 1)
-	assert(vim.fn.maparg("gc", "x", false, true).buffer == 1)
+	assert(vim.fn.maparg("<leader>/", "n", false, true).buffer == 1)
+	assert(vim.fn.maparg("<leader>/", "x", false, true).buffer == 1)
 	close_fixture(state)
 end)
 
