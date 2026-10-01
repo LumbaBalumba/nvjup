@@ -1,3 +1,4 @@
+local language = require("nvjup.language")
 local markdown = require("nvjup.markdown")
 local notebook = require("nvjup.notebook")
 local render = require("nvjup.render")
@@ -41,6 +42,186 @@ function M.previous_cell(options)
 	options = options or {}
 	options.direction = -1
 	return M.next_cell(options)
+end
+
+local function line_last_column(row)
+	local line = vim.api.nvim_buf_get_lines(0, row, row + 1, false)[1] or ""
+	local characters = vim.fn.strchars(line)
+	return characters > 0 and vim.fn.byteidx(line, characters - 1) or 0
+end
+
+local function cursor_column(row, column)
+	return math.min(column, line_last_column(row))
+end
+
+function M.cursor_vertical(direction)
+	direction = direction < 0 and -1 or 1
+	local nb = state()
+	local count = vim.v.count1
+	for _ = 1, count do
+		local cursor = vim.api.nvim_win_get_cursor(0)
+		local row, column = cursor[1] - 1, cursor[2]
+		local index = nb:cell_index_at(row)
+		local cell = index and nb.cells[index] or nil
+		if not cell then
+			return
+		end
+		local target_row
+		if direction > 0 and row >= cell.range.end_row then
+			local target = nb.cells[index + 1]
+			target_row = target and target.range.start_row or nil
+		elseif direction < 0 and row <= cell.range.start_row then
+			local target = nb.cells[index - 1]
+			target_row = target and target.range.end_row or nil
+		else
+			target_row = row + direction
+		end
+		if not target_row then
+			return
+		end
+		vim.api.nvim_win_set_cursor(0, { target_row + 1, cursor_column(target_row, column) })
+	end
+end
+
+function M.cursor_horizontal(direction)
+	direction = direction < 0 and -1 or 1
+	local nb = state()
+	for _ = 1, vim.v.count1 do
+		local cursor = vim.api.nvim_win_get_cursor(0)
+		local row, column = cursor[1] - 1, cursor[2]
+		local index = nb:cell_index_at(row)
+		local cell = index and nb.cells[index] or nil
+		if not cell then
+			return
+		end
+		if direction < 0 then
+			if column > 0 then
+				vim.cmd("normal! h")
+			elseif row > cell.range.start_row then
+				vim.api.nvim_win_set_cursor(0, { row, line_last_column(row - 1) })
+			else
+				return
+			end
+		else
+			if column < line_last_column(row) then
+				vim.cmd("normal! l")
+			elseif row < cell.range.end_row then
+				vim.api.nvim_win_set_cursor(0, { row + 2, 0 })
+			else
+				return
+			end
+		end
+	end
+end
+
+local function escaped(value)
+	return vim.pesc and vim.pesc(value) or value:gsub("([^%w])", "%%%1")
+end
+
+local function commented(line, left, right)
+	if line:match("^%s*$") then
+		return nil
+	end
+	local body = line:match("^%s*(.*)$") or line
+	if not body:match("^" .. escaped(left)) then
+		return false
+	end
+	return right == "" or body:match(escaped(right) .. "%s*$") ~= nil
+end
+
+local function comment_line(line, left, right, remove)
+	if line:match("^%s*$") then
+		return line
+	end
+	local indent, body = line:match("^(%s*)(.*)$")
+	if remove then
+		body = body:gsub("^" .. escaped(left) .. "%s?", "", 1)
+		if right ~= "" then
+			body = body:gsub("%s?" .. escaped(right) .. "%s*$", "", 1)
+		end
+		return indent .. body
+	end
+	return indent .. left .. " " .. body .. (right ~= "" and (" " .. right) or "")
+end
+
+function M.toggle_comment(start_row, end_row)
+	local nb = state()
+	assert(nb:sync_from_buffer())
+	start_row = math.max(0, start_row or (vim.api.nvim_win_get_cursor(0)[1] - 1))
+	end_row = math.min(vim.api.nvim_buf_line_count(nb.buf) - 1, end_row or start_row)
+	if start_row > end_row then
+		start_row, end_row = end_row, start_row
+	end
+	local lines = vim.api.nvim_buf_get_lines(nb.buf, start_row, end_row + 1, false)
+	local groups = {}
+	for row = start_row, end_row do
+		local index = nb:cell_index_at(row)
+		local cell = index and nb.cells[index] or nil
+		if cell and row >= cell.range.start_row and row <= cell.range.end_row then
+			local group = groups[index]
+			if not group then
+				local left, right = language.comment_parts(language.for_cell(nb, cell))
+				group = { left = left, right = right, rows = {} }
+				groups[index] = group
+			end
+			table.insert(group.rows, row)
+		end
+	end
+	local changed = 0
+	for _, group in pairs(groups) do
+		local remove = true
+		local content = false
+		for _, row in ipairs(group.rows) do
+			local status = commented(lines[row - start_row + 1], group.left, group.right)
+			if status ~= nil then
+				content = true
+				remove = remove and status
+			end
+		end
+		if content then
+			for _, row in ipairs(group.rows) do
+				local offset = row - start_row + 1
+				local updated = comment_line(lines[offset], group.left, group.right, remove)
+				if updated ~= lines[offset] then
+					lines[offset] = updated
+					changed = changed + 1
+				end
+			end
+		end
+	end
+	if changed == 0 then
+		return 0
+	end
+	nb.internal_change = true
+	vim.api.nvim_buf_set_lines(nb.buf, start_row, end_row + 1, false, lines)
+	nb.internal_change = false
+	local ok, changed_cells, structural = nb:sync_from_buffer()
+	assert(ok)
+	render.request_source(nb, changed_cells, structural, 0)
+	return changed
+end
+
+function M.update_commentstring()
+	local nb = notebook.get()
+	if not nb then
+		return
+	end
+	local cell = nb:current_cell()
+	if cell then
+		vim.bo[nb.buf].commentstring = language.commentstring(language.for_cell(nb, cell))
+	end
+end
+
+function M.comment_current_line()
+	local row = vim.api.nvim_win_get_cursor(0)[1] - 1
+	return M.toggle_comment(row, row)
+end
+
+function M.comment_visual()
+	local anchor = vim.fn.getpos("v")[2] - 1
+	local cursor = vim.api.nvim_win_get_cursor(0)[1] - 1
+	vim.cmd.normal({ args = { vim.keycode("<Esc>") }, bang = true })
+	return M.toggle_comment(math.min(anchor, cursor), math.max(anchor, cursor))
 end
 
 function M.insert_below(cell_type)

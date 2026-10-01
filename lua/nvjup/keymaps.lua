@@ -6,6 +6,12 @@ local lsp = require("nvjup.lsp")
 local M = {}
 
 local function map(buf, modes, lhs, rhs, description)
+	if type(lhs) == "table" then
+		for _, key in ipairs(lhs) do
+			map(buf, modes, key, rhs, description)
+		end
+		return
+	end
 	if lhs == false or lhs == nil or lhs == "" then
 		return
 	end
@@ -14,6 +20,21 @@ end
 
 function M.attach(buf)
 	local keys = config.options.keymaps
+	actions.update_commentstring()
+	map(buf, "n", { keys.cursor_down, keys.cursor_down_alt }, function()
+		actions.cursor_vertical(1)
+	end, "Move down within notebook cells")
+	map(buf, "n", { keys.cursor_up, keys.cursor_up_alt }, function()
+		actions.cursor_vertical(-1)
+	end, "Move up within notebook cells")
+	map(buf, "n", { keys.cursor_left, keys.cursor_left_alt }, function()
+		actions.cursor_horizontal(-1)
+	end, "Move left within the current cell")
+	map(buf, "n", { keys.cursor_right, keys.cursor_right_alt }, function()
+		actions.cursor_horizontal(1)
+	end, "Move right within the current cell")
+	map(buf, "n", keys.comment_line, actions.comment_current_line, "Comment current cell line")
+	map(buf, "x", keys.comment_visual, actions.comment_visual, "Comment selected cell lines")
 	-- NvChad maps <leader>n with nowait to line-number toggling. A local
 	-- non-nowait prefix prevents that global mapping from consuming jupynvim's
 	-- <leader>n… notebook mappings before their final key is entered.

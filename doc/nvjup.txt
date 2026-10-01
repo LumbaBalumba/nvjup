@@ -144,6 +144,9 @@ Options include:
       -- Python defaults to Pyright and Ruff when installed.
     },
     keymaps = {
+      cursor_down = "j",
+      comment_line = "gcc",
+      comment_visual = "gc",
       next_cell = "]c",
       previous_cell = "[c",
       -- Set any action to false to disable its mapping.
@@ -154,12 +157,22 @@ Options include:
 ==============================================================================
 3. NAVIGATION                                           *nvjup-navigation*
 
+j / k, Down / Up        Move within source; cross directly to the adjacent
+                        cell when moving beyond the first or last source line.
+h / l, Left / Right     Move horizontally and wrap only within the current
+                        cell; never enter a marker or adjacent cell.
+gcc                     Toggle the current line using its cell language.
+gc (Visual)             Toggle selected source lines per cell language.
 ]c                      Next cell.
 [c                      Previous cell.
 ]C                      Next code cell.
 [C                      Previous code cell.
 ic                      Inner-cell text object.
 ac                      Around-cell text object, including its marker.
+
+Code comments follow per-cell metadata or the notebook kernel language rather
+than the composite nvjup/HTML parser. Markdown uses <!-- --> comments. Cell
+markers are never modified, including selections spanning multiple cells.
 
 Counts are accepted by cell motions. Navigation adds the previous location to
 the jumplist.

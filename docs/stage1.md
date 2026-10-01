@@ -23,7 +23,8 @@
   - explicit Plotly/Bokeh interactive placeholders;
   - unsupported-MIME diagnostics;
   - deterministic truncation.
-- Cell navigation and text objects.
+- Cell navigation and text objects, including edge-aware `h/j/k/l` movement that never enters hidden markers.
+- Per-cell-language line and visual-range commenting (`gcc`, visual `gc`) without falling back to HTML comments.
 - Insert, duplicate, delete, move, split, merge, and type conversion.
 - Source folds, output collapsing, and output clearing.
 - Notebook outline through `vim.ui.select`.

@@ -212,6 +212,7 @@ local function attach_buffer(state)
 		buffer = buf,
 		callback = function()
 			render.active(notebook.get(buf))
+			actions.update_commentstring()
 		end,
 	})
 

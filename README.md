@@ -102,6 +102,9 @@ Common mappings:
 
 | Mapping | Action |
 |---|---|
+| `j` / `k`, `↓` / `↑` | move inside a cell; cross directly to the adjacent cell at an edge |
+| `h` / `l`, `←` / `→` | move horizontally, wrapping only between lines of the current cell |
+| `gcc` / visual `gc` | toggle comments using the current cell's language |
 | `]c` / `[c` | next / previous cell |
 | `]C` / `[C` | next / previous code cell |
 | `<leader>na` / `<leader>nb` | insert a cell above / below |

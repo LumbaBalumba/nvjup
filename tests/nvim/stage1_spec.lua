@@ -320,6 +320,87 @@ test("navigates between all cells and only code cells", function()
 	close_fixture(state)
 end)
 
+test("moves across cell edges without entering markers", function()
+	local state = open_fixture("01_markdown_code.ipynb")
+	local second = state.cells[2]
+	local third = state.cells[3]
+	vim.api.nvim_win_set_cursor(0, { second.range.end_row + 1, 4 })
+	actions.cursor_vertical(1)
+	assert(vim.api.nvim_win_get_cursor(0)[1] - 1 == third.range.start_row)
+	assert(state:cell_index_at(vim.api.nvim_win_get_cursor(0)[1] - 1) == 3)
+	actions.cursor_vertical(-1)
+	assert(vim.api.nvim_win_get_cursor(0)[1] - 1 == second.range.end_row)
+	vim.api.nvim_win_set_cursor(0, { second.range.start_row + 1, 0 })
+	actions.cursor_vertical(-1)
+	assert(vim.api.nvim_win_get_cursor(0)[1] - 1 == state.cells[1].range.end_row)
+	close_fixture(state)
+end)
+
+test("keeps horizontal cursor movement inside the current cell", function()
+	local state = open_fixture("01_markdown_code.ipynb")
+	local row = state.cells[2].range.start_row
+	local line = vim.api.nvim_buf_get_lines(state.buf, row, row + 1, false)[1]
+	local previous_whichwrap = vim.o.whichwrap
+	vim.o.whichwrap = "b,s,h,l,<,>,[,]"
+	vim.api.nvim_win_set_cursor(0, { row + 1, 0 })
+	actions.cursor_horizontal(-1)
+	assert(vim.api.nvim_win_get_cursor(0)[1] - 1 == row)
+	assert(vim.api.nvim_win_get_cursor(0)[2] == 0)
+	vim.api.nvim_win_set_cursor(0, { row + 1, #line - 1 })
+	actions.cursor_horizontal(1)
+	assert(vim.api.nvim_win_get_cursor(0)[1] - 1 == row + 1)
+	assert(vim.api.nvim_win_get_cursor(0)[2] == 0)
+	actions.cursor_horizontal(-1)
+	assert(vim.api.nvim_win_get_cursor(0)[1] - 1 == row)
+	assert(vim.api.nvim_win_get_cursor(0)[2] == #line - 1)
+	local last_row = state.cells[2].range.end_row
+	local last_line = vim.api.nvim_buf_get_lines(state.buf, last_row, last_row + 1, false)[1]
+	vim.api.nvim_win_set_cursor(0, { last_row + 1, math.max(0, #last_line - 1) })
+	actions.cursor_horizontal(1)
+	assert(vim.api.nvim_win_get_cursor(0)[1] - 1 == state.cells[2].range.end_row)
+	vim.api.nvim_win_set_cursor(0, { row + 1, 1 })
+	actions.cursor_horizontal(1)
+	assert(vim.api.nvim_win_get_cursor(0)[2] > 1)
+	vim.o.whichwrap = previous_whichwrap
+	close_fixture(state)
+end)
+
+test("comments source lines with each cell language", function()
+	local state = open_fixture("01_markdown_code.ipynb")
+	local markdown = state.cells[1]
+	local python = state.cells[2]
+	assert(actions.toggle_comment(python.range.start_row, python.range.end_row) == 2)
+	local code = vim.api.nvim_buf_get_lines(state.buf, python.range.start_row, python.range.end_row + 1, false)
+	assert(code[1] == "# import numpy as np")
+	assert(code[2] == "# values = np.array([1, 2, 3])")
+	assert(actions.toggle_comment(python.range.start_row, python.range.end_row) == 2)
+	code = vim.api.nvim_buf_get_lines(state.buf, python.range.start_row, python.range.end_row + 1, false)
+	assert(code[1] == "import numpy as np")
+	assert(code[2] == "values = np.array([1, 2, 3])")
+	vim.api.nvim_win_set_cursor(0, { python.range.start_row + 1, 0 })
+	vim.cmd("normal! Vj")
+	assert(actions.comment_visual() == 2)
+	assert(vim.fn.mode() == "n")
+	code = vim.api.nvim_buf_get_lines(state.buf, python.range.start_row, python.range.end_row + 1, false)
+	assert(code[1] == "# import numpy as np")
+	assert(code[2] == "# values = np.array([1, 2, 3])")
+	assert(actions.toggle_comment(python.range.start_row, python.range.end_row) == 2)
+	assert(actions.toggle_comment(markdown.range.start_row, markdown.range.start_row) == 1)
+	assert(
+		vim.api.nvim_buf_get_lines(state.buf, markdown.range.start_row, markdown.range.start_row + 1, false)[1]
+			== "<!-- # Анализ данных 📊 -->"
+	)
+	state.cells[3].raw.metadata.language = "javascript"
+	assert(actions.toggle_comment(state.cells[3].range.start_row, state.cells[3].range.start_row) == 1)
+	assert(
+		vim.api.nvim_buf_get_lines(state.buf, state.cells[3].range.start_row, state.cells[3].range.start_row + 1, false)[1]
+			== "// values.mean()"
+	)
+	assert(vim.fn.maparg("gcc", "n", false, true).buffer == 1)
+	assert(vim.fn.maparg("gc", "x", false, true).buffer == 1)
+	close_fixture(state)
+end)
+
 test("inserts deletes and changes cell types", function()
 	local state = open_fixture("00_minimal.ipynb")
 	state:goto_cell(1)

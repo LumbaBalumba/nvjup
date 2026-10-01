@@ -4,20 +4,32 @@ local aliases = {
 	bash = "bash",
 	c = "c",
 	cpp = "cpp",
+	csharp = "csharp",
+	cs = "csharp",
+	css = "css",
 	cxx = "cpp",
 	go = "go",
+	html = "html",
+	java = "java",
 	javascript = "javascript",
 	js = "javascript",
 	julia = "julia",
+	kotlin = "kotlin",
 	lua = "lua",
 	markdown = "markdown",
+	perl = "perl",
 	python = "python",
 	python3 = "python",
 	r = "r",
 	raw = "text",
+	ruby = "ruby",
 	rust = "rust",
+	sh = "bash",
+	shell = "bash",
+	sql = "sql",
 	typescript = "typescript",
 	ts = "typescript",
+	zsh = "bash",
 }
 
 local extensions = {
@@ -35,17 +47,27 @@ local extensions = {
 }
 
 local comments = {
-	bash = "#",
-	c = "//",
-	cpp = "//",
-	go = "//",
-	javascript = "//",
-	julia = "#",
-	lua = "--",
-	python = "#",
-	r = "#",
-	rust = "//",
-	typescript = "//",
+	bash = { "#", "" },
+	c = { "//", "" },
+	cpp = { "//", "" },
+	csharp = { "//", "" },
+	css = { "/*", "*/" },
+	go = { "//", "" },
+	html = { "<!--", "-->" },
+	java = { "//", "" },
+	javascript = { "//", "" },
+	julia = { "#", "" },
+	kotlin = { "//", "" },
+	lua = { "--", "" },
+	markdown = { "<!--", "-->" },
+	perl = { "#", "" },
+	python = { "#", "" },
+	r = { "#", "" },
+	ruby = { "#", "" },
+	rust = { "//", "" },
+	sql = { "--", "" },
+	text = { "#", "" },
+	typescript = { "//", "" },
 }
 
 function M.normalize(value)
@@ -83,8 +105,19 @@ function M.extension(lang)
 	return extensions[M.normalize(lang)] or M.normalize(lang)
 end
 
+function M.comment_parts(lang)
+	local parts = comments[M.normalize(lang)] or { "#", "" }
+	return parts[1], parts[2]
+end
+
 function M.comment(lang)
-	return comments[M.normalize(lang)] or "#"
+	local left = M.comment_parts(lang)
+	return left
+end
+
+function M.commentstring(lang)
+	local left, right = M.comment_parts(lang)
+	return right ~= "" and (left .. " %s " .. right) or (left .. " %s")
 end
 
 return M
