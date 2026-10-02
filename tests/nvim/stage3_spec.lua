@@ -520,6 +520,71 @@ test("prefers the project virtualenv and falls back to system Python", function(
 	vim.fs.rm(directory, { recursive = true, force = true })
 end)
 
+test("lists and explicitly selects project or system Python kernels", function()
+	setup_fake()
+	local state = open_fixture("00_minimal.ipynb")
+	local choices = kernel.python_choices(state)
+	assert(choices[1].mode == "project")
+	assert(choices[1].path == vim.fs.joinpath(root, ".venv", "bin", "python"))
+	assert(choices[1].available)
+	assert(choices[2].mode == "system" and choices[2].path ~= "" and choices[2].available)
+	local selected
+	assert(kernel.select_python(state, "system", function(err, status)
+		assert(err == nil)
+		selected = status
+	end))
+	assert(selected.python_source == "selected_system" or selected.python_source == "selected_configured_system")
+	local start = assert(clients[#clients]:last("kernel.start"))
+	assert(start.payload.python_path == choices[2].path)
+	assert(start.payload.python_source == selected.python_source)
+	close_fixture(state)
+end)
+
+test("rejects a project virtualenv without ipykernel", function()
+	local directory = vim.fn.tempname()
+	assert(vim.fn.mkdir(vim.fs.joinpath(directory, ".venv", "bin"), "p") == 1)
+	local python = vim.fs.joinpath(directory, ".venv", "bin", "python")
+	local file = assert(io.open(python, "wb"))
+	file:write("#!/bin/sh\nexit 1\n")
+	file:close()
+	assert(vim.uv.fs_chmod(python, 493))
+	local received
+	assert(not kernel.select_python({
+		buf = -100,
+		path = vim.fs.joinpath(directory, "notebook.ipynb"),
+		document = { metadata = { language_info = { name = "python" } } },
+	}, "project", function(err)
+		received = err
+	end))
+	assert(received.message:find("ipykernel is unavailable", 1, true))
+	vim.fs.rm(directory, { recursive = true, force = true })
+end)
+
+test("restart switches an automatic system kernel to a newly usable project virtualenv", function()
+	setup_fake()
+	local state = open_fixture("00_minimal.ipynb")
+	local directory = vim.fn.tempname()
+	assert(vim.fn.mkdir(directory, "p") == 1)
+	vim.fn.writefile({ "[project]", 'name = "kernel-switch"' }, vim.fs.joinpath(directory, "pyproject.toml"))
+	state.path = vim.fs.joinpath(directory, "notebook.ipynb")
+	local started
+	kernel.start(state, function(err, status)
+		assert(err == nil)
+		started = status
+	end)
+	assert(started.python_source == "system" or started.python_source == "configured_system")
+	local project_python = vim.fs.joinpath(directory, ".venv", "bin", "python")
+	assert(vim.fn.mkdir(vim.fs.dirname(project_python), "p") == 1)
+	assert(vim.uv.fs_symlink(started.python_path, project_python))
+	kernel.restart()
+	assert(#clients == 2)
+	local switched = assert(clients[2]:last("kernel.start"))
+	assert(switched.payload.python_path == project_python)
+	assert(switched.payload.python_source == "project_venv")
+	close_fixture(state)
+	vim.fs.rm(directory, { recursive = true, force = true })
+end)
+
 test("executes immutable cell snapshots sequentially and persists outputs", function()
 	setup_fake()
 	local state = open_fixture("09_lsp_mapping.ipynb")

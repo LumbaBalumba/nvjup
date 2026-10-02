@@ -377,9 +377,13 @@ lower-priority nvjup_kernel nvim-cmp source without starting a kernel on typing.
 
 Statusline plugins can call require('nvjup.statusline').component() or .get(0).
 The outline and variable pickers auto-detect Telescope and retain dependency-free
-fallbacks. <Leader>nK or :NvJupRemoteConnect first selects Jupyter Lab or
-Google Colab. The Jupyter flow asks for URL, hidden token, TLS/origin policy and
-kernelspec. The Colab flow (also :NvJupColabConnect) supports the optional official
+fallbacks. <Leader>nK or :NvJupRemoteConnect selects Local project (.venv),
+System Python, Jupyter Lab, or Google Colab. Local environments must provide
+ipykernel; for uv projects use `uv add --dev ipykernel`. Explicit local choices
+apply to the current notebook. Automatic kernel restart repeats discovery, so a
+newly available project environment replaces the system fallback. The Jupyter
+flow asks for URL, hidden token, TLS/origin policy and kernelspec. The Colab flow
+(also :NvJupColabConnect) supports the optional official
 `google-colab-cli` 0.6.0+ executable, invokes it with argv only, performs OAuth
 only when the CLI requests it, and offers CPU, GPU and TPU environments.
 `colab.high_memory = true` additionally exposes high-memory choices and requires

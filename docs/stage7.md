@@ -65,6 +65,8 @@ require("nvjup.statusline").get(0)
 
 ## Remote Jupyter Server
 
+The kernel picker offers explicit project `.venv` and system-Python kernels alongside Jupyter Lab and Google Colab. Project environments must provide `ipykernel`; automatic restart repeats discovery so a newly usable `.venv` replaces an earlier system fallback.
+
 Remote transport creates an owned kernel through the Jupyter Server REST API. Ordinary Jupyter channels use the negotiated `v1.kernel.websocket.jupyter.org` binary protocol. Google Colab's managed proxy does not negotiate that subprotocol, so Colab uses its default JSON WebSocket framing. Both are bounded and feed the same normalized nvjup RPC/event surface as local ZeroMQ kernels.
 
 ### UI-only connection

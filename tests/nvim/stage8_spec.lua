@@ -43,7 +43,7 @@ test("registers the global remote UI commands", function()
 	assert(vim.fn.exists(":NvJupRemoteFiles") == 2)
 end)
 
-test("opens with a Jupyter Lab or Google Colab provider menu", function()
+test("opens with local, system, Jupyter Lab, and Google Colab kernel choices", function()
 	local original_select = vim.ui.select
 	local selected_items, selected_prompt
 	remote.disconnect()
@@ -54,8 +54,50 @@ test("opens with a Jupyter Lab or Google Colab provider menu", function()
 	assert(remote_connection.open({ buf = vim.api.nvim_get_current_buf(), path = "" }))
 	vim.ui.select = original_select
 	remote.reset_session()
-	assert(vim.deep_equal(selected_items, { "Jupyter Lab", "Google Colab" }))
-	assert(selected_prompt == "Remote Jupyter provider")
+	assert(vim.deep_equal(selected_items, { "Local project (.venv)", "System Python", "Jupyter Lab", "Google Colab" }))
+	assert(selected_prompt == "Jupyter kernel")
+end)
+
+test("keeps a remote profile when local Python validation fails", function()
+	local state = open_fixture("00_minimal.ipynb")
+	remote.set_session({ url = "https://remote.example.test", kernel_name = "python3" })
+	remote_connection._set_kernel({
+		select_python = function(_, _, callback)
+			callback({ message = "ipykernel is unavailable" })
+			return false
+		end,
+	})
+	assert(not remote_connection.activate_local(state, "project"))
+	assert(remote.enabled(state))
+	remote_connection._set_kernel(nil)
+	remote.reset_session()
+	close_fixture(state)
+end)
+
+test("switches from a remote profile to an explicitly selected local Python", function()
+	local state = open_fixture("00_minimal.ipynb")
+	local selected_mode, completed
+	remote.set_session({ url = "https://remote.example.test", kernel_name = "python3" })
+	remote_connection._set_kernel({
+		shutdown_remote_sessions = function() end,
+		select_python = function(selected_state, mode, callback, before_start)
+			assert(selected_state == state)
+			selected_mode = mode
+			before_start()
+			callback(nil, { state = "idle", python_path = "/project/.venv/bin/python" })
+			return true
+		end,
+	})
+	assert(remote_connection.activate_local(state, "project", function(err, status)
+		assert(err == nil)
+		completed = status
+	end))
+	assert(selected_mode == "project")
+	assert(completed.python_path == "/project/.venv/bin/python")
+	assert(not remote.enabled(state))
+	remote_connection._set_kernel(nil)
+	remote.reset_session()
+	close_fixture(state)
 end)
 
 local function colab_state(path, session_id, overrides)

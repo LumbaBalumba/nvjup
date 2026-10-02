@@ -431,9 +431,45 @@ function M.connect(state)
 	return true
 end
 
+function M.activate_local(state, mode, callback)
+	state = state or current_state()
+	if not state.document then
+		local err = { message = "open an nvjup notebook before selecting a local kernel" }
+		notify(err.message, vim.log.levels.ERROR)
+		if callback then
+			callback(err)
+		end
+		return false
+	end
+	return kernel_api.select_python(state, mode, function(err, status)
+		if err then
+			notify(err.message or tostring(err), vim.log.levels.ERROR)
+		else
+			notify(string.format("local %s kernel is ready: %s", mode, status.python_path or "Python"))
+		end
+		if callback then
+			callback(err, status)
+		end
+	end, function()
+		local recovery = cancel_pending_colab("switch to a local kernel")
+		if recovery then
+			notify(recovery, vim.log.levels.WARN)
+		end
+		require("nvjup.remote_files").close_all()
+		kernel_api.shutdown_remote_sessions()
+		remote.disconnect()
+	end)
+end
+
 local function choose_provider(state)
-	vim.ui.select({ "Jupyter Lab", "Google Colab" }, { prompt = "Remote Jupyter provider" }, function(choice)
-		if choice == "Jupyter Lab" then
+	vim.ui.select({ "Local project (.venv)", "System Python", "Jupyter Lab", "Google Colab" }, {
+		prompt = "Jupyter kernel",
+	}, function(choice)
+		if choice == "Local project (.venv)" then
+			M.activate_local(state, "project")
+		elseif choice == "System Python" then
+			M.activate_local(state, "system")
+		elseif choice == "Jupyter Lab" then
 			M.connect(state)
 		elseif choice == "Google Colab" then
 			M.connect_colab(state)
@@ -447,10 +483,10 @@ function M.open(state)
 		choose_provider(state)
 		return true
 	end
-	vim.ui.select({ "Reconnect or change provider", "Show connection status", "Disconnect", "Cancel" }, {
+	vim.ui.select({ "Change kernel or provider", "Show connection status", "Disconnect", "Cancel" }, {
 		prompt = "Remote Jupyter",
 	}, function(choice)
-		if choice == "Reconnect or change provider" then
+		if choice == "Change kernel or provider" then
 			choose_provider(state)
 		elseif choice == "Show connection status" then
 			M.status(state)

@@ -9,6 +9,7 @@ local trust = require("nvjup.trust")
 
 local M = {}
 local sessions = {}
+local python_overrides = {}
 local client_factory = rpc.new
 local execution_sequence = 0
 local batch_sequence = 0
@@ -591,26 +592,7 @@ local function python_has_ipykernel(path)
 	return result.code == 0
 end
 
-local function configured_kernel_python(state, remote_options)
-	if remote_options then
-		return nil, "remote"
-	end
-	if not notebook_language(state):match("^python") then
-		return nil, "kernelspec"
-	end
-	local options = config.options.kernel or {}
-	local configured = options.python_path
-	if type(configured) == "function" then
-		configured = configured(state.path, state)
-	end
-	if type(configured) == "string" and configured ~= "" then
-		local path = vim.fs.normalize(configured)
-		if not path:match("^/") and not path:match("^%a:[/\\]") then
-			path = vim.fs.joinpath(lsp.project_root(state.path), path)
-		end
-		return path, "configured"
-	end
-
+local function project_kernel_python(state)
 	local root = lsp.project_root(state.path)
 	for _, relative in ipairs({
 		{ ".venv", "bin", "python" },
@@ -619,11 +601,15 @@ local function configured_kernel_python(state, remote_options)
 		{ "venv", "Scripts", "python.exe" },
 	}) do
 		local candidate = vim.fs.joinpath(root, unpack(relative))
-		if python_has_ipykernel(candidate) then
-			return candidate, "project_venv"
+		if executable_file(candidate) then
+			return candidate
 		end
 	end
+	return nil
+end
 
+local function system_kernel_python(state)
+	local options = config.options.kernel or {}
 	local system = options.system_python
 	if type(system) == "function" then
 		system = system(state.path, state)
@@ -643,6 +629,37 @@ local function configured_kernel_python(state, remote_options)
 		end
 	end
 	return "python3", "system"
+end
+
+local function configured_kernel_python(state, remote_options)
+	if remote_options then
+		return nil, "remote"
+	end
+	if not notebook_language(state):match("^python") then
+		return nil, "kernelspec"
+	end
+	local override = python_overrides[state.buf]
+	if override then
+		return override.python_path, override.python_source
+	end
+	local options = config.options.kernel or {}
+	local configured = options.python_path
+	if type(configured) == "function" then
+		configured = configured(state.path, state)
+	end
+	if type(configured) == "string" and configured ~= "" then
+		local path = vim.fs.normalize(configured)
+		if not path:match("^/") and not path:match("^%a:[/\\]") then
+			path = vim.fs.joinpath(lsp.project_root(state.path), path)
+		end
+		return path, "configured"
+	end
+
+	local project = project_kernel_python(state)
+	if project and python_has_ipykernel(project) then
+		return project, "project_venv"
+	end
+	return system_kernel_python(state)
 end
 
 local function ensure_kernel(session, callback)
@@ -919,6 +936,60 @@ function M.start(state, callback)
 	return true
 end
 
+function M.python_choices(state)
+	state = state or current_state()
+	local project = project_kernel_python(state)
+	local system, system_source = system_kernel_python(state)
+	return {
+		{
+			mode = "project",
+			path = project,
+			python_source = "selected_project_venv",
+			available = project ~= nil and python_has_ipykernel(project),
+		},
+		{
+			mode = "system",
+			path = system,
+			python_source = system_source == "configured_system" and "selected_configured_system" or "selected_system",
+			available = python_has_ipykernel(system),
+		},
+	}
+end
+
+function M.select_python(state, mode, callback, before_start)
+	state = state or current_state()
+	callback = callback or function() end
+	local selected
+	for _, choice in ipairs(M.python_choices(state)) do
+		if choice.mode == mode then
+			selected = choice
+			break
+		end
+	end
+	if not selected or not selected.path then
+		callback({ message = "no project virtual environment was found" })
+		return false
+	end
+	if not selected.available then
+		callback({
+			message = string.format(
+				"ipykernel is unavailable in %s; install it in that environment first (for uv projects: uv add --dev ipykernel)",
+				selected.path
+			),
+		})
+		return false
+	end
+	if before_start then
+		before_start()
+	end
+	M.shutdown(state)
+	python_overrides[state.buf] = {
+		python_path = selected.path,
+		python_source = selected.python_source,
+	}
+	return M.start(state, callback)
+end
+
 function M.interrupt()
 	local state = current_state()
 	local session = get_session(state)
@@ -936,6 +1007,21 @@ end
 function M.restart(callback)
 	local state = current_state()
 	local session = get_session(state)
+	local desired_python, desired_source = configured_kernel_python(state, remote.resolve(state))
+	local python_changed = desired_python ~= session.kernel_python or desired_source ~= session.kernel_python_source
+	local discovered_project = desired_source == "project_venv"
+		and (session.kernel_python_source == "system" or session.kernel_python_source == "configured_system")
+	local configured_changed = desired_source == "configured" and python_changed
+	if session.transport ~= "remote" and (discovered_project or configured_changed) then
+		session.restarting = true
+		M.shutdown(state)
+		M.start(state, function(err)
+			if callback and not err then
+				callback()
+			end
+		end)
+		return
+	end
 	session.restarting = true
 	session.queue = {}
 	ensure_kernel(session, function(start_err)
@@ -1019,6 +1105,9 @@ function M.detach(state)
 			session.client:kill()
 			sessions[state.buf] = nil
 		end
+	end
+	if state then
+		python_overrides[state.buf] = nil
 	end
 end
 
