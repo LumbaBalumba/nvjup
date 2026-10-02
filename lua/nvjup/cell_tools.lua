@@ -113,7 +113,7 @@ local function format_cell(state, cell, options)
 	vim.bo[buf].endofline = has_eol
 	vim.bo[buf].filetype = filetype
 	local format_error
-	local attempted = conform.format({
+	local succeeded, attempted = pcall(conform.format, {
 		bufnr = buf,
 		async = false,
 		timeout_ms = options.timeout_ms,
@@ -122,7 +122,10 @@ local function format_cell(state, cell, options)
 	}, function(err)
 		format_error = err
 	end)
-	local source = attempted and not format_error and source_from_scratch(buf) or nil
+	if not succeeded then
+		format_error = attempted
+	end
+	local source = succeeded and attempted and not format_error and source_from_scratch(buf) or nil
 	if vim.api.nvim_buf_is_valid(buf) then
 		vim.api.nvim_buf_delete(buf, { force = true })
 	end

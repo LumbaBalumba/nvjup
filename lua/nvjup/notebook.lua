@@ -264,6 +264,9 @@ function Notebook:replace_buffer(options)
 	vim.api.nvim_buf_set_lines(self.buf, 0, -1, false, self:_build_buffer_lines())
 	self.internal_change = false
 	self:_rebuild_ranges()
+	-- Replacing every line collapses extmarks even when a cell's source is
+	-- unchanged. Discard the projection cache so the next render rebuilds it.
+	require("nvjup.treesitter").detach(self)
 
 	if cursor and options.restore_cursor ~= false then
 		local line_count = vim.api.nvim_buf_line_count(self.buf)

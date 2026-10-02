@@ -11,25 +11,48 @@ function M.read_file(path)
 end
 
 function M.atomic_write(path, content)
-	local temporary = string.format("%s.nvjup.%d.tmp", path, vim.uv.hrtime())
-	local file, err = io.open(temporary, "wb")
-	if not file then
+	local uv = vim.uv
+	local stat = uv.fs_lstat(path)
+	if stat and stat.type == "link" then
+		local resolved, err = uv.fs_realpath(path)
+		if not resolved then
+			return nil, err
+		end
+		path = resolved
+		stat = uv.fs_stat(path)
+	end
+	-- mkstemp creates a private, exclusive file in the destination directory.
+	local fd, temporary = uv.fs_mkstemp(path .. ".nvjup.XXXXXX")
+	if not fd then
+		return nil, temporary
+	end
+	local function fail(err)
+		uv.fs_close(fd)
+		uv.fs_unlink(temporary)
 		return nil, err
 	end
-
-	local ok, write_err = file:write(content)
-	if not ok then
-		file:close()
-		os.remove(temporary)
-		return nil, write_err
+	local offset = 0
+	while offset < #content do
+		local written, err = uv.fs_write(fd, content:sub(offset + 1), offset)
+		if not written or written == 0 then
+			return fail(err or "failed to write notebook")
+		end
+		offset = offset + written
 	end
-
-	file:flush()
-	file:close()
-
-	local renamed, rename_err = os.rename(temporary, path)
+	if stat then
+		local ok, err = uv.fs_fchmod(fd, bit.band(stat.mode, 511))
+		if not ok then
+			return fail(err)
+		end
+	end
+	local closed, close_err = uv.fs_close(fd)
+	if not closed then
+		uv.fs_unlink(temporary)
+		return nil, close_err
+	end
+	local renamed, rename_err = uv.fs_rename(temporary, path)
 	if not renamed then
-		os.remove(temporary)
+		uv.fs_unlink(temporary)
 		return nil, rename_err
 	end
 	return true

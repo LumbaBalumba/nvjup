@@ -170,6 +170,46 @@ test("projects Tree-sitter captures from Markdown and Lua cells", function()
 	close_fixture(state)
 end)
 
+test("preserves nonempty highlights in every cell after formatting and buffer replacement", function()
+	local state = open_fixture("09_lsp_mapping.ipynb")
+	local cell = state.cells[2]
+	cell.raw.metadata.language = "lua"
+	state:update_sources({ [cell.id] = "local value=42\nprint(value)" })
+	render.render(state)
+	local original = package.loaded.conform
+	package.loaded.conform = {
+		format = function(options, callback)
+			vim.api.nvim_buf_set_lines(options.bufnr, 0, -1, false, { "local value = 42", "print(value)" })
+			callback(nil)
+			return true
+		end,
+	}
+	state:goto_cell(2)
+	local _, errors = require("nvjup.cell_tools").format(state, { current = true })
+	package.loaded.conform = original
+	assert(#errors == 0)
+	local function check()
+		local live = {}
+		for _, mark in ipairs(vim.api.nvim_buf_get_extmarks(state.buf, state.treesitter_ns, 0, -1, { details = true })) do
+			local details = mark[4]
+			if details.end_row > mark[2] or (details.end_row == mark[2] and details.end_col > mark[3]) then
+				live[details.hl_group] = true
+			end
+		end
+		local lua, markdown = false, false
+		for group in pairs(live) do
+			lua = lua or group:find(".lua", 1, true) ~= nil
+			markdown = markdown or group:find(".markdown", 1, true) ~= nil
+		end
+		assert(lua and markdown, "formatting/replacement collapsed cached highlights: " .. vim.inspect(live))
+	end
+	check()
+	state:replace_buffer()
+	render.render(state)
+	check()
+	close_fixture(state)
+end)
+
 test("reparses only the dirty Tree-sitter cell", function()
 	local state = open_fixture("09_lsp_mapping.ipynb")
 	local cell = state.cells[1]

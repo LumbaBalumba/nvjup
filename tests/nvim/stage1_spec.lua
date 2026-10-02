@@ -404,7 +404,13 @@ test("formats changed code cells with the user's Conform formatter on save", fun
 	}
 	local state = open_fixture("00_minimal.ipynb")
 	local cell = state.cells[1]
-	vim.api.nvim_buf_set_lines(state.buf, cell.range.start_row, cell.range.end_row + 1, false, { "answer=42", "print( answer )" })
+	vim.api.nvim_buf_set_lines(
+		state.buf,
+		cell.range.start_row,
+		cell.range.end_row + 1,
+		false,
+		{ "answer=42", "print( answer )" }
+	)
 	assert(state:sync_from_buffer())
 	vim.cmd.write()
 	assert(cell.source == "answer = 42\nprint(answer)\n")
@@ -419,7 +425,13 @@ test("formats changed code cells with the user's Conform formatter on save", fun
 	vim.cmd.write()
 	assert(format_calls == 2, "a newly changed code cell was not formatted by :w")
 	cell = state.cells[1]
-	vim.api.nvim_buf_set_lines(state.buf, cell.range.start_row, cell.range.end_row + 1, false, { "%matplotlib inline", "value = 1" })
+	vim.api.nvim_buf_set_lines(
+		state.buf,
+		cell.range.start_row,
+		cell.range.end_row + 1,
+		false,
+		{ "%matplotlib inline", "value = 1" }
+	)
 	assert(state:sync_from_buffer())
 	vim.cmd.write()
 	assert(format_calls == 2, "notebook-only Python syntax was sent to Black")
@@ -428,6 +440,65 @@ test("formats changed code cells with the user's Conform formatter on save", fun
 	assert(vim.fn.maparg("<leader>fm", "n", false, true).buffer == 1)
 	close_fixture(state)
 	package.loaded.conform = original_conform
+end)
+
+test("atomic writes preserve permissions and symbolic links", function()
+	local util = require("nvjup.util")
+	local path = vim.fn.tempname()
+	local link = path .. ".link"
+	vim.fn.writefile({ "old" }, path)
+	assert(vim.uv.fs_chmod(path, tonumber("600", 8)))
+	assert(util.atomic_write(path, "new"))
+	assert(vim.fn.getfperm(path) == "rw-------")
+	assert(vim.uv.fs_symlink(path, link))
+	assert(util.atomic_write(link, "through link"))
+	assert(vim.uv.fs_lstat(link).type == "link")
+	assert(util.read_file(path) == "through link")
+	vim.fn.delete(path)
+	local ok = util.atomic_write(link, "dangling")
+	assert(not ok and vim.uv.fs_lstat(link).type == "link")
+	vim.fn.delete(link)
+end)
+
+test("failed atomic writes leave the target intact and remove temporary files", function()
+	local util = require("nvjup.util")
+	local path = vim.fn.tempname()
+	vim.fn.writefile({ "original" }, path)
+	local original_write = vim.uv.fs_write
+	vim.uv.fs_write = function()
+		return nil, "simulated write failure"
+	end
+	local ok, err = util.atomic_write(path, "replacement")
+	vim.uv.fs_write = original_write
+	assert(not ok and err == "simulated write failure")
+	assert(util.read_file(path) == "original\n")
+	assert(#vim.fn.glob(path .. ".nvjup.*", false, true) == 0)
+	vim.fn.delete(path)
+end)
+
+test("saves unchanged source and cleans scratch buffers when a formatter throws", function()
+	local original = package.loaded.conform
+	local scratch
+	package.loaded.conform = {
+		format = function(options)
+			scratch = options.bufnr
+			error("formatter configuration failed")
+		end,
+	}
+	local state = open_fixture("00_minimal.ipynb")
+	local cell = state.cells[1]
+	vim.api.nvim_buf_set_lines(state.buf, cell.range.start_row, cell.range.end_row + 1, false, { "answer=43" })
+	assert(state:sync_from_buffer())
+	local original_notify = vim.notify
+	vim.notify = function() end
+	local ok, err = pcall(vim.cmd.write)
+	vim.notify = original_notify
+	package.loaded.conform = original
+	assert(ok, err)
+	assert(scratch and not vim.api.nvim_buf_is_valid(scratch), "formatter scratch buffer leaked")
+	local saved = vim.json.decode(table.concat(vim.fn.readfile(state.path, "b"), "\n"))
+	assert(saved.cells[1].source == "answer=43")
+	close_fixture(state)
 end)
 
 test("comments source lines with each cell language", function()
