@@ -183,8 +183,8 @@ Code comments follow per-cell metadata or the notebook kernel language rather
 than the composite nvjup/HTML parser. Markdown uses <!-- --> comments. Cell
 markers are never modified, including selections spanning multiple cells.
 Indentation options and indentexpr follow the language of the active cell.
-When conform.nvim is installed, save formats code cells changed since opening or
-last formatting; :NvJupFormat formats the current cell and :NvJupFormatAll
+When conform.nvim is installed, :w formats every code cell before the notebook
+is saved; :NvJupFormat formats the current cell and :NvJupFormatAll
 formats all code cells. Formatter subprocesses receive a notebook-adjacent
 synthetic filename with the correct language extension, so project configuration
 continues to work. Markdown, raw cells, markers, metadata, and outputs are not

@@ -388,10 +388,12 @@ test("uses the active cell language indentation settings", function()
 	close_fixture(state)
 end)
 
-test("formats changed code cells with the user's Conform formatter before save", function()
+test("formats every code cell with the user's Conform formatter on each save", function()
 	local original_conform = package.loaded.conform
+	local format_calls = 0
 	package.loaded.conform = {
 		format = function(options, callback)
+			format_calls = format_calls + 1
 			assert(vim.bo[options.bufnr].filetype == "python")
 			assert(vim.api.nvim_buf_get_name(options.bufnr):match("%.py$"))
 			vim.api.nvim_buf_set_lines(options.bufnr, 0, -1, false, { "answer = 42", "print(answer)" })
@@ -408,6 +410,9 @@ test("formats changed code cells with the user's Conform formatter before save",
 	assert(cell.source == "answer = 42\nprint(answer)\n")
 	local saved = vim.json.decode(table.concat(vim.fn.readfile(state.path, "b"), "\n"))
 	assert(saved.cells[1].source == "answer = 42\nprint(answer)\n")
+	assert(format_calls == 1)
+	vim.cmd.write()
+	assert(format_calls == 2, "an unchanged code cell was not formatted on the next :w")
 	assert(vim.fn.exists(":NvJupFormat") == 2 and vim.fn.exists(":NvJupFormatAll") == 2)
 	assert(vim.fn.maparg("<leader>fm", "n", false, true).buffer == 1)
 	close_fixture(state)

@@ -210,7 +210,7 @@ local function attach_buffer(state)
 			end
 			local formatting = config.options.formatting or {}
 			if formatting.enabled ~= false and formatting.on_save ~= false then
-				cell_tools.format_and_notify(current, { on_save = true })
+				cell_tools.format_and_notify(current, { on_save = true, all = true })
 			end
 			local ok, err = current:save(vim.api.nvim_buf_get_name(buf))
 			if not ok then

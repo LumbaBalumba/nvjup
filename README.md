@@ -144,7 +144,7 @@ require("nvjup").setup({
 
   formatting = {
     enabled = true,
-    on_save = true, -- formats only code cells edited since open/last format
+    on_save = true, -- :w formats every code cell before saving
     timeout_ms = 2000,
   },
 
