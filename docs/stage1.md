@@ -25,7 +25,7 @@
   - deterministic truncation.
 - Cell navigation and text objects, including edge-aware `h/j/k/l` movement that never enters hidden markers.
 - Per-cell-language line and visual-range commenting (`<leader>/`) without falling back to HTML comments.
-- Per-cell indentation/indentexpr and optional Conform formatting for the current cell, all cells, and every code cell on save.
+- Per-cell indentation/indentexpr and optional Conform formatting for the current cell, all cells, and changed code cells on save.
 - Insert, duplicate, delete, move, split, merge, and type conversion.
 - Source folds, output collapsing, and output clearing.
 - Notebook outline through `vim.ui.select`.

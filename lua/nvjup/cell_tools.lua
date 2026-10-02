@@ -81,12 +81,27 @@ local function scratch_name(state, cell, filetype)
 	return vim.fs.joinpath(directory, string.format(".%s.nvjup-%s.%s", base, cell.id, extension))
 end
 
+local function has_notebook_only_syntax(filetype, source)
+	if filetype ~= "python" then
+		return false
+	end
+	for line in (source .. "\n"):gmatch("([^\n]*)\n") do
+		if line:match("^%s*[!%%?]") or line:match("<[%u][^>]*>") or line:match("<%.+>") then
+			return true
+		end
+	end
+	return false
+end
+
 local function format_cell(state, cell, options)
+	local filetype = cell_filetype(state, cell)
+	if has_notebook_only_syntax(filetype, cell.source) then
+		return nil
+	end
 	local ok, conform = pcall(require, "conform")
 	if not ok or type(conform.format) ~= "function" then
 		return nil
 	end
-	local filetype = cell_filetype(state, cell)
 	local buf = vim.api.nvim_create_buf(false, true)
 	vim.bo[buf].buftype = "nofile"
 	vim.bo[buf].bufhidden = "wipe"

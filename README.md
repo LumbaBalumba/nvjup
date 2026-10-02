@@ -144,7 +144,7 @@ require("nvjup").setup({
 
   formatting = {
     enabled = true,
-    on_save = true, -- :w formats every code cell before saving
+    on_save = true, -- :w formats changed code cells; notebook magics/placeholders are skipped
     timeout_ms = 2000,
   },
 

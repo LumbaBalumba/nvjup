@@ -388,7 +388,7 @@ test("uses the active cell language indentation settings", function()
 	close_fixture(state)
 end)
 
-test("formats every code cell with the user's Conform formatter on each save", function()
+test("formats changed code cells with the user's Conform formatter on save", function()
 	local original_conform = package.loaded.conform
 	local format_calls = 0
 	package.loaded.conform = {
@@ -412,7 +412,18 @@ test("formats every code cell with the user's Conform formatter on each save", f
 	assert(saved.cells[1].source == "answer = 42\nprint(answer)\n")
 	assert(format_calls == 1)
 	vim.cmd.write()
-	assert(format_calls == 2, "an unchanged code cell was not formatted on the next :w")
+	assert(format_calls == 1, "an unchanged code cell was formatted again")
+	cell = state.cells[1]
+	vim.api.nvim_buf_set_lines(state.buf, cell.range.start_row, cell.range.end_row + 1, false, { "answer= 42" })
+	assert(state:sync_from_buffer())
+	vim.cmd.write()
+	assert(format_calls == 2, "a newly changed code cell was not formatted by :w")
+	cell = state.cells[1]
+	vim.api.nvim_buf_set_lines(state.buf, cell.range.start_row, cell.range.end_row + 1, false, { "%matplotlib inline", "value = 1" })
+	assert(state:sync_from_buffer())
+	vim.cmd.write()
+	assert(format_calls == 2, "notebook-only Python syntax was sent to Black")
+	assert(cell.source == "%matplotlib inline\nvalue = 1")
 	assert(vim.fn.exists(":NvJupFormat") == 2 and vim.fn.exists(":NvJupFormatAll") == 2)
 	assert(vim.fn.maparg("<leader>fm", "n", false, true).buffer == 1)
 	close_fixture(state)
