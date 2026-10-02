@@ -334,13 +334,6 @@ local function render_cell_chrome(state, cell, index, width, buffer_lines, clear
 			hl_mode = "combine",
 			priority = 80,
 		})
-		body_mark(row, {
-			virt_text = { { "│", "NvJupBorder" } },
-			virt_text_win_col = 0,
-			virt_text_repeat_linebreak = true,
-			hl_mode = "combine",
-			priority = 75,
-		})
 		if config.options.render.right_border then
 			body_mark(row, {
 				virt_text = { { "│", "NvJupBorder" } },

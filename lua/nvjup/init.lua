@@ -1,4 +1,5 @@
 local config = require("nvjup.config")
+local cell_tools = require("nvjup.cell_tools")
 local features = require("nvjup.features")
 local image = require("nvjup.image")
 local inspector = require("nvjup.inspector")
@@ -33,6 +34,12 @@ local function define_buffer_commands(buf)
 		vim.cmd.write()
 	end)
 	command("NvJupRefresh", actions.refresh)
+	command("NvJupFormat", function()
+		cell_tools.format_and_notify(assert(notebook.get(buf)), { current = true })
+	end)
+	command("NvJupFormatAll", function()
+		cell_tools.format_and_notify(assert(notebook.get(buf)), { all = true })
+	end)
 	command("NvJupCellNext", actions.next_cell, { count = 1 })
 	command("NvJupCellPrevious", actions.previous_cell, { count = 1 })
 	command("NvJupCellInsertBelow", function(args)
@@ -164,6 +171,7 @@ local function attach_buffer(state)
 	vim.bo[buf].syntax = ""
 
 	markdown.attach(state)
+	cell_tools.attach(state)
 	keymaps.attach(buf)
 	define_buffer_commands(buf)
 
@@ -200,6 +208,10 @@ local function attach_buffer(state)
 			if not current then
 				return
 			end
+			local formatting = config.options.formatting or {}
+			if formatting.enabled ~= false and formatting.on_save ~= false then
+				cell_tools.format_and_notify(current, { on_save = true })
+			end
 			local ok, err = current:save(vim.api.nvim_buf_get_name(buf))
 			if not ok then
 				notify_error(err)
@@ -211,8 +223,10 @@ local function attach_buffer(state)
 		group = group,
 		buffer = buf,
 		callback = function()
-			render.active(notebook.get(buf))
+			local current = notebook.get(buf)
+			render.active(current)
 			actions.update_commentstring()
+			cell_tools.update_options(current)
 		end,
 	})
 

@@ -143,10 +143,17 @@ Options include:
       python_path = false,
       -- Python defaults to Pyright and Ruff when installed.
     },
+    formatting = {
+      enabled = true,
+      on_save = true,
+      timeout_ms = 2000,
+      notify_errors = true,
+    },
     keymaps = {
       cursor_down = "j",
       comment_line = "<leader>/",
       comment_visual = "<leader>/",
+      format_cell = "<leader>fm",
       next_cell = "]c",
       previous_cell = "[c",
       -- Set any action to false to disable its mapping.
@@ -163,6 +170,8 @@ h / l, Left / Right     Move horizontally and wrap only within the current
                         cell; never enter a marker or adjacent cell.
 <Leader>/              Toggle the current line using its cell language.
 <Leader>/ (Visual)     Toggle selected source lines per cell language.
+<Leader>fm              Format the current code cell with the formatter selected
+                        by conform.nvim for that cell's language.
 ]c                      Next cell.
 [c                      Previous cell.
 ]C                      Next code cell.
@@ -173,6 +182,13 @@ ac                      Around-cell text object, including its marker.
 Code comments follow per-cell metadata or the notebook kernel language rather
 than the composite nvjup/HTML parser. Markdown uses <!-- --> comments. Cell
 markers are never modified, including selections spanning multiple cells.
+Indentation options and indentexpr follow the language of the active cell.
+When conform.nvim is installed, save formats code cells changed since opening or
+last formatting; :NvJupFormat formats the current cell and :NvJupFormatAll
+formats all code cells. Formatter subprocesses receive a notebook-adjacent
+synthetic filename with the correct language extension, so project configuration
+continues to work. Markdown, raw cells, markers, metadata, and outputs are not
+passed to formatters.
 
 Counts are accepted by cell motions. Navigation adds the previous location to
 the jumplist.
@@ -420,6 +436,8 @@ local panel and edits that copy. Telescope is required. See docs/stage8.md.
 
 :NvJupWrite             Save the notebook.
 :NvJupRefresh           Synchronize model and redraw extmarks.
+:NvJupFormat            Format the current code cell with conform.nvim.
+:NvJupFormatAll         Format every code cell with conform.nvim.
 :NvJupCellNext          Move to next cell.
 :NvJupCellPrevious      Move to previous cell.
 :NvJupCellInsertAbove   Insert a cell; optional type argument.

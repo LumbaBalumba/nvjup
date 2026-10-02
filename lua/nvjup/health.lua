@@ -74,6 +74,13 @@ function M.check()
 	else
 		vim.health.info("live-kernel completion is disabled; shadow LSP completion remains primary")
 	end
+	if (config.options.formatting or {}).enabled == false then
+		vim.health.info("code-cell formatting is disabled")
+	elseif pcall(require, "conform") then
+		vim.health.ok("conform.nvim is available for per-cell and format-on-save integration")
+	else
+		vim.health.info("conform.nvim is unavailable; code-cell formatting is skipped")
+	end
 
 	vim.health.start("nvjup Jupyter sidecar")
 	local command = rpc.default_command()

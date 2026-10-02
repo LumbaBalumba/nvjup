@@ -32,17 +32,32 @@ local aliases = {
 	zsh = "bash",
 }
 
+local filetypes = {
+	bash = "sh",
+	csharp = "cs",
+	text = "text",
+}
+
 local extensions = {
 	bash = "sh",
 	c = "c",
 	cpp = "cpp",
+	csharp = "cs",
+	css = "css",
 	go = "go",
+	html = "html",
+	java = "java",
 	javascript = "js",
 	julia = "jl",
+	kotlin = "kt",
 	lua = "lua",
+	perl = "pl",
 	python = "py",
 	r = "r",
+	ruby = "rb",
 	rust = "rs",
+	sql = "sql",
+	text = "txt",
 	typescript = "ts",
 }
 
@@ -99,6 +114,11 @@ function M.for_cell(state, cell)
 		return "text"
 	end
 	return M.normalize(metadata_language(cell.raw.metadata) or M.primary(state))
+end
+
+function M.filetype(lang)
+	local normalized = M.normalize(lang)
+	return filetypes[normalized] or normalized
 end
 
 function M.extension(lang)

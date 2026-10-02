@@ -1,6 +1,7 @@
 local root = assert(vim.env.NVJUP_PROJECT_ROOT)
 local Notebook = require("nvjup.notebook")
 local actions = require("nvjup.actions")
+local cell_tools = require("nvjup.cell_tools")
 local config = require("nvjup.config")
 local interactive = require("nvjup.interactive")
 local kernel = require("nvjup.kernel")
@@ -172,6 +173,12 @@ test("renders full-width unbroken cell borders", function()
 		source_rows = source_rows + cell.range.end_row - cell.range.start_row + 1
 	end
 	assert(count_where(render_marks, function(item)
+		return item.virt_text_pos == "inline"
+	end) == source_rows)
+	assert(count_where(render_marks, function(item)
+		return item.virt_text_win_col == 0
+	end) == 0)
+	assert(count_where(render_marks, function(item)
 		return item.virt_text_pos == "eol_right_align" and item.virt_text_repeat_linebreak
 	end) == source_rows)
 
@@ -200,7 +207,7 @@ test("renders full-width unbroken cell borders", function()
 	close_fixture(state)
 end)
 
-test("wraps long source lines and repeats both borders on visual rows", function()
+test("wraps long source lines without a fixed overlay hiding scrolled text", function()
 	local state = open_fixture("00_minimal.ipynb")
 	local row = state.cells[1].range.start_row
 	local long_line = string.rep("long notebook text ", 30)
@@ -214,18 +221,18 @@ test("wraps long source lines and repeats both borders on visual rows", function
 	assert(vim.wo.breakindentopt:find("min:2", 1, true))
 	assert(vim.wo.showbreak == "  ")
 
-	local repeated_left = false
+	local fixed_left = false
 	local repeated_right = false
 	for _, mark in ipairs(details(state, state.render_ns)) do
 		local item = mark[4]
-		if item.virt_text_repeat_linebreak and item.virt_text_win_col == 0 then
-			repeated_left = true
+		if item.virt_text_win_col == 0 then
+			fixed_left = true
 		end
 		if item.virt_text_repeat_linebreak and item.virt_text_pos == "eol_right_align" then
 			repeated_right = true
 		end
 	end
-	assert(repeated_left)
+	assert(not fixed_left)
 	assert(repeated_right)
 
 	vim.api.nvim_win_set_cursor(0, { row + 1, #long_line })
@@ -363,6 +370,48 @@ test("keeps horizontal cursor movement inside the current cell", function()
 	assert(vim.api.nvim_win_get_cursor(0)[2] > 1)
 	vim.o.whichwrap = previous_whichwrap
 	close_fixture(state)
+end)
+
+test("uses the active cell language indentation settings", function()
+	local state = open_fixture("01_markdown_code.ipynb")
+	state:goto_cell(2)
+	assert(cell_tools.update_options(state, true))
+	assert(vim.b[state.buf].nvjup_cell_filetype == "python")
+	for _, option in ipairs({ "expandtab", "indentexpr", "indentkeys", "shiftwidth", "softtabstop", "tabstop" }) do
+		assert(vim.bo[state.buf][option] == vim.filetype.get_option("python", option), option)
+	end
+	local row = state.cells[2].range.start_row
+	vim.api.nvim_buf_set_lines(state.buf, row, row + 1, false, { "if True:" })
+	vim.api.nvim_win_set_cursor(0, { row + 1, 7 })
+	vim.api.nvim_feedkeys(vim.keycode("A<CR>pass<Esc>"), "xt", false)
+	assert(vim.api.nvim_get_current_line() == "    pass", vim.api.nvim_get_current_line())
+	close_fixture(state)
+end)
+
+test("formats changed code cells with the user's Conform formatter before save", function()
+	local original_conform = package.loaded.conform
+	package.loaded.conform = {
+		format = function(options, callback)
+			assert(vim.bo[options.bufnr].filetype == "python")
+			assert(vim.api.nvim_buf_get_name(options.bufnr):match("%.py$"))
+			vim.api.nvim_buf_set_lines(options.bufnr, 0, -1, false, { "answer = 42", "print(answer)" })
+			vim.bo[options.bufnr].endofline = true
+			callback(nil, true)
+			return true
+		end,
+	}
+	local state = open_fixture("00_minimal.ipynb")
+	local cell = state.cells[1]
+	vim.api.nvim_buf_set_lines(state.buf, cell.range.start_row, cell.range.end_row + 1, false, { "answer=42", "print( answer )" })
+	assert(state:sync_from_buffer())
+	vim.cmd.write()
+	assert(cell.source == "answer = 42\nprint(answer)\n")
+	local saved = vim.json.decode(table.concat(vim.fn.readfile(state.path, "b"), "\n"))
+	assert(saved.cells[1].source == "answer = 42\nprint(answer)\n")
+	assert(vim.fn.exists(":NvJupFormat") == 2 and vim.fn.exists(":NvJupFormatAll") == 2)
+	assert(vim.fn.maparg("<leader>fm", "n", false, true).buffer == 1)
+	close_fixture(state)
+	package.loaded.conform = original_conform
 end)
 
 test("comments source lines with each cell language", function()

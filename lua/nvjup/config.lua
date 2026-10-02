@@ -101,6 +101,12 @@ M.defaults = {
 		kernel = false,
 		kernel_timeout_seconds = 2,
 	},
+	formatting = {
+		enabled = true,
+		on_save = true,
+		timeout_ms = 2000,
+		notify_errors = true,
+	},
 	inspector = {
 		max_variables = 200,
 		timeout_seconds = 5,
@@ -155,6 +161,7 @@ M.defaults = {
 		cursor_right_alt = "<Right>",
 		comment_line = "<leader>/",
 		comment_visual = "<leader>/",
+		format_cell = "<leader>fm",
 		next_cell = "]c",
 		previous_cell = "[c",
 		next_code_cell = "]C",

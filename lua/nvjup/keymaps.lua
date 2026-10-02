@@ -1,4 +1,5 @@
 local actions = require("nvjup.actions")
+local cell_tools = require("nvjup.cell_tools")
 local config = require("nvjup.config")
 local kernel = require("nvjup.kernel")
 local lsp = require("nvjup.lsp")
@@ -35,6 +36,9 @@ function M.attach(buf)
 	end, "Move right within the current cell")
 	map(buf, "n", keys.comment_line, actions.comment_current_line, "Comment current cell line")
 	map(buf, "x", keys.comment_visual, actions.comment_visual, "Comment selected cell lines")
+	map(buf, "n", keys.format_cell, function()
+		cell_tools.format_and_notify(require("nvjup.notebook").get(buf), { current = true })
+	end, "Format current notebook cell")
 	-- NvChad maps <leader>n with nowait to line-number toggling. A local
 	-- non-nowait prefix prevents that global mapping from consuming jupynvim's
 	-- <leader>n… notebook mappings before their final key is entered.

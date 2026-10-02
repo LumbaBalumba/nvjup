@@ -409,6 +409,39 @@ function Notebook:find_cell(from, direction, predicate)
 	return nil
 end
 
+function Notebook:update_sources(updates)
+	assert(self:sync_from_buffer())
+	local cursor_cell, cursor_local_row, cursor_column
+	if vim.api.nvim_get_current_buf() == self.buf then
+		local cursor = vim.api.nvim_win_get_cursor(0)
+		cursor_cell = self:current_cell()
+		if cursor_cell then
+			cursor_local_row = cursor[1] - 1 - cursor_cell.range.start_row
+			cursor_column = cursor[2]
+		end
+	end
+	local changed = {}
+	for id, source in pairs(updates or {}) do
+		local cell = self.cell_store[id]
+		if cell and update_source(cell, source) then
+			changed[id] = true
+		end
+	end
+	if not next(changed) then
+		return changed
+	end
+	self:replace_buffer({ restore_cursor = false })
+	if cursor_cell and cursor_local_row then
+		local lines = util.source_to_lines(cursor_cell.source)
+		local local_row = math.max(0, math.min(cursor_local_row, #lines - 1))
+		local row = cursor_cell.range.start_row + local_row
+		local line = lines[local_row + 1] or ""
+		pcall(vim.api.nvim_win_set_cursor, 0, { row + 1, math.min(cursor_column or 0, math.max(0, #line - 1)) })
+	end
+	vim.bo[self.buf].modified = true
+	return changed
+end
+
 function Notebook:insert_cell(index, cell_type)
 	assert(self:sync_from_buffer())
 	index = math.max(1, math.min(index, #self.cells + 1))

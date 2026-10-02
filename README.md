@@ -10,7 +10,7 @@ A Neovim-native editor for Jupyter notebooks. Open an `.ipynb` file and work wit
 
 - **Notebook editing** — navigate, insert, delete, move, split, merge, duplicate, and convert cells.
 - **Lossless nbformat** — preserves metadata, attachments, outputs, MIME bundles, cell IDs, and unknown fields.
-- **Language tooling** — per-language Tree-sitter highlighting and cross-cell LSP diagnostics, completion, navigation, rename, symbols, and code actions.
+- **Language tooling** — per-cell indentation, optional Conform formatting, Tree-sitter highlighting, and cross-cell LSP diagnostics, completion, navigation, rename, symbols, and code actions.
 - **Kernel execution** — run one cell or a batch, stream output, answer stdin, interrupt, restart, and persist execution results.
 - **Rich output** — text, tracebacks, tables, sanitized HTML, images, PDF, progress bars, widgets, ipympl, and inline `matplotlib.animation` playback.
 - **Markdown and LaTeX** — rendered notebook cells through `render-markdown.nvim` and `Snacks.image`, while code cells remain code.
@@ -105,6 +105,7 @@ Common mappings:
 | `j` / `k`, `↓` / `↑` | move inside a cell; cross directly to the adjacent cell at an edge |
 | `h` / `l`, `←` / `→` | move horizontally, wrapping only between lines of the current cell |
 | `<leader>/` | toggle line or visual selection comments using each cell's language |
+| `<leader>fm` | format the current code cell with its configured Conform formatter |
 | `]c` / `[c` | next / previous cell |
 | `]C` / `[C` | next / previous code cell |
 | `<leader>na` / `<leader>nb` | insert a cell above / below |
@@ -139,6 +140,12 @@ require("nvjup").setup({
       max_width = 72,
       max_height = 28,
     },
+  },
+
+  formatting = {
+    enabled = true,
+    on_save = true, -- formats only code cells edited since open/last format
+    timeout_ms = 2000,
   },
 
   execution = {
